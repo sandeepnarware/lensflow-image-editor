@@ -865,6 +865,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lf-grade"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "lf-settings",
+ "thiserror",
+]
+
+[[package]]
 name = "lf-pipeline"
 version = "0.1.0"
 dependencies = [
