@@ -12,6 +12,7 @@ that reproduces the web editor's output), Part 2b (RAW decoding and
 development, so `lf-render` opens camera files) and Part 2c-i (the grade,
 account and catalogue libraries) are built. The app itself (2c-ii) and
 packaging (2d) follow. 2c-i is libraries only: there is no UI yet.
+The application crate `lf-app` has started (2c-ii Task 1: window and runtime).
 
 ## Crates
 
