@@ -98,17 +98,21 @@ impl Sync {
                 });
                 continue;
             };
-            if l.settings == r.settings {
+            if settings_equal(&l.settings, &r.settings) {
                 continue;
             }
-            let (lt, rt) = (utc(&l.updated_at), utc(&r.updated_at));
-            let (lc, rc) = match (l.remote_id, l.synced_at.as_deref()) {
-                // Never synced under this name: both count as changed.
-                (None, _) | (_, None) => (true, true),
-                (Some(_), Some(s)) => {
-                    let s = utc(s);
-                    (lt > s, rt > s)
+            let times = (
+                parse_utc(&l.updated_at),
+                parse_utc(&r.updated_at),
+                l.synced_at.as_deref().map(parse_utc),
+            );
+            let (lc, rc) = match (l.remote_id, times) {
+                // Never synced under this name, or a timestamp we cannot read: both count as changed.
+                (None, _) | (_, (_, _, None)) | (_, (None, _, _)) | (_, (_, None, _)) => {
+                    (true, true)
                 }
+                (_, (_, _, Some(None))) => (true, true),
+                (Some(_), (Some(lt), Some(rt), Some(Some(s)))) => (lt > s, rt > s),
             };
             match (lc, rc) {
                 (true, false) => plan.push.push(LocalPreset {
@@ -119,7 +123,7 @@ impl Sync {
                 (false, false) => {}
                 (true, true) => {
                     let copy = LocalPreset {
-                        name: format!("{} (desktop)", l.name),
+                        name: conflict_name(&l.name, local, remote),
                         remote_id: None,
                         synced_at: None,
                         ..l.clone()
@@ -139,12 +143,40 @@ impl Sync {
     }
 }
 
-/// Normalises an ISO-8601 timestamp to `YYYY-MM-DDTHH:MM:SSZ` (UTC, whole seconds) so
-/// timestamps compare lexicographically. Unparseable input is returned unchanged.
-fn utc(s: &str) -> String {
-    parse_utc(s).unwrap_or_else(|| s.to_string())
+/// `"<name> (desktop)"`, or `(desktop 2)`, `(desktop 3)`, ... when that name is taken.
+fn conflict_name(name: &str, local: &[LocalPreset], remote: &[Preset]) -> String {
+    let taken = |n: &str| local.iter().any(|l| l.name == n) || remote.iter().any(|r| r.name == n);
+    let first = format!("{name} (desktop)");
+    if !taken(&first) {
+        return first;
+    }
+    (2..)
+        .map(|i| format!("{name} (desktop {i})"))
+        .find(|n| !taken(n))
+        .expect("unbounded range")
 }
 
+/// Settings equality that ignores the integer/float spelling of numbers (`1` equals `1.0`).
+pub fn settings_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
+            (Some(x), Some(y)) => (x - y).abs() <= 1e-9,
+            _ => x == y,
+        },
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(a, b)| settings_equal(a, b))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(k, v)| y.get(k).is_some_and(|w| settings_equal(v, w)))
+        }
+        _ => a == b,
+    }
+}
+
+/// Parses an ISO-8601 timestamp into `YYYY-MM-DDTHH:MM:SSZ` (UTC, whole seconds) so
+/// timestamps compare lexicographically; `None` when unparseable.
 fn parse_utc(s: &str) -> Option<String> {
     let (date, rest) = s.split_once(['T', ' '])?;
     let mut d = date.split('-');
@@ -211,12 +243,21 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::utc;
+    use super::parse_utc;
 
     #[test]
     fn offsets_become_utc_z() {
-        assert_eq!(utc("2026-10-25T05:30:00+05:30"), "2026-10-25T00:00:00Z");
-        assert_eq!(utc("2026-10-25T00:00:00.123456Z"), "2026-10-25T00:00:00Z");
-        assert_eq!(utc("2026-01-01T00:30:00+01:00"), "2025-12-31T23:30:00Z");
+        assert_eq!(
+            parse_utc("2026-10-25T05:30:00+05:30").unwrap(),
+            "2026-10-25T00:00:00Z"
+        );
+        assert_eq!(
+            parse_utc("2026-10-25T00:00:00.123456Z").unwrap(),
+            "2026-10-25T00:00:00Z"
+        );
+        assert_eq!(
+            parse_utc("2026-01-01T00:30:00+01:00").unwrap(),
+            "2025-12-31T23:30:00Z"
+        );
     }
 }
