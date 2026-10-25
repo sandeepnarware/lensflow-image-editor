@@ -1,16 +1,29 @@
-//! The `eframe::App`: owns the shared GPU, preferences, jobs and toasts, and draws the
-//! current screen.
+//! The `eframe::App`: owns the shared GPU, preferences, jobs, toasts and the session, and
+//! draws the current screen. The session's rules live in `session.rs`, the screens in
+//! `screens/`, the account calls in `account.rs`; this file wires them together.
 
-use crate::jobs::{Jobs, Msg};
-use crate::prefs::{Dirs, Prefs};
+use crate::account::{self, Credentials};
+use crate::jobs::{Jobs, Lane, Msg};
+use crate::prefs::{Dirs, InstanceChoice, Prefs};
+use crate::screens::{self, Action, View};
+use crate::session::{GateClock, Session, StudioChoice, choose_studio};
 use crate::toast::{Level, Toasts};
+use crate::update::{self, DownloadProgress, UpdateError};
 use crate::{gpu, theme};
 use eframe::egui::{self, RichText};
+use lf_account::auth::{SignedIn, StudioSummary, User};
+use lf_account::entitlement::{Cache, Decision};
+use lf_account::{AccountError, Client, Instance, LockReason};
 use lf_pipeline::Gpu;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub const SOFTWARE_BANNER: &str = "No graphics driver found: previews will be slow.";
 pub const DEVICE_LOST_BANNER: &str = "The graphics device was reset. Reopen the photo to continue.";
+
+/// This build's version, sent to the server and compared with its releases.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct App {
     dirs: Dirs,
@@ -21,6 +34,63 @@ pub struct App {
     toasts: Toasts,
     logo: Option<egui::TextureHandle>,
     lost_logged: bool,
+    ctx: egui::Context,
+    session: Session,
+    account: AccountState,
+}
+
+/// Who is signed in, where, and what the account lane is doing.
+struct AccountState {
+    creds: Credentials,
+    /// The API client without a token.
+    client: Client,
+    /// Kept in memory so each call can carry it; never logged.
+    token: Option<String>,
+    user: Option<User>,
+    studio: Option<StudioSummary>,
+    /// The gate's last answer, for the feature gates.
+    decision: Option<Decision>,
+    /// An account call is in flight; the text says which.
+    checking: Option<&'static str>,
+    last_gate: Option<Instant>,
+    /// Installer download progress (bytes done, total).
+    download: Option<(u64, u64)>,
+}
+
+impl AccountState {
+    fn connect(choice: InstanceChoice, config_dir: &Path) -> AccountState {
+        let instance = match choice {
+            InstanceChoice::Prod => Instance::Prod,
+            InstanceChoice::Dev => Instance::Dev,
+        };
+        AccountState {
+            creds: Credentials::open(&instance, config_dir),
+            client: Client::new(instance, VERSION),
+            token: None,
+            user: None,
+            studio: None,
+            decision: None,
+            checking: None,
+            last_gate: None,
+            download: None,
+        }
+    }
+
+    /// The client with the token and the chosen studio, once both are known.
+    fn studio_client(&self) -> Option<Client> {
+        let token = self.token.as_deref()?;
+        let studio = self.studio.as_ref()?;
+        Some(self.client.with_token(token).with_studio(&studio.slug))
+    }
+
+    fn sign_out_locally(&mut self) {
+        self.token = None;
+        self.user = None;
+        self.studio = None;
+        self.decision = None;
+        self.checking = None;
+        self.last_gate = None;
+    }
 }
 
 impl App {
@@ -31,39 +101,414 @@ impl App {
             log::error!("{e}");
         }
         let prefs = Prefs::load(&dirs.config);
-        App {
+        let account = AccountState::connect(prefs.instance, &dirs.config);
+        let mut app = App {
             gpu,
             prefs,
             jobs: Jobs::new(cc.egui_ctx.clone()),
             toasts: Toasts::default(),
             logo: load_logo(&cc.egui_ctx),
             lost_logged: false,
+            ctx: cc.egui_ctx.clone(),
+            session: Session::signing_in(),
+            account,
             dirs,
+        };
+        app.resume();
+        app
+    }
+
+    /// The gate's last answer: AI, preset sync and gallery export read it.
+    pub fn gate(&self) -> Option<&Decision> {
+        self.account.decision.as_ref()
+    }
+
+    /// Checks the entitlement now (before an AI call or an export); the answer arrives as
+    /// `Msg::Gate` and updates [`App::gate`].
+    pub fn refresh_now(&mut self, reason: &str) {
+        log::info!("checking the entitlement before {reason}");
+        self.spawn_gate();
+    }
+
+    /// At launch: with a stored token, ask who it belongs to; otherwise the sign-in form.
+    fn resume(&mut self) {
+        if let Some(token) = self.account.creds.token() {
+            self.account.token = Some(token);
+            self.spawn_me();
         }
+    }
+
+    fn spawn_me(&mut self) {
+        let Some(token) = self.account.token.as_deref() else {
+            return;
+        };
+        let client = self.account.client.with_token(token);
+        self.account.checking = Some("Checking your account…");
+        self.jobs
+            .spawn(Lane::Account, "me", move || account::me(&client));
+    }
+
+    fn spawn_gate(&mut self) {
+        let Some(client) = self.account.studio_client() else {
+            return;
+        };
+        let cache_dir = self.account.creds.cache_dir().to_path_buf();
+        self.account.checking = Some("Checking your studio…");
+        self.jobs.spawn(Lane::Account, "entitlement", move || {
+            account::gate(&client, &cache_dir)
+        });
+    }
+
+    fn save_prefs(&self) {
+        if let Err(e) = self.prefs.save(&self.dirs.config) {
+            log::error!("could not save preferences: {e}");
+        }
+    }
+
+    /// A 401 from any call: back to sign-in, token and cache forgotten. False for any
+    /// other error.
+    fn signed_out_by(&mut self, err: &AccountError) -> bool {
+        if !self.account.creds.signed_out_by(&mut self.session, err) {
+            return false;
+        }
+        log::info!("the server signed this device out");
+        self.account.sign_out_locally();
+        true
+    }
+
+    /// The user's studios are known: use the remembered or only one, or ask.
+    fn studios_known(&mut self) {
+        let Some(user) = &self.account.user else {
+            return;
+        };
+        match choose_studio(user, self.prefs.studio_slug.as_deref()) {
+            StudioChoice::Chosen(studio) => self.enter_studio(studio),
+            StudioChoice::Ask | StudioChoice::None => {
+                self.session = Session::ChoosingStudio { user: user.clone() };
+            }
+        }
+    }
+
+    fn enter_studio(&mut self, studio: StudioSummary) {
+        self.prefs.studio_slug = Some(studio.slug.clone());
+        self.save_prefs();
+        self.account.studio = Some(studio.clone());
+        match Session::on_studio_chosen(&studio) {
+            Some(session) => self.session = session,
+            None => self.spawn_gate(),
+        }
+    }
+
+    /// `auth/me` could not be reached: carry on with the remembered studio and the cached
+    /// entitlement (the gate's offline grace), when there are both.
+    fn offline_studio(&self) -> Option<(User, StudioSummary)> {
+        let slug = self.prefs.studio_slug.as_deref()?;
+        let cached = Cache::new(self.account.creds.cache_dir()).load()?;
+        let summary = serde_json::json!({
+            "id": cached.studio.id, "name": cached.studio.name, "slug": slug,
+        });
+        let studio: StudioSummary = serde_json::from_value(summary.clone()).ok()?;
+        let user = serde_json::from_value(serde_json::json!({
+            "id": 0, "name": "", "email": "", "studios": [summary],
+        }))
+        .ok()?;
+        Some((user, studio))
     }
 
     fn handle(&mut self, msg: Msg) {
         match msg {
             Msg::JobFailed { name, message } => {
+                self.account.checking = None;
+                if let Session::SigningIn { busy, .. } = &mut self.session {
+                    *busy = false;
+                }
                 self.toasts.push(
                     Level::Error,
                     format!("Something went wrong ({name}). {message}"),
                 );
             }
+            Msg::SignedIn(result) => self.signed_in(result),
+            Msg::Me(result) => self.me_answered(result),
+            Msg::Gate(decision) => self.gate_decided(decision),
+            Msg::SignedOut => {}
+            Msg::Download(progress) => self.download(progress),
             #[cfg(test)]
             Msg::Probe(_) => {}
         }
     }
 
-    fn placeholder(&self, ui: &mut egui::Ui) {
+    fn signed_in(&mut self, result: Result<SignedIn, AccountError>) {
+        let Session::SigningIn {
+            password,
+            code,
+            two_factor,
+            busy,
+            error,
+            ..
+        } = &mut self.session
+        else {
+            return;
+        };
+        *busy = false;
+        match result {
+            Ok(signed) => {
+                password.clear();
+                code.clear();
+                self.account.creds.save_token(&signed.token);
+                self.account.token = Some(signed.token);
+                self.account.user = Some(signed.user);
+                self.studios_known();
+            }
+            Err(AccountError::TwoFactorRequired) => {
+                *two_factor = true;
+                *error = None;
+            }
+            Err(e) => *error = Some(account::sign_in_error(&e)),
+        }
+    }
+
+    fn me_answered(&mut self, result: Result<User, AccountError>) {
+        self.account.checking = None;
+        match result {
+            Ok(user) => {
+                self.account.user = Some(user);
+                self.studios_known();
+            }
+            Err(e) if self.signed_out_by(&e) => {}
+            Err(e) if account::is_transient(&e) => match self.offline_studio() {
+                Some((user, studio)) => {
+                    self.account.user = Some(user);
+                    self.account.studio = Some(studio);
+                    self.spawn_gate();
+                }
+                None => {
+                    self.session = Session::Locked {
+                        reason: LockReason::Offline,
+                        message: format!("Could not reach LensFlow. {e}"),
+                    };
+                }
+            },
+            Err(e) => {
+                self.session = Session::Locked {
+                    reason: LockReason::Refused,
+                    message: format!("Could not check your account. {e}"),
+                };
+            }
+        }
+    }
+
+    fn gate_decided(&mut self, decision: Decision) {
+        self.account.checking = None;
+        self.account.last_gate = Some(Instant::now());
+        let (Some(user), Some(studio)) = (&self.account.user, &self.account.studio) else {
+            return;
+        };
+        let signs_out = matches!(decision, Decision::SignIn);
+        let choose = matches!(decision, Decision::ChooseStudio);
+        let session = std::mem::replace(&mut self.session, Session::signing_in());
+        self.session = self
+            .account
+            .creds
+            .settle(session, decision.clone(), user, studio, VERSION);
+        self.account.decision = Some(decision);
+        if signs_out {
+            self.account.sign_out_locally();
+        } else if choose {
+            self.account.studio = None;
+            self.prefs.studio_slug = None;
+            self.save_prefs();
+        }
+    }
+
+    fn download(&mut self, progress: DownloadProgress) {
+        match progress {
+            DownloadProgress::Progress { done, total } => {
+                self.account.download = Some((done, total));
+            }
+            DownloadProgress::Finished(result) => {
+                self.account.download = None;
+                match result {
+                    Ok(path) => match update::launch(&path) {
+                        Ok(()) => self.ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                        Err(e) => self
+                            .toasts
+                            .push(Level::Error, format!("Could not start the installer. {e}")),
+                    },
+                    Err(UpdateError::Account(e)) if self.signed_out_by(&e) => {}
+                    Err(e) => self.toasts.push(Level::Error, e.to_string()),
+                }
+            }
+        }
+    }
+
+    fn act(&mut self, action: Action) {
+        match action {
+            Action::SignIn => self.submit_sign_in(),
+            Action::StartOver => {
+                let email = match &self.session {
+                    Session::SigningIn { email, .. } => email.clone(),
+                    _ => String::new(),
+                };
+                self.session = Session::signing_in();
+                if let Session::SigningIn { email: field, .. } = &mut self.session {
+                    *field = email;
+                }
+            }
+            Action::ToggleInstance => {
+                self.prefs.instance = match self.prefs.instance {
+                    InstanceChoice::Prod => InstanceChoice::Dev,
+                    InstanceChoice::Dev => InstanceChoice::Prod,
+                };
+                self.save_prefs();
+                log::info!("server switched to {:?}", self.prefs.instance);
+                self.account = AccountState::connect(self.prefs.instance, &self.dirs.config);
+                self.session = Session::signing_in();
+                self.resume();
+            }
+            Action::ChooseStudio(slug) => {
+                let studio = self
+                    .account
+                    .user
+                    .as_ref()
+                    .and_then(|u| u.studios.iter().find(|s| s.slug == slug).cloned());
+                if let Some(studio) = studio {
+                    self.enter_studio(studio);
+                }
+            }
+            Action::SwitchStudio => {
+                // Never replay one studio's cached entitlement for another.
+                self.account.creds.forget_entitlement();
+                self.account.studio = None;
+                self.account.decision = None;
+                self.prefs.studio_slug = None;
+                self.save_prefs();
+                if let Some(user) = &self.account.user {
+                    self.session = Session::ChoosingStudio { user: user.clone() };
+                }
+            }
+            Action::SignOut => {
+                if let Some(token) = self.account.token.as_deref() {
+                    let client = self.account.client.with_token(token);
+                    self.jobs.spawn(Lane::Account, "sign out", move || {
+                        lf_account::auth::sign_out(&client);
+                        Msg::SignedOut
+                    });
+                }
+                self.account.creds.forget();
+                self.account.sign_out_locally();
+                self.prefs.studio_slug = None;
+                self.save_prefs();
+                self.session = Session::signing_in();
+            }
+            Action::Retry => {
+                if self.account.user.is_none() {
+                    self.spawn_me();
+                } else if self.account.studio.is_some() {
+                    self.spawn_gate();
+                } else {
+                    self.studios_known();
+                }
+            }
+            Action::Update => self.start_update(),
+        }
+    }
+
+    fn submit_sign_in(&mut self) {
+        let Session::SigningIn {
+            email,
+            password,
+            code,
+            two_factor,
+            busy,
+            error,
+        } = &mut self.session
+        else {
+            return;
+        };
+        if *busy {
+            return;
+        }
+        let email = email.trim().to_owned();
+        if email.is_empty() || password.is_empty() {
+            *error = Some("Enter your email and password.".to_owned());
+            return;
+        }
+        if *two_factor && code.trim().is_empty() {
+            *error = Some("Enter the code from your authenticator app.".to_owned());
+            return;
+        }
+        *busy = true;
+        *error = None;
+        let password = password.clone();
+        let code = two_factor.then(|| code.trim().to_owned());
+        let client = self.account.client.clone();
+        self.jobs.spawn(Lane::Account, "sign in", move || {
+            account::sign_in(&client, &email, &password, code.as_deref())
+        });
+    }
+
+    fn start_update(&mut self) {
+        if self.account.download.is_some() {
+            return;
+        }
+        let Some(client) = self.account.studio_client() else {
+            return;
+        };
+        let dest = self.dirs.cache.join("updates");
+        let reporter = self.jobs.reporter();
+        self.account.download = Some((0, 0));
+        self.jobs.spawn(Lane::Io, "update", move || {
+            let result = update::run(&client, update::platform(), &dest, |progress| {
+                reporter.send(Msg::Download(progress));
+            });
+            Msg::Download(DownloadProgress::Finished(result))
+        });
+    }
+
+    fn view(&self) -> View {
+        View {
+            logo: self.logo.as_ref().map(|logo| logo.id()),
+            dev_server: self.prefs.instance == InstanceChoice::Dev,
+            checking: self.account.checking,
+            can_switch: self
+                .account
+                .user
+                .as_ref()
+                .is_some_and(|u| u.studios.len() > 1),
+            download: self.account.download,
+        }
+    }
+
+    /// The signed-in screen until the library arrives.
+    fn signed_in_placeholder(&self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
             ui.add_space(ui.available_height() / 3.0);
             if let Some(logo) = &self.logo {
                 ui.image(egui::load::SizedTexture::new(logo.id(), [96.0, 96.0]));
                 ui.add_space(16.0);
             }
-            ui.heading("Sign in to begin.");
+            if let Session::Active { studio, .. } = &self.session {
+                ui.heading(format!("Signed in to {}.", studio.name));
+            }
         });
+    }
+
+    /// The session's screen, or the chrome around the signed-in view.
+    fn session_ui(&mut self, ui: &mut egui::Ui) {
+        let view = self.view();
+        let action = if matches!(self.session, Session::Active { .. }) {
+            let top = screens::active_top(ui, &self.session, &view);
+            let status = screens::status_bar(ui, &self.session, &view);
+            egui::CentralPanel::default_margins().show(ui, |ui| self.signed_in_placeholder(ui));
+            top.or(status)
+        } else {
+            egui::CentralPanel::default_margins()
+                .show(ui, |ui| screens::show(ui, &mut self.session, &view))
+                .inner
+        };
+        if let Some(action) = action {
+            self.act(action);
+        }
     }
 }
 
@@ -89,9 +534,18 @@ fn load_logo(ctx: &egui::Context) -> Option<egui::TextureHandle> {
 }
 
 impl eframe::App for App {
-    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         for msg in self.jobs.drain() {
             self.handle(msg);
+        }
+        if matches!(self.session, Session::Active { .. }) {
+            if self.account.checking.is_none()
+                && GateClock::due(self.account.last_gate, Instant::now())
+            {
+                self.spawn_gate();
+            }
+            // The status bar's "Last checked" and the next scheduled check.
+            ctx.request_repaint_after(Duration::from_secs(60));
         }
         if let Ok(gpu) = &self.gpu {
             if let Some(error) = gpu.take_error() {
@@ -125,17 +579,15 @@ impl eframe::App for App {
                 } else if gpu.is_software() {
                     banner(ui, "software", SOFTWARE_BANNER, theme::WARNING);
                 }
-                egui::CentralPanel::default_margins().show(ui, |ui| self.placeholder(ui));
+                self.session_ui(ui);
             }
         }
         self.toasts.show(ui.ctx());
     }
 
     fn on_exit(&mut self) {
-        self.jobs.shutdown(std::time::Duration::from_secs(10));
-        if let Err(e) = self.prefs.save(&self.dirs.config) {
-            log::error!("could not save preferences: {e}");
-        }
+        self.jobs.shutdown(Duration::from_secs(10));
+        self.save_prefs();
     }
 
     /// Only the window's size and position persist (in `window.ron`), not egui's memory.

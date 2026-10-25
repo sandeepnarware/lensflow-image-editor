@@ -2820,12 +2820,17 @@ dependencies = [
  "eframe",
  "egui_kittest",
  "env_logger",
+ "hex",
+ "httpmock",
  "image",
+ "lf-account",
  "lf-pipeline",
  "log",
+ "reqwest",
  "semver",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 
