@@ -5,7 +5,9 @@ pub mod auth;
 pub mod client;
 pub mod entitlement;
 pub mod error;
+pub mod grade;
 pub mod instance;
+pub mod presets;
 pub mod token_store;
 
 pub use client::Client;

@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+lf-settings = { path = "../lf-settings" }
 thiserror.workspace = true
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "multipart", "rustls"] }
 url = "2"

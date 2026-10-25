@@ -1863,6 +1863,7 @@ dependencies = [
  "hex",
  "httpmock",
  "keyring",
+ "lf-settings",
  "log",
  "reqwest",
  "serde",
