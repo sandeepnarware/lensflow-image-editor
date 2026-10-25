@@ -171,8 +171,56 @@ fn version_mismatch_is_ignored_and_removed() {
     cache.put(&k, &developed(5, 16, 16));
     let e = entry_files(&dir).pop().unwrap();
     let mut bytes = fs::read(&e).unwrap();
-    bytes[4] = 2; // version u16 LE follows the 4-byte magic
+    bytes[4] = 3; // version u16 LE follows the 4-byte magic
     fs::write(&e, &bytes).unwrap();
     assert!(cache.get(&k).is_none());
     assert!(entry_files(&dir).is_empty());
+}
+
+#[test]
+fn header_flip_is_ignored_and_removed() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().join("cache");
+    let f = raw_file(t.path(), "a.raw", b"x");
+    let cache = FrameCache::open(&dir, 1 << 30).unwrap();
+    let k = key(&f);
+    cache.put(&k, &developed(5, 16, 16));
+    let e = entry_files(&dir).pop().unwrap();
+    let mut bytes = fs::read(&e).unwrap();
+    bytes[22] ^= 1; // flags
+    fs::write(&e, &bytes).unwrap();
+    assert!(cache.get(&k).is_none());
+    assert!(entry_files(&dir).is_empty());
+}
+
+#[test]
+fn algo_version_bump_misses() {
+    let t = tempfile::tempdir().unwrap();
+    let f = raw_file(t.path(), "a.raw", b"x");
+    let s = DevelopSettings::default();
+    let v = lf_raw::develop::DEVELOP_ALGO_VERSION;
+    assert_eq!(
+        key(&f),
+        CacheKey::for_file_with_version(&f, &s, Quality::Best, 2048, v).unwrap()
+    );
+    assert_ne!(
+        key(&f),
+        CacheKey::for_file_with_version(&f, &s, Quality::Best, 2048, v + 1).unwrap()
+    );
+}
+
+#[test]
+fn stale_tmp_files_are_swept_on_open() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().join("cache");
+    fs::create_dir_all(&dir).unwrap();
+    let old = dir.join("old.tmp");
+    let fresh = dir.join("fresh.tmp");
+    fs::write(&old, b"x").unwrap();
+    fs::write(&fresh, b"x").unwrap();
+    let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+    filetime::set_file_mtime(&old, filetime::FileTime::from_system_time(two_hours_ago)).unwrap();
+    FrameCache::open(&dir, 1 << 30).unwrap();
+    assert!(!old.exists());
+    assert!(fresh.exists());
 }

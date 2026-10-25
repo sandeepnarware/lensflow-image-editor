@@ -3,9 +3,10 @@
 //! One file per entry, named by [`CacheKey`] (`<sha256 hex>.lff`):
 //!
 //! ```text
-//! "LFF1" | version u16 (=1) | width u32 | height u32 | full_width u32 | full_height u32
+//! "LFF1" | version u16 (=2) | width u32 | height u32 | full_width u32 | full_height u32
 //! | flags u8 (bit 0 reduced, bit 1 orientation applied)
-//! | lz4 block of the f16 RGBA bytes (little endian) | crc32 u32 of that block
+//! | lz4 block of the f16 RGBA bytes (little endian)
+//! | crc32 u32 of everything before it (header and block)
 //! ```
 //!
 //! All integers are little endian. A truncated, corrupt or version-mismatched entry is
@@ -19,7 +20,7 @@
 
 use crate::RawError;
 use crate::demosaic::Quality;
-use crate::develop::Developed;
+use crate::develop::{DEVELOP_ALGO_VERSION, Developed};
 use half::f16;
 use lf_pipeline::FloatFrame;
 use lf_settings::{DevelopSettings, EditSettings};
@@ -31,12 +32,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAGIC: &[u8; 4] = b"LFF1";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 const HEADER_LEN: usize = 4 + 2 + 4 * 4 + 1;
 const FLAG_REDUCED: u8 = 1;
 const FLAG_ORIENTED: u8 = 2;
-/// Refuse to allocate more than this when decoding (a damaged header may claim anything).
-const MAX_RAW_BYTES: u64 = 1 << 32;
 
 /// Identifies one developed frame: the file's content and stat, the develop settings,
 /// the demosaic quality and the size limit.
@@ -51,6 +50,17 @@ impl CacheKey {
         settings: &DevelopSettings,
         quality: Quality,
         max_edge: u32,
+    ) -> Result<CacheKey, RawError> {
+        Self::for_file_with_version(path, settings, quality, max_edge, DEVELOP_ALGO_VERSION)
+    }
+
+    /// As [`CacheKey::for_file`] with an explicit develop algorithm version.
+    pub fn for_file_with_version(
+        path: &Path,
+        settings: &DevelopSettings,
+        quality: Quality,
+        max_edge: u32,
+        algo_version: u32,
     ) -> Result<CacheKey, RawError> {
         let io = |source| RawError::Io {
             path: path.to_path_buf(),
@@ -85,6 +95,7 @@ impl CacheKey {
             .as_bytes(),
         );
         hasher.update(max_edge.to_le_bytes());
+        hasher.update(algo_version.to_le_bytes());
         Ok(CacheKey {
             name: format!("{}.lff", hex::encode(hasher.finalize())),
         })
@@ -132,6 +143,20 @@ impl FrameCache {
             path: dir.to_path_buf(),
             source,
         })?;
+        // Sweep temp files left by a crashed write.
+        if let Ok(read) = fs::read_dir(dir) {
+            for e in read.flatten() {
+                let stale = e.path().extension().is_some_and(|x| x == "tmp")
+                    && e.metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|m| m.elapsed().ok())
+                        .is_some_and(|age| age > std::time::Duration::from_secs(3600));
+                if stale {
+                    let _ = fs::remove_file(e.path());
+                }
+            }
+        }
         Ok(FrameCache {
             dir: dir.to_path_buf(),
             cap_bytes,
@@ -250,7 +275,7 @@ fn encode(d: &Developed) -> Vec<u8> {
             },
     );
     out.extend_from_slice(&payload);
-    out.extend_from_slice(&crc32fast::hash(&payload).to_le_bytes());
+    out.extend_from_slice(&crc32fast::hash(&out).to_le_bytes());
     out
 }
 
@@ -262,14 +287,16 @@ fn decode(b: &[u8]) -> Option<Developed> {
         return None;
     }
     let u32_at = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+    let (body, crc) = b.split_at(b.len() - 4);
+    if crc32fast::hash(body).to_le_bytes() != crc {
+        return None;
+    }
     let (w, h, fw, fh) = (u32_at(6), u32_at(10), u32_at(14), u32_at(18));
     let flags = b[22];
     let raw_len = u64::from(w) * u64::from(h) * 8;
-    if raw_len > MAX_RAW_BYTES {
-        return None;
-    }
-    let (payload, crc) = b[HEADER_LEN..].split_at(b.len() - HEADER_LEN - 4);
-    if crc32fast::hash(payload).to_le_bytes() != crc {
+    let payload = &body[HEADER_LEN..];
+    // An lz4 block cannot expand more than about 255x.
+    if raw_len > payload.len() as u64 * 255 + 64 {
         return None;
     }
     let raw = lz4_flex::block::decompress(payload, raw_len as usize).ok()?;

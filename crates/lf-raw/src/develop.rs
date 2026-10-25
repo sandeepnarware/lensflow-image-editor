@@ -31,6 +31,9 @@ pub const GAMMA: f32 = 2.2;
 /// Rec. 709 / sRGB luminance weights.
 const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
+/// Part of the frame cache key: bump whenever develop output changes for the same input.
+pub const DEVELOP_ALGO_VERSION: u32 = 1;
+
 /// A developed picture.
 #[derive(Debug, Clone)]
 pub struct Developed {
