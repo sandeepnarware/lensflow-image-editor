@@ -7,12 +7,18 @@ use lf_settings::DevelopSettings;
 use std::path::PathBuf;
 use std::time::Instant;
 
+/// The two tests run one at a time: the summary test times header-only reads, which the
+/// smoke test's parallel full decodes would otherwise starve of CPU (on a 4-core CI
+/// runner the DNG summary went from 0.5 s to over 2 s).
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn corpus_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/raw-samples")
 }
 
 #[test]
 fn real_camera_samples_open() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let manifest = std::fs::read_to_string(corpus_dir().join("manifest.json")).unwrap();
     let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
     let mut failures = Vec::new();
@@ -45,6 +51,7 @@ fn real_camera_samples_open() {
 
 #[test]
 fn summary_gives_raw_dimensions_without_decoding() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let manifest = std::fs::read_to_string(corpus_dir().join("manifest.json")).unwrap();
     let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
     let mut checked = 0;
