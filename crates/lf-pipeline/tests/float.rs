@@ -158,3 +158,45 @@ fn draw_into_bgra_target_works() {
         "the picture has no red/blue difference, so a swap would go unnoticed"
     );
 }
+
+#[test]
+fn render_f16_matches_render_within_one_level() {
+    let gpu = shared_gpu();
+    let src = load_png(root().join("sources/portrait.png")).unwrap();
+    let s = normalise(&case_json("look-golden").unwrap());
+    let mut r = Renderer::new(gpu, &src, src.width(), src.height()).unwrap();
+    let eight = r.render(&s).unwrap();
+    let float = r.render_f16(&s).unwrap();
+    assert_eq!((float.width, float.height), eight.dimensions());
+    let mut worst = 0i32;
+    for y in 0..eight.height() {
+        for x in 0..eight.width() {
+            let f = px(&float, x, y);
+            let e = eight.get_pixel(x, y).0;
+            for c in 0..3 {
+                let v = (f[c].clamp(0.0, 1.0) * 255.0).round() as i32;
+                worst = worst.max((v - i32::from(e[c])).abs());
+            }
+        }
+    }
+    assert!(worst <= 1, "max channel difference {worst}");
+    // Orientation: the picture is not symmetric, so a flip would show at these corners.
+    let (w, h) = eight.dimensions();
+    for (x, y) in [
+        (w / 5, h / 5),
+        (w - 1 - w / 5, h / 5),
+        (w / 5, h - 1 - h / 5),
+    ] {
+        let f = px(&float, x, y);
+        let e = eight.get_pixel(x, y).0;
+        assert!((f[0] * 255.0 - f32::from(e[0])).abs() <= 1.5, "({x},{y})");
+    }
+    let (a, b) = (
+        eight.get_pixel(w / 5, h / 5),
+        eight.get_pixel(w - 1 - w / 5, h - 1 - h / 5),
+    );
+    assert_ne!(
+        a, b,
+        "the probe pixels are alike, so a flip would go unnoticed"
+    );
+}

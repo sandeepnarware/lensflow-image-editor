@@ -125,6 +125,22 @@ pub fn last_job(catalog: &Catalog) -> Result<Option<Job>> {
         .optional()?)
 }
 
+/// A file stem that is safe on Windows: reserved device names get a `_` suffix and trailing
+/// dots and spaces go.
+pub fn safe_stem(stem: &str) -> String {
+    let t = stem.trim_end_matches(['.', ' ']);
+    let base = t.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let reserved = matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((base.starts_with("COM") || base.starts_with("LPT"))
+            && base.len() == 4
+            && matches!(base.as_bytes()[3], b'1'..=b'9'));
+    if reserved {
+        format!("{t}_")
+    } else {
+        t.to_string()
+    }
+}
+
 /// `pattern` with its tokens filled in and path-illegal characters replaced by `-`.
 pub fn file_name(
     pattern: &str,
@@ -155,6 +171,7 @@ pub fn file_name(
             }
         })
         .collect();
+    let out = out.trim_end_matches(['.', ' ']).to_string();
     if out.trim().is_empty() {
         "photo".to_string()
     } else {
@@ -224,34 +241,69 @@ enum Pixels {
     Sixteen(ImageBuffer<Rgb<u16>, Vec<u16>>),
 }
 
-fn export_one(
-    gpu: &Arc<Gpu>,
+/// Where photo `id` goes, and its row.
+fn plan_one(
     catalog: &Catalog,
     id: i64,
     seq: usize,
     count: usize,
     spec: &ExportSpec,
-) -> Result<Exported> {
-    let fail =
-        |what: &dyn std::fmt::Display, path: &str| CatalogError::Export(format!("{path}: {what}"));
+) -> Result<(PhotoRow, PathBuf)> {
     let row = photo_row(catalog, id)?;
-    let src = Path::new(&row.path);
-    let stem = src
+    let stem = Path::new(&row.path)
         .file_stem()
         .map_or_else(|| "photo".into(), |s| s.to_string_lossy().into_owned());
     let name = file_name(
         &spec.rename.0,
-        &stem,
+        &safe_stem(&stem),
         seq,
         count,
         &date_of(&row),
         row.camera.as_deref().unwrap_or(""),
     );
     let Destination::Folder(dir) = &spec.destination;
-    let out_path = dir.join(format!("{name}.{}", spec.format.extension()));
-    if !spec.overwrite && out_path.exists() {
-        return Err(CatalogError::Exists(out_path));
+    let path = dir.join(format!("{name}.{}", spec.format.extension()));
+    Ok((row, path))
+}
+
+/// Every output path, resolved before anything is rendered: two photos on one path is
+/// [`CatalogError::NameCollision`], and (unless overwriting) an existing file is
+/// [`CatalogError::Exists`], so nothing is written unless every path is free.
+fn plan(catalog: &Catalog, ids: &[i64], spec: &ExportSpec) -> Result<Vec<(PhotoRow, PathBuf)>> {
+    let mut seen: std::collections::HashMap<String, i64> = Default::default();
+    let mut out = Vec::with_capacity(ids.len());
+    for (i, id) in ids.iter().enumerate() {
+        let (row, path) = plan_one(catalog, *id, i + 1, ids.len(), spec)?;
+        // Case-insensitive: Windows and macOS volumes treat these as one file.
+        let key = path.to_string_lossy().to_lowercase();
+        if let Some(first) = seen.insert(key, *id) {
+            return Err(CatalogError::NameCollision {
+                path,
+                photos: (first, *id),
+            });
+        }
+        out.push((row, path));
     }
+    if !spec.overwrite
+        && let Some((_, path)) = out.iter().find(|(_, p)| p.exists())
+    {
+        return Err(CatalogError::Exists(path.clone()));
+    }
+    Ok(out)
+}
+
+fn export_one(
+    gpu: &Arc<Gpu>,
+    catalog: &Catalog,
+    id: i64,
+    row: &PhotoRow,
+    out_path: PathBuf,
+    spec: &ExportSpec,
+) -> Result<Exported> {
+    let fail =
+        |what: &dyn std::fmt::Display, path: &str| CatalogError::Export(format!("{path}: {what}"));
+    let src = Path::new(&row.path);
+    let Destination::Folder(dir) = &spec.destination;
 
     let settings = edits::get_settings(catalog, id)?.unwrap_or_else(EditSettings::default_settings);
     let opened = open(
@@ -394,8 +446,15 @@ pub fn run(
     let mut out = Vec::with_capacity(total);
     progress(0, total);
     let mut result = Ok(());
-    for (i, id) in photo_ids.iter().enumerate() {
-        match export_one(&gpu, catalog, *id, i + 1, total, spec) {
+    let planned = match plan(catalog, photo_ids, spec) {
+        Ok(p) => p,
+        Err(e) => {
+            result = Err(e);
+            Vec::new()
+        }
+    };
+    for (i, (row, path)) in planned.into_iter().enumerate() {
+        match export_one(&gpu, catalog, photo_ids[i], &row, path, spec) {
             Ok(e) => {
                 out.push(e);
                 progress(i + 1, total);

@@ -333,3 +333,113 @@ fn overwrite_false_refuses_an_existing_path() {
     again.overwrite = true;
     export::run(gpu, &c, &ids, &again, &mut |_, _| {}).unwrap();
 }
+
+#[test]
+fn two_photos_on_one_name_fail_before_anything_is_written() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    png(&src.path().join("a.png"), 32, 32);
+    jpeg_with_exif(&src.path().join("a.jpg"));
+    let (c, ids) = catalogue(src.path());
+    for overwrite in [true, false] {
+        let out = tempfile::tempdir().unwrap();
+        let mut sp = spec(Format::Png, out.path());
+        sp.overwrite = overwrite;
+        let err = export::run(gpu.clone(), &c, &ids, &sp, &mut |_, _| {}).unwrap_err();
+        match &err {
+            CatalogError::NameCollision { path, photos } => {
+                assert_eq!(path, &out.path().join("a.png"));
+                assert_ne!(photos.0, photos.1);
+                assert!(err.to_string().contains("{seq}"), "{err}");
+            }
+            e => panic!("{e}"),
+        }
+        assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
+        assert_eq!(export::last_job(&c).unwrap().unwrap().status, "failed");
+    }
+    // {seq} resolves it.
+    let out = tempfile::tempdir().unwrap();
+    let mut sp = spec(Format::Png, out.path());
+    sp.rename = Pattern("{name}-{seq}".into());
+    assert_eq!(
+        export::run(gpu, &c, &ids, &sp, &mut |_, _| {})
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn an_existing_file_anywhere_in_the_batch_stops_the_export_before_it_starts() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    png(&src.path().join("a.png"), 32, 32);
+    png(&src.path().join("b.png"), 32, 32);
+    let (c, ids) = catalogue(src.path());
+    let out = tempfile::tempdir().unwrap();
+    std::fs::write(out.path().join("b.png"), b"mine").unwrap();
+    let err = export::run(
+        gpu,
+        &c,
+        &ids,
+        &spec(Format::Png, out.path()),
+        &mut |_, _| {},
+    )
+    .unwrap_err();
+    assert!(matches!(err, CatalogError::Exists(p) if p == out.path().join("b.png")));
+    assert!(!out.path().join("a.png").exists());
+    assert_eq!(std::fs::read(out.path().join("b.png")).unwrap(), b"mine");
+}
+
+#[test]
+fn windows_reserved_names_and_trailing_dots_are_made_safe() {
+    use export::{file_name, safe_stem};
+    assert_eq!(safe_stem("CON"), "CON_");
+    assert_eq!(safe_stem("com1"), "com1_");
+    assert_eq!(safe_stem("Lpt9.final"), "Lpt9.final_");
+    assert_eq!(safe_stem("COM10"), "COM10");
+    assert_eq!(safe_stem("console"), "console");
+    assert_eq!(safe_stem("shot. . "), "shot");
+    assert_eq!(file_name("{name}. ", "a", 1, 1, "d", ""), "a");
+}
+
+#[test]
+fn the_exif_writer_adds_datetime_and_exif_version() {
+    use lf_catalog::exif_embed::{build_exif, insert_exif};
+    let app1 = build_exif(
+        &ExifSummary {
+            make: Some("X".into()),
+            captured_at: Some("2024-05-01T12:34:56".into()),
+            orientation: 1,
+            ..Default::default()
+        },
+        false,
+    )
+    .unwrap();
+    let jpeg = insert_exif(&[0xff, 0xd8, 0xff, 0xd9], &app1);
+    let e = exif::Reader::new()
+        .read_from_container(&mut std::io::Cursor::new(&jpeg))
+        .unwrap();
+    let dt = e.get_field(exif::Tag::DateTime, exif::In::PRIMARY).unwrap();
+    assert_eq!(dt.display_value().to_string(), "2024-05-01 12:34:56");
+    let v = e
+        .get_field(exif::Tag::ExifVersion, exif::In::PRIMARY)
+        .unwrap();
+    assert!(matches!(&v.value, exif::Value::Undefined(b, _) if b == b"0232"));
+}
+
+#[test]
+fn very_long_text_is_cut_instead_of_dropping_the_exif() {
+    use lf_catalog::exif_embed::build_exif;
+    let long = "é".repeat(40_000);
+    let app1 = build_exif(
+        &ExifSummary {
+            make: Some("Canon".into()),
+            copyright: Some(long),
+            ..Default::default()
+        },
+        false,
+    )
+    .unwrap();
+    assert!(app1.len() < 65_536);
+}

@@ -3,8 +3,8 @@
 //!
 //! Tags written (big-endian TIFF, one APP1 segment):
 //! - IFD0: Make 0x010F, Model 0x0110, Orientation 0x0112 (always 1: the pixels are upright),
-//!   Artist 0x013B, Copyright 0x8298, ExifIFD pointer 0x8769.
-//! - Exif IFD: ExposureTime 0x829A, FNumber 0x829D, ISO 0x8827, DateTimeOriginal 0x9003,
+//!   DateTime 0x0132, Artist 0x013B, Copyright 0x8298, ExifIFD pointer 0x8769.
+//! - Exif IFD: ExifVersion 0x9000 ("0232"), ExposureTime 0x829A, FNumber 0x829D, ISO 0x8827, DateTimeOriginal 0x9003,
 //!   FocalLength 0x920A, LensModel 0xA434.
 //!
 //! "Copyright only" writes IFD0 with just Artist and Copyright.
@@ -61,8 +61,22 @@ const SHORT: u16 = 3;
 const LONG: u16 = 4;
 const RATIONAL: u16 = 5;
 
+/// Longest text field written; longer ones are cut (with a warning) so the segment, which is
+/// capped at 64 KB, always fits.
+const MAX_TEXT: usize = 1000;
+
 fn ascii(tag: u16, s: &str) -> Entry {
-    let mut data = s.as_bytes().to_vec();
+    let mut end = s.len().min(MAX_TEXT);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end < s.len() {
+        log::warn!(
+            "EXIF tag {tag:#06x} is {} bytes long; cut to {end}",
+            s.len()
+        );
+    }
+    let mut data = s.as_bytes()[..end].to_vec();
     data.push(0);
     Entry {
         tag,
@@ -181,6 +195,7 @@ pub fn build_exif(s: &ExifSummary, copyright_only: bool) -> Option<Vec<u8>> {
             exif.push(short(0x8827, v.min(u16::MAX as u32) as u16));
         }
         if let Some(v) = s.captured_at.as_deref().and_then(exif_date) {
+            ifd0.push(ascii(0x0132, &v));
             exif.push(ascii(0x9003, &v));
         }
         if let Some(v) = s.focal_length {
@@ -198,6 +213,12 @@ pub fn build_exif(s: &ExifSummary, copyright_only: bool) -> Option<Vec<u8>> {
     }
     let has_exif = !exif.is_empty();
     if has_exif {
+        exif.push(Entry {
+            tag: 0x9000,
+            kind: 7,
+            count: 4,
+            data: b"0232".to_vec(),
+        });
         ifd0.push(long(0x8769, 0));
     }
     // The pointer's value does not change the IFD's length, so size it first.
@@ -213,7 +234,10 @@ pub fn build_exif(s: &ExifSummary, copyright_only: bool) -> Option<Vec<u8>> {
         tiff.extend(write_ifd(exif, start));
     }
     let len = 2 + 6 + tiff.len();
-    let len = u16::try_from(len).ok()?;
+    let Ok(len) = u16::try_from(len) else {
+        log::warn!("EXIF segment of {len} bytes does not fit in an APP1; skipped");
+        return None;
+    };
     let mut seg = vec![0xff, 0xe1];
     seg.extend(len.to_be_bytes());
     seg.extend(b"Exif\0\0");
