@@ -106,7 +106,7 @@ project config dir (`ProjectDirs::from("in", "lensflow",
 ## Catalogue (lf-catalog)
 
 `Catalog::open(root)` creates `<catalogue root>/.lensflow/catalog.sqlite` in
-WAL mode (bundled SQLite) and migrates it; the schema version is 2. Tables:
+WAL mode (bundled SQLite) and migrates it; the schema version is 3 (three migrations). Tables:
 folders, photos, edits, history and history_cursor, versions, thumbnails,
 presets, export_jobs and sidecar_meta. Each thumbnail worker opens its own
 connection.
@@ -140,9 +140,9 @@ parameter. Memory: each in-flight open of a 60 MP RAW can use about 1 GB at
 `Best` today; there is no cheaper `Preview` yet.
 
 Developed-frame cache. `lf_raw::cache::FrameCache` is a folder the app picks:
-one `<sha256>.lff` per file, quality and develop-settings key. Format: `LFF1`
+one `<sha256>.lff` per file, quality, max edge, develop-settings and `DEVELOP_ALGO_VERSION` key. Format: `LFF1`
 magic, a version (currently 2), sizes, flags, an LZ4 block of half-float RGBA
-and a CRC32. A corrupt or old-version entry is a miss and is deleted. The cache
+and a CRC32 covering the header and the block. A corrupt or old-version entry is a miss and is deleted. The cache
 is trimmed to a byte cap (given to `FrameCache::open`), least recently used
 first.
 
