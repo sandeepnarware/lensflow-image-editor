@@ -306,12 +306,17 @@ fn looks_like_raw(path: &Path) -> bool {
         || h.starts_with(b"FOVb")
 }
 
+// The integration tests' DNG writer, for the panic-hook tests below. (A top-level
+// `#[path]` resolves from `src/`; inside `mod tests` it would go through the
+// non-existent `src/decode/tests/`, which only Windows tolerates.)
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../tests/support/synthetic_dng.rs"]
+mod synthetic_dng;
+
 #[cfg(test)]
 mod tests {
-    #[allow(dead_code)]
-    #[path = "../../../tests/support/synthetic_dng.rs"]
-    mod synthetic_dng;
-
+    use super::synthetic_dng;
     use super::*;
     use crate::demosaic::Quality;
     use crate::open::open;
