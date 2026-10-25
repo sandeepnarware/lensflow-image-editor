@@ -360,7 +360,7 @@ fn hand_tiff(rgb: bool, extra: &[Entry]) -> Vec<u8> {
     }
     ifd.extend_from_slice(&[0, 0, 0, 0]);
     ifd[strip_entry..strip_entry + 4].copy_from_slice(&data_at.to_le_bytes());
-    let mut out = b"II* ".to_vec();
+    let mut out = b"II*\0".to_vec();
     out.extend_from_slice(&8u32.to_le_bytes());
     out.extend_from_slice(&ifd);
     out.extend_from_slice(&out_of_line);

@@ -24,7 +24,7 @@ fn cut_files_are_corrupt_and_incomplete() {
     // sensor data's length is not recorded (see `container.rs`).
     for (name, late) in [
         ("canon-eos-40d.cr2", 99),
-        ("canon-eos-1d-mark-ii.cr2", 99),
+        ("canon-eos-20d.cr2", 99),
         ("canon-eos-rp.cr3", 99),
         ("nikon-d40.nef", 99),
         ("nikon-d80.dng", 99),
