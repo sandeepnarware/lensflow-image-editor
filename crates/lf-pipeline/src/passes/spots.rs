@@ -64,7 +64,13 @@ pub fn run(gpu: &Gpu, source: &Target, target: &Target, spots: &[Spot], width: u
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("spots"),
         });
-    pass.draw(&mut encoder, &target.level_view(0), &bind, arena.offsets[0]);
+    pass.draw(
+        &mut encoder,
+        &target.level_view(0),
+        target.format,
+        &bind,
+        arena.offsets[0],
+    );
     gpu.queue.submit([encoder.finish()]);
     generate_mips(gpu, target);
 }

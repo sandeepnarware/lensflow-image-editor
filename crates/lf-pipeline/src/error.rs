@@ -20,4 +20,13 @@ pub enum PipelineError {
     OutOfMemory,
     #[error("Could not read the image back from the graphics device: {0}")]
     Readback(String),
+    #[error("The image texture is {got}; the renderer needs {expected}.")]
+    WrongFormat { expected: String, got: String },
+    #[error("A {width}×{height} picture needs {expected} values; this one has {got}.")]
+    BadFrame {
+        width: u32,
+        height: u32,
+        expected: usize,
+        got: usize,
+    },
 }

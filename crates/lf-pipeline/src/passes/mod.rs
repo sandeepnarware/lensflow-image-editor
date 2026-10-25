@@ -5,8 +5,11 @@ pub mod develop;
 pub mod gaussian;
 pub mod spots;
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use crate::gpu::Gpu;
-use crate::texture::FORMAT;
+use crate::texture::{FLOAT_FORMAT, FORMAT};
 
 const FULLSCREEN: &str = include_str!("../shaders/fullscreen.wgsl");
 const COPY: &str = concat!(
@@ -36,12 +39,17 @@ pub const SHADERS: &[(&str, &str)] = &[
     ("develop.wgsl", DEVELOP),
 ];
 
-/// One pipeline drawing the fullscreen triangle `[-1,-1, 3,-1, -1,3]` into an `RGBA8`
-/// target. [`FullscreenPass::new`] binds a texture (binding 0), a sampler (binding 1) and
+/// One pass drawing the fullscreen triangle `[-1,-1, 3,-1, -1,3]`, with a render pipeline per
+/// colour target format, built on first use and cached. [`FullscreenPass::new`] binds a texture (binding 0), a sampler (binding 1) and
 /// optional uniforms (binding 2, a slice of a shared buffer chosen by a dynamic offset);
 /// [`FullscreenPass::with_entries`] takes any layout (the develop pass).
 pub struct FullscreenPass {
-    pipeline: wgpu::RenderPipeline,
+    device: wgpu::Device,
+    label: String,
+    module: wgpu::ShaderModule,
+    entry: String,
+    pipeline_layout: wgpu::PipelineLayout,
+    pipelines: Mutex<HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>>,
     layout: wgpu::BindGroupLayout,
     uniforms: bool,
 }
@@ -86,36 +94,52 @@ impl FullscreenPass {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(label),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
         FullscreenPass {
-            pipeline,
+            device: device.clone(),
+            label: label.to_owned(),
+            module,
+            entry: entry.to_owned(),
+            pipeline_layout,
+            pipelines: Mutex::new(HashMap::new()),
             layout,
             uniforms,
         }
+    }
+
+    /// The render pipeline drawing into `format`, built on first use.
+    fn pipeline(&self, format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
+        let mut pipelines = self.pipelines.lock().unwrap_or_else(|e| e.into_inner());
+        pipelines
+            .entry(format)
+            .or_insert_with(|| {
+                self.device
+                    .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some(&self.label),
+                        layout: Some(&self.pipeline_layout),
+                        vertex: wgpu::VertexState {
+                            module: &self.module,
+                            entry_point: Some("vs_main"),
+                            compilation_options: Default::default(),
+                            buffers: &[],
+                        },
+                        primitive: wgpu::PrimitiveState::default(),
+                        depth_stencil: None,
+                        multisample: wgpu::MultisampleState::default(),
+                        fragment: Some(wgpu::FragmentState {
+                            module: &self.module,
+                            entry_point: Some(&self.entry),
+                            compilation_options: Default::default(),
+                            targets: &[Some(wgpu::ColorTargetState {
+                                format,
+                                blend: None,
+                                write_mask: wgpu::ColorWrites::ALL,
+                            })],
+                        }),
+                        multiview_mask: None,
+                        cache: None,
+                    })
+            })
+            .clone()
     }
 
     /// The bind group layout, for passes built [`FullscreenPass::with_entries`].
@@ -159,15 +183,18 @@ impl FullscreenPass {
         })
     }
 
-    /// Records one draw covering `target` (the whole view; the viewport is the view's size).
-    /// `offset` picks the uniforms' slice (0 for passes without uniforms).
+    /// Records one draw covering `target`, a view of a `format` texture (the whole view; the
+    /// viewport is the view's size). `offset` picks the uniforms' slice (0 for passes without
+    /// uniforms).
     pub fn draw(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
         bind: &wgpu::BindGroup,
         offset: u32,
     ) {
+        let pipeline = self.pipeline(format);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -184,7 +211,7 @@ impl FullscreenPass {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(&pipeline);
         if self.uniforms {
             pass.set_bind_group(0, bind, &[offset]);
         } else {
@@ -285,7 +312,8 @@ impl UniformArena {
     }
 }
 
-/// The pipelines, built once per device.
+/// The passes, built once per device (each pass's render pipelines per target format on
+/// first use).
 pub(crate) struct Pipelines {
     pub copy: FullscreenPass,
     pub mip: FullscreenPass,
@@ -296,13 +324,21 @@ pub(crate) struct Pipelines {
 
 impl Pipelines {
     pub fn new(device: &wgpu::Device) -> Pipelines {
-        Pipelines {
+        let p = Pipelines {
             copy: FullscreenPass::new(device, "copy", COPY, "fs_copy", true),
             mip: FullscreenPass::new(device, "mip", COPY, "fs_mip", false),
             gaussian: FullscreenPass::new(device, "gaussian", GAUSSIAN, "fs_gaussian", true),
             spots: FullscreenPass::new(device, "spots", SPOTS, "fs_spots", true),
             develop: develop::pipeline(device, DEVELOP),
+        };
+        // The pipelines every photo needs, built up front as before: the chain in float, the
+        // 8-bit mips (uploads) and the develop pass into the 8-bit output.
+        for pass in [&p.copy, &p.mip, &p.gaussian, &p.spots] {
+            pass.pipeline(FLOAT_FORMAT);
         }
+        p.mip.pipeline(FORMAT);
+        p.develop.pipeline(FORMAT);
+        p
     }
 }
 

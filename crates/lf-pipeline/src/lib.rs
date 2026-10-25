@@ -11,3 +11,4 @@ pub mod texture;
 pub use error::PipelineError;
 pub use gpu::Gpu;
 pub use renderer::Renderer;
+pub use texture::FloatFrame;

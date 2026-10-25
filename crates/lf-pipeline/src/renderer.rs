@@ -10,7 +10,7 @@ use crate::error::PipelineError;
 use crate::gpu::Gpu;
 use crate::passes::develop::{self, Frame, Inputs, Uniforms};
 use crate::passes::{copy, gaussian, spots};
-use crate::texture::{Source, Target, read_back};
+use crate::texture::{FLOAT_FORMAT, FORMAT, Source, Target, read_back};
 use image::RgbaImage;
 use lf_settings::geometry::{Geometry, output_size, output_to_source, turned_size};
 use lf_settings::{Crop, EditSettings, Rotate};
@@ -83,6 +83,9 @@ pub struct Renderer<'g> {
     /// Working size ÷ the file's full size.
     pub scale: f64,
     source: Target,
+    /// The format of the source and every intermediate: `Rgba16Float` from
+    /// [`Renderer::from_texture`], `Rgba8Unorm` from [`Renderer::new`].
+    chain: wgpu::TextureFormat,
     curve: CurveTexture,
     blur_m: Target,
     blur_l: Target,
@@ -96,8 +99,12 @@ pub struct Renderer<'g> {
 
 impl<'g> Renderer<'g> {
     /// Uploads `image` (the working copy of a `full_width`×`full_height` photo) with mips and
-    /// makes the wide blurs from a small copy, as the web's constructor. A zero width or height
-    /// (of the image or of the full size) is [`PipelineError::EmptyImage`].
+    /// makes the wide blurs from a small copy, as the web's constructor. An 8-bit photo has no
+    /// values above 1.0, so its chain stays in `RGBA8` as the web's does: the low-radius
+    /// sharpening turns each 1/255 rounding of the web's 8-bit blur into up to 4/255 of
+    /// output, so float intermediates (or a half-float source, whose 11-bit mantissa cannot
+    /// hold `v / 255` exactly) put it outside the parity gate. A zero width or height (of the
+    /// image or of the full size) is [`PipelineError::EmptyImage`].
     pub fn new(
         gpu: &'g Gpu,
         image: &RgbaImage,
@@ -109,15 +116,52 @@ impl<'g> Renderer<'g> {
             return Err(PipelineError::EmptyImage);
         }
         let source = Source::upload(gpu, image, true)?;
+        Renderer::with_source(gpu, source, full_width, full_height)
+    }
+
+    /// Takes `source` (the working copy of a `full_width`×`full_height` photo: an
+    /// `Rgba16Float` texture with mips, e.g. from [`Source::upload_f16`]) and makes the wide
+    /// blurs from a small copy, as the web's constructor. Every intermediate is `Rgba16Float`
+    /// too, so values above 1.0 reach the develop pass. Another format, or no mips, is
+    /// [`PipelineError::WrongFormat`]; a zero full size is [`PipelineError::EmptyImage`].
+    pub fn from_texture(
+        gpu: &'g Gpu,
+        source: Target,
+        full_width: u32,
+        full_height: u32,
+    ) -> Result<Renderer<'g>, PipelineError> {
+        if source.format != FLOAT_FORMAT || !source.mips {
+            let mips = |m: bool| if m { "with mipmaps" } else { "without mipmaps" };
+            return Err(PipelineError::WrongFormat {
+                expected: format!("{FLOAT_FORMAT:?} {}", mips(true)),
+                got: format!("{:?} {}", source.format, mips(source.mips)),
+            });
+        }
+        Renderer::with_source(gpu, source, full_width, full_height)
+    }
+
+    /// `new` and `from_texture` past their checks: the intermediates take `source`'s format.
+    fn with_source(
+        gpu: &'g Gpu,
+        source: Target,
+        full_width: u32,
+        full_height: u32,
+    ) -> Result<Renderer<'g>, PipelineError> {
+        let (width, height) = (source.width, source.height);
+        if full_width == 0 || full_height == 0 {
+            return Err(PipelineError::EmptyImage);
+        }
+        let chain = source.format;
         let curve = CurveTexture::new(gpu)?;
 
         let k = SMALL_EDGE / f64::from(width.max(height));
         let small_size = |v: u32| ((f64::from(v) * k.min(1.0)).round() as u32).max(1);
         let (sw, sh) = (small_size(width), small_size(height));
-        let small = Target::new(gpu, sw, sh, false)?;
-        let tmp_small = Target::new(gpu, sw, sh, false)?;
-        let blur_m = Target::new(gpu, sw, sh, false)?;
-        let blur_l = Target::new(gpu, sw, sh, false)?;
+        let target = |w, h| Target::new_with(gpu, w, h, false, chain);
+        let small = target(sw, sh)?;
+        let tmp_small = target(sw, sh)?;
+        let blur_m = target(sw, sh)?;
+        let blur_l = target(sw, sh)?;
         copy::run(gpu, &source, &small);
         // Sigmas as fractions of the long edge (1.5% and 4%).
         let long = f64::from(sw.max(sh));
@@ -132,6 +176,7 @@ impl<'g> Renderer<'g> {
             full_height,
             scale: f64::from(width) / f64::from(full_width),
             source,
+            chain,
             curve,
             blur_m,
             blur_l,
@@ -164,7 +209,7 @@ impl<'g> Renderer<'g> {
             serde_json::to_string(&s.spots).expect("spots serialise")
         };
         if !s.spots.is_empty() {
-            self.cached("spots", w, h, true)?;
+            self.cached("spots", w, h, true, self.chain)?;
             if spots_key != self.spots_key {
                 let target = &self.targets["spots"];
                 spots::run(self.gpu, &self.source, target, &s.spots, w, h);
@@ -186,12 +231,12 @@ impl<'g> Renderer<'g> {
             (s.texture != 0.0).then_some(texture_sigma),
         );
         if self.detail_key.as_ref() != Some(&key) {
-            self.cached("tmp", w, h, false)?;
+            self.cached("tmp", w, h, false, self.chain)?;
             if s.sharpen > 0.0 {
-                self.cached("sharp", w, h, true)?;
+                self.cached("sharp", w, h, true, self.chain)?;
             }
             if s.texture != 0.0 {
-                self.cached("texture", w, h, true)?;
+                self.cached("texture", w, h, true, self.chain)?;
             }
             let image = self.image(spotted);
             let tmp = &self.targets["tmp"];
@@ -227,14 +272,15 @@ impl<'g> Renderer<'g> {
         let k = f64::from(self.width) / f64::from(self.full_width);
         let w = ((f64::from(ow) * k).round() as u32).max(1);
         let h = ((f64::from(oh) * k).round() as u32).max(1);
-        self.cached("output", w, h, false)?;
+        self.cached("output", w, h, false, FORMAT)?;
         let out = &self.targets["output"];
         let mode = Mode::Develop { spotted };
         self.develop_into(s, &geometry, &s.crop, &View::default(), mode, out);
         read_back(self.gpu, out)
     }
 
-    /// Draws into `canvas` (sized by the caller): the photo with `s`, or as it was (`before`),
+    /// Draws into `canvas` (sized by the caller, in any colour format the device renders to:
+    /// `Rgba8Unorm`, `Bgra8Unorm`, `Rgba16Float`): the photo with `s`, or as it was (`before`),
     /// or with the crop override, showing `opts.view`. Targets are top-down, so no Y flip.
     pub fn draw(
         &mut self,
@@ -279,7 +325,7 @@ impl<'g> Renderer<'g> {
         let k = f64::from(edge) / f64::from(ow.max(oh));
         let w = ((f64::from(ow) * k).round() as u32).max(1);
         let h = ((f64::from(oh) * k).round() as u32).max(1);
-        self.cached("thumb", w, h, false)?;
+        self.cached("thumb", w, h, false, FORMAT)?;
         let out = &self.targets["thumb"];
         let mode = Mode::Develop { spotted };
         self.develop_into(s, &geometry, &s.crop, &View::default(), mode, out);
@@ -349,13 +395,15 @@ impl<'g> Renderer<'g> {
         Ok(h)
     }
 
-    /// The web's `cached()`: the target named `name`, remade when its size changes.
+    /// The web's `cached()`: the target named `name` (in `format`), remade when its size
+    /// changes.
     fn cached(
         &mut self,
         name: &'static str,
         w: u32,
         h: u32,
         mips: bool,
+        format: wgpu::TextureFormat,
     ) -> Result<&Target, PipelineError> {
         let fresh = !matches!(self.targets.get(name), Some(t) if t.width == w && t.height == h);
         if fresh {
@@ -363,7 +411,7 @@ impl<'g> Renderer<'g> {
                 old.texture.destroy();
             }
             self.targets
-                .insert(name, Target::new(self.gpu, w, h, mips)?);
+                .insert(name, Target::new_with(self.gpu, w, h, mips, format)?);
         }
         Ok(&self.targets[name])
     }

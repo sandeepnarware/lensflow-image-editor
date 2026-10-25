@@ -35,7 +35,7 @@ pub fn blur(gpu: &Gpu, from: &Target, to: &Target, tmp: &Target, sigma: f32) {
             gpu.samplers.for_target(src),
             Some(uniforms.binding()),
         );
-        pass.draw(&mut encoder, &dst.level_view(0), &bind, offset);
+        pass.draw(&mut encoder, &dst.level_view(0), dst.format, &bind, offset);
     }
     gpu.queue.submit([encoder.finish()]);
     generate_mips(gpu, to);

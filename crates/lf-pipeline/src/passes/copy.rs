@@ -32,7 +32,13 @@ pub fn run(gpu: &Gpu, src: &Target, dst: &Target) {
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("copy"),
         });
-    pass.draw(&mut encoder, &dst.level_view(0), &bind, uniforms.offsets[0]);
+    pass.draw(
+        &mut encoder,
+        &dst.level_view(0),
+        dst.format,
+        &bind,
+        uniforms.offsets[0],
+    );
     gpu.queue.submit([encoder.finish()]);
     crate::texture::generate_mips(gpu, dst);
 }

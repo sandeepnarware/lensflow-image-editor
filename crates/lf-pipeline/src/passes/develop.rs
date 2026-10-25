@@ -222,6 +222,12 @@ pub fn run(gpu: &Gpu, inputs: &Inputs, uniforms: &Uniforms, dst: &Target) {
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("develop"),
         });
-    pass.draw(&mut encoder, &dst.level_view(0), &bind, arena.offsets[0]);
+    pass.draw(
+        &mut encoder,
+        &dst.level_view(0),
+        dst.format,
+        &bind,
+        arena.offsets[0],
+    );
     gpu.queue.submit([encoder.finish()]);
 }
