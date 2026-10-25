@@ -6,6 +6,8 @@ pub mod error;
 pub mod gpu;
 pub mod passes;
 pub mod renderer;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 pub mod texture;
 
 pub use error::PipelineError;

@@ -15,5 +15,10 @@ thiserror.workspace = true
 serde_json.workspace = true
 lf-settings = { path = "../lf-settings" }
 
+[features]
+# `test_support::shared_gpu`: one device per test binary (WARP crashes on parallel devices).
+test-support = []
+
 [dev-dependencies]
+lf-pipeline = { path = ".", features = ["test-support"] }
 lf-fixtures = { path = "../lf-fixtures" }

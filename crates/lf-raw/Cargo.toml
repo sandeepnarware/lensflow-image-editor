@@ -21,6 +21,7 @@ lz4_flex = { version = "0.11", default-features = false, features = ["std", "saf
 crc32fast = "1"
 
 [dev-dependencies]
+lf-pipeline = { path = "../lf-pipeline", features = ["test-support"] }
 serde_json.workspace = true
 tempfile = "3"
 filetime = "0.2"

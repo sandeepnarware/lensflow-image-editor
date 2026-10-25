@@ -2,9 +2,10 @@
 
 use image::{Rgba, RgbaImage};
 use lf_fixtures::{case_json, load_png, root};
+use lf_pipeline::Renderer;
 use lf_pipeline::renderer::{DrawOptions, View};
+use lf_pipeline::test_support::shared_gpu;
 use lf_pipeline::texture::{Target, read_back};
-use lf_pipeline::{Gpu, Renderer};
 use lf_settings::normalise;
 use serde_json::json;
 
@@ -14,10 +15,10 @@ fn source(name: &str) -> RgbaImage {
 
 #[test]
 fn full_view_draw_equals_render() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let src = source("portrait");
     let s = normalise(&case_json("look-golden").unwrap());
-    let mut r = Renderer::new(&gpu, &src, src.width(), src.height()).unwrap();
+    let mut r = Renderer::new(gpu.clone(), &src, src.width(), src.height()).unwrap();
     let want = r.render(&s).unwrap();
     let canvas = Target::new(&gpu, want.width(), want.height(), false).unwrap();
     let opts = DrawOptions {
@@ -38,10 +39,10 @@ fn full_view_draw_equals_render() {
 
 #[test]
 fn before_ignores_settings_and_geometry() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let src = source("portrait");
     let s = normalise(&json!({ "rotate": 90, "exposure": 2 }));
-    let mut r = Renderer::new(&gpu, &src, src.width(), src.height()).unwrap();
+    let mut r = Renderer::new(gpu.clone(), &src, src.width(), src.height()).unwrap();
     let canvas = Target::new(&gpu, src.width(), src.height(), false).unwrap();
     let opts = DrawOptions {
         before: true,
@@ -54,10 +55,10 @@ fn before_ignores_settings_and_geometry() {
 
 #[test]
 fn histogram_counts_every_pixel() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let src = source("landscape");
     let s = normalise(&json!({}));
-    let mut r = Renderer::new(&gpu, &src, src.width(), src.height()).unwrap();
+    let mut r = Renderer::new(gpu.clone(), &src, src.width(), src.height()).unwrap();
     let h = r.histogram(&s).unwrap();
     let (w, hh) = r.pixels(&s, 200).unwrap().dimensions();
     let n = u64::from(w) * u64::from(hh);
@@ -66,7 +67,7 @@ fn histogram_counts_every_pixel() {
     }
 
     let grey = RgbaImage::from_pixel(64, 64, Rgba([128, 128, 128, 255]));
-    let mut r = Renderer::new(&gpu, &grey, 64, 64).unwrap();
+    let mut r = Renderer::new(gpu.clone(), &grey, 64, 64).unwrap();
     let h = r.histogram(&s).unwrap();
     assert_eq!(h.l[128], 200 * 200);
     assert_eq!(h.l.iter().filter(|&&c| c > 0).count(), 1);
@@ -74,11 +75,11 @@ fn histogram_counts_every_pixel() {
 
 #[test]
 fn pixels_scales_to_the_long_edge() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let src = source("landscape");
     assert_eq!(src.dimensions(), (512, 341));
     let s = normalise(&json!({}));
-    let mut r = Renderer::new(&gpu, &src, src.width(), src.height()).unwrap();
+    let mut r = Renderer::new(gpu.clone(), &src, src.width(), src.height()).unwrap();
     assert_eq!(r.pixels(&s, 100).unwrap().dimensions(), (100, 67));
 }
 
@@ -89,10 +90,10 @@ fn pixels_scales_to_the_long_edge() {
 /// helper lanes past the edge are garbage (WARP) as well.
 #[test]
 fn minified_draw_succeeds_for_every_case() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let src = source("landscape");
     let m = lf_fixtures::Manifest::load().unwrap();
-    let mut r = Renderer::new(&gpu, &src, src.width(), src.height()).unwrap();
+    let mut r = Renderer::new(gpu.clone(), &src, src.width(), src.height()).unwrap();
     for id in &m.cases {
         let s = normalise(&case_json(id).unwrap());
         let (ow, oh) = r.output_size(&s);
@@ -107,5 +108,51 @@ fn minified_draw_succeeds_for_every_case() {
             [31, 31, 33, 255],
             "{id}: the centre is the background"
         );
+    }
+}
+
+#[test]
+fn renderer_is_send() {
+    fn assert_send<T: Send>() {}
+    assert_send::<Renderer>();
+    assert_send::<std::sync::Arc<lf_pipeline::Gpu>>();
+}
+
+#[test]
+fn histogram_keeps_the_thumbnail_and_trim_drops_the_outputs() {
+    let gpu = shared_gpu();
+    let src = source("landscape");
+    let s = normalise(&json!({ "exposure": 0.2 }));
+    let mut r = Renderer::new(gpu.clone(), &src, src.width(), src.height()).unwrap();
+    let thumb = r.pixels(&s, 120).unwrap();
+    let _ = r.histogram(&s).unwrap();
+    let _ = r.render(&s).unwrap();
+    for name in ["output", "thumb", "hist"] {
+        assert!(r.has_cached(name), "{name} missing before trim");
+    }
+    r.trim();
+    for name in ["output", "thumb", "hist"] {
+        assert!(!r.has_cached(name), "{name} kept after trim");
+    }
+    // Everything still works after a trim, and draws the same.
+    assert_eq!(r.pixels(&s, 120).unwrap(), thumb);
+    let h = r.histogram(&s).unwrap();
+    assert!(h.l.iter().sum::<u32>() > 0);
+}
+
+#[test]
+fn many_draws_reuse_the_develop_uniforms() {
+    // Settings that change between draws must each reach their own draw.
+    let gpu = shared_gpu();
+    let src = source("portrait");
+    let mut r = Renderer::new(gpu.clone(), &src, src.width(), src.height()).unwrap();
+    let dark = normalise(&json!({ "exposure": -2 }));
+    let bright = normalise(&json!({ "exposure": 2 }));
+    let want_dark = r.pixels(&dark, 64).unwrap();
+    let want_bright = r.pixels(&bright, 64).unwrap();
+    assert_ne!(want_dark, want_bright);
+    for _ in 0..3 {
+        assert_eq!(r.pixels(&dark, 64).unwrap(), want_dark);
+        assert_eq!(r.pixels(&bright, 64).unwrap(), want_bright);
     }
 }

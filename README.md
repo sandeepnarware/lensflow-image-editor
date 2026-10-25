@@ -99,6 +99,15 @@ cargo test --workspace
 by 38 cases) on a real GPU or on software Vulkan. Rust stable is pinned by
 `rust-toolchain.toml`.
 
+GPU tests share one device per test binary
+(`lf_pipeline::test_support::shared_gpu`, behind the `test-support` feature):
+Windows' WARP software adapter crashes when one process opens several devices
+at once. A new GPU test should use it too; only tests that change device-wide
+state (the error handler, destroying the device) open their own, one at a time,
+in a binary of their own (`crates/lf-pipeline/tests/device.rs`). If a local
+run still crashes in the driver, `cargo test --workspace -- --test-threads=1`
+is the safe fallback.
+
 Environment variables:
 
 - `LF_ALLOW_FALLBACK_ADAPTER`: `0` forbids a software adapter, so a missing

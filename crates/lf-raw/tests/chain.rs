@@ -6,23 +6,22 @@ mod support {
 }
 
 use image::{Rgb, Rgb32FImage, Rgba, RgbaImage};
-use lf_pipeline::{Gpu, PipelineError, Renderer};
+use lf_pipeline::test_support::try_shared_gpu;
+use lf_pipeline::{Gpu, Renderer};
 use lf_raw::color::XYZ_D65_TO_LINEAR_SRGB;
 use lf_raw::demosaic::Quality;
 use lf_raw::open::{Picture, open};
 use lf_raw::render::renderer_for;
 use lf_settings::{DevelopSettings, EditSettings};
 use std::path::PathBuf;
+use std::sync::Arc;
 
-fn gpu() -> Option<Gpu> {
-    match Gpu::new() {
-        Ok(g) => Some(g),
-        Err(PipelineError::NoAdapter) => {
-            println!("skipped: no GPU adapter");
-            None
-        }
-        Err(e) => panic!("{e}"),
+fn gpu() -> Option<Arc<Gpu>> {
+    let g = try_shared_gpu();
+    if g.is_none() {
+        println!("skipped: no GPU adapter");
     }
+    g
 }
 
 fn patch(x: u32, y: u32) -> bool {

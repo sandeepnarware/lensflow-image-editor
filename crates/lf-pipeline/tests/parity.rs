@@ -1,17 +1,18 @@
 use lf_fixtures::{Manifest, Rect, case_json, compare, compare_region, load_png, root};
+use lf_pipeline::Renderer;
+use lf_pipeline::test_support::shared_gpu;
 use lf_pipeline::texture::{Source, read_back_level};
-use lf_pipeline::{Gpu, Renderer};
 use lf_settings::normalise;
 
 fn render_all(filter: impl Fn(&str) -> bool) -> Vec<(String, lf_fixtures::Comparison)> {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let m = Manifest::load().unwrap();
     let mut out = vec![];
     for name in m.sources.keys() {
         let src = load_png(root().join(format!("sources/{name}.png"))).unwrap();
         for id in m.cases.iter().filter(|c| filter(c)) {
             let s = normalise(&case_json(id).unwrap());
-            let mut r = Renderer::new(&gpu, &src, src.width(), src.height()).unwrap();
+            let mut r = Renderer::new(gpu.clone(), &src, src.width(), src.height()).unwrap();
             let got = r.render(&s).unwrap();
             let want = load_png(root().join(format!("renders/{name}__{id}.png"))).unwrap();
             out.push((format!("{name}__{id}"), compare(&got, &want)));
@@ -96,7 +97,7 @@ fn spots_cases() {
 /// whole-image mean and p999 would hide a wrong spot, and its p999 is meaningless.
 #[test]
 fn spots_regions_match() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let m = Manifest::load().unwrap();
     let bound = 4.0 / 255.0;
     let mut lines = vec![];
@@ -106,7 +107,7 @@ fn spots_regions_match() {
         let (w, h) = src.dimensions();
         for id in m.cases.iter().filter(|c| c.starts_with("spots-")) {
             let json = case_json(id).unwrap();
-            let mut r = Renderer::new(&gpu, &src, w, h).unwrap();
+            let mut r = Renderer::new(gpu.clone(), &src, w, h).unwrap();
             let s = normalise(&json);
             let got = r.render(&s).unwrap();
             // The same render without the spots: the regions must see the spots.
@@ -171,7 +172,7 @@ fn all_228_renders_match() {
 /// are rebuilt after the spots pass.
 #[test]
 fn spots_and_detail_caches_follow_the_spots() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let src = load_png(root().join("sources/portrait.png")).unwrap();
     let detail = |id: &str| {
         let mut s = normalise(&case_json(id).unwrap());
@@ -184,10 +185,10 @@ fn spots_and_detail_caches_follow_the_spots() {
     without.spots.clear();
     let changed = detail("spots-min");
 
-    let mut reused = Renderer::new(&gpu, &src, src.width(), src.height()).unwrap();
+    let mut reused = Renderer::new(gpu.clone(), &src, src.width(), src.height()).unwrap();
     for (step, s) in [&with, &without, &with, &changed].into_iter().enumerate() {
         let got = reused.render(s).unwrap();
-        let mut fresh = Renderer::new(&gpu, &src, src.width(), src.height()).unwrap();
+        let mut fresh = Renderer::new(gpu.clone(), &src, src.width(), src.height()).unwrap();
         assert!(
             got == fresh.render(s).unwrap(),
             "step {step} differs from a fresh render"

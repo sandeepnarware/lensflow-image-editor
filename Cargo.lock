@@ -1949,6 +1949,7 @@ dependencies = [
  "half",
  "image",
  "lf-fixtures",
+ "lf-pipeline",
  "lf-settings",
  "pollster",
  "serde_json",

@@ -306,6 +306,22 @@ impl UniformArena {
         }
     }
 
+    /// Writes `entries` from slot 0, reallocating the buffer only when it is too small or the
+    /// entry size changed, so one arena serves every draw of a renderer. Each draw is its
+    /// own submission, so the next write cannot reach a draw already submitted.
+    pub fn write<T: bytemuck::Pod>(&mut self, gpu: &Gpu, label: &str, entries: &[T]) {
+        let fits = std::mem::size_of::<T>() as u64 == self.entry_size
+            && entries.len() <= self.offsets.len();
+        if !fits {
+            *self = UniformArena::new(gpu, label, entries);
+            return;
+        }
+        for (entry, &offset) in entries.iter().zip(&self.offsets) {
+            gpu.queue
+                .write_buffer(&self.buffer, u64::from(offset), bytemuck::bytes_of(entry));
+        }
+    }
+
     /// The `(buffer, binding size)` pair [`FullscreenPass::bind`] takes.
     pub fn binding(&self) -> (&wgpu::Buffer, u64) {
         (&self.buffer, self.entry_size)

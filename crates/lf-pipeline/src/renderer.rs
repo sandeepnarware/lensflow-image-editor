@@ -4,12 +4,13 @@
 //! the curves change.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::curve_texture::CurveTexture;
 use crate::error::PipelineError;
 use crate::gpu::Gpu;
 use crate::passes::develop::{self, Frame, Inputs, Uniforms};
-use crate::passes::{copy, gaussian, spots};
+use crate::passes::{UniformArena, copy, gaussian, spots};
 use crate::texture::{FLOAT_FORMAT, FORMAT, Source, Target, read_back};
 use image::RgbaImage;
 use lf_settings::geometry::{Geometry, output_size, output_to_source, turned_size};
@@ -64,6 +65,16 @@ pub struct DrawOptions {
     pub view: View,
 }
 
+/// Where a develop pass draws: a cached target by name, or the caller's canvas.
+#[derive(Clone, Copy)]
+enum Dest<'a> {
+    Cached(&'static str),
+    Canvas(&'a Target),
+}
+
+/// The cached targets [`Renderer::trim`] drops: outputs, remade on the next call.
+const TRIMMED: [&str; 3] = ["output", "thumb", "hist"];
+
 /// 256 bins per channel of the edited output, luma `round(0.2126 R + 0.7152 G + 0.0722 B)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Histogram {
@@ -73,8 +84,9 @@ pub struct Histogram {
     pub l: [u32; 256],
 }
 
-pub struct Renderer<'g> {
-    gpu: &'g Gpu,
+/// Owns its [`Gpu`] handle, so it can move to a render thread (`Renderer: Send`).
+pub struct Renderer {
+    gpu: Arc<Gpu>,
     /// Working size of the photo (≤ the file's size).
     pub width: u32,
     pub height: u32,
@@ -95,9 +107,11 @@ pub struct Renderer<'g> {
     targets: HashMap<&'static str, Target>,
     spots_key: SpotsKey,
     detail_key: Option<DetailKey>,
+    /// The develop pass's uniforms, rewritten each draw.
+    develop_uniforms: UniformArena,
 }
 
-impl<'g> Renderer<'g> {
+impl Renderer {
     /// Uploads `image` (the working copy of a `full_width`×`full_height` photo) with mips and
     /// makes the wide blurs from a small copy, as the web's constructor. An 8-bit photo has no
     /// values above 1.0, so its chain stays in `RGBA8` as the web's does: the low-radius
@@ -106,16 +120,16 @@ impl<'g> Renderer<'g> {
     /// hold `v / 255` exactly) put it outside the parity gate. A zero width or height (of the
     /// image or of the full size) is [`PipelineError::EmptyImage`].
     pub fn new(
-        gpu: &'g Gpu,
+        gpu: Arc<Gpu>,
         image: &RgbaImage,
         full_width: u32,
         full_height: u32,
-    ) -> Result<Renderer<'g>, PipelineError> {
+    ) -> Result<Renderer, PipelineError> {
         let (width, height) = image.dimensions();
         if width == 0 || height == 0 || full_width == 0 || full_height == 0 {
             return Err(PipelineError::EmptyImage);
         }
-        let source = Source::upload(gpu, image, true)?;
+        let source = Source::upload(&gpu, image, true)?;
         Renderer::with_source(gpu, source, full_width, full_height)
     }
 
@@ -125,11 +139,11 @@ impl<'g> Renderer<'g> {
     /// too, so values above 1.0 reach the develop pass. Another format, or no mips, is
     /// [`PipelineError::WrongFormat`]; a zero full size is [`PipelineError::EmptyImage`].
     pub fn from_texture(
-        gpu: &'g Gpu,
+        gpu: Arc<Gpu>,
         source: Target,
         full_width: u32,
         full_height: u32,
-    ) -> Result<Renderer<'g>, PipelineError> {
+    ) -> Result<Renderer, PipelineError> {
         if source.format != FLOAT_FORMAT || !source.mips {
             let mips = |m: bool| if m { "with mipmaps" } else { "without mipmaps" };
             return Err(PipelineError::WrongFormat {
@@ -142,31 +156,32 @@ impl<'g> Renderer<'g> {
 
     /// `new` and `from_texture` past their checks: the intermediates take `source`'s format.
     fn with_source(
-        gpu: &'g Gpu,
+        gpu: Arc<Gpu>,
         source: Target,
         full_width: u32,
         full_height: u32,
-    ) -> Result<Renderer<'g>, PipelineError> {
+    ) -> Result<Renderer, PipelineError> {
         let (width, height) = (source.width, source.height);
         if full_width == 0 || full_height == 0 {
             return Err(PipelineError::EmptyImage);
         }
         let chain = source.format;
-        let curve = CurveTexture::new(gpu)?;
+        let curve = CurveTexture::new(&gpu)?;
 
         let k = SMALL_EDGE / f64::from(width.max(height));
         let small_size = |v: u32| ((f64::from(v) * k.min(1.0)).round() as u32).max(1);
         let (sw, sh) = (small_size(width), small_size(height));
-        let target = |w, h| Target::new_with(gpu, w, h, false, chain);
+        let target = |w, h| Target::new_with(&gpu, w, h, false, chain);
         let small = target(sw, sh)?;
         let tmp_small = target(sw, sh)?;
         let blur_m = target(sw, sh)?;
         let blur_l = target(sw, sh)?;
-        copy::run(gpu, &source, &small);
+        copy::run(&gpu, &source, &small);
         // Sigmas as fractions of the long edge (1.5% and 4%).
         let long = f64::from(sw.max(sh));
-        gaussian::blur(gpu, &small, &blur_m, &tmp_small, (long * 0.015) as f32);
-        gaussian::blur(gpu, &small, &blur_l, &tmp_small, (long * 0.04) as f32);
+        gaussian::blur(&gpu, &small, &blur_m, &tmp_small, (long * 0.015) as f32);
+        gaussian::blur(&gpu, &small, &blur_l, &tmp_small, (long * 0.04) as f32);
+        let develop_uniforms = develop::arena(&gpu);
 
         Ok(Renderer {
             gpu,
@@ -185,7 +200,34 @@ impl<'g> Renderer<'g> {
             targets: HashMap::new(),
             spots_key: String::new(),
             detail_key: None,
+            develop_uniforms,
         })
+    }
+
+    /// The device this renderer draws on.
+    pub fn gpu(&self) -> &Arc<Gpu> {
+        &self.gpu
+    }
+
+    /// The device was lost: every draw now fails with [`PipelineError::DeviceLost`].
+    pub fn is_lost(&self) -> bool {
+        self.gpu.is_lost()
+    }
+
+    /// Drops the output-sized cached targets (`render`'s, `pixels`'s and `histogram`'s) to
+    /// free memory, e.g. when the photo leaves the screen; they are remade on the next call.
+    pub fn trim(&mut self) {
+        for name in TRIMMED {
+            if let Some(t) = self.targets.remove(name) {
+                t.texture.destroy();
+            }
+        }
+    }
+
+    /// Whether the cached target `name` exists (for tests of [`Renderer::trim`]).
+    #[doc(hidden)]
+    pub fn has_cached(&self, name: &str) -> bool {
+        self.targets.contains_key(name)
     }
 
     /// Full-resolution output size for these settings.
@@ -212,7 +254,7 @@ impl<'g> Renderer<'g> {
             self.cached("spots", w, h, true, self.chain)?;
             if spots_key != self.spots_key {
                 let target = &self.targets["spots"];
-                spots::run(self.gpu, &self.source, target, &s.spots, w, h);
+                spots::run(&self.gpu, &self.source, target, &s.spots, w, h);
                 self.spots_key = spots_key.clone();
                 self.detail_key = None;
             }
@@ -242,15 +284,15 @@ impl<'g> Renderer<'g> {
             let tmp = &self.targets["tmp"];
             if s.sharpen > 0.0 {
                 let to = &self.targets["sharp"];
-                gaussian::blur(self.gpu, image, to, tmp, sharp_sigma as f32);
+                gaussian::blur(&self.gpu, image, to, tmp, sharp_sigma as f32);
             }
             if s.texture != 0.0 {
                 let to = &self.targets["texture"];
-                gaussian::blur(self.gpu, image, to, tmp, texture_sigma as f32);
+                gaussian::blur(&self.gpu, image, to, tmp, texture_sigma as f32);
             }
             self.detail_key = Some(key);
         }
-        self.curve.update(self.gpu, &s.curve);
+        self.curve.update(&self.gpu, &s.curve);
         Ok(spotted)
     }
 
@@ -265,7 +307,10 @@ impl<'g> Renderer<'g> {
 
     /// The edited photo as saving renders it (`renderJpeg` up to the JPEG step): the output
     /// size scaled to the working size, the whole output, row 0 = the top of the picture.
+    /// A lost device is [`PipelineError::DeviceLost`]; an error the device reported since the
+    /// last call is [`PipelineError::Gpu`] (as for `draw`, `pixels` and `histogram`).
     pub fn render(&mut self, s: &EditSettings) -> Result<RgbaImage, PipelineError> {
+        self.alive()?;
         let spotted = self.prepare_caches(s)?;
         let geometry = Geometry::from(s);
         let (ow, oh) = output_size(self.full_width, self.full_height, &geometry);
@@ -273,10 +318,26 @@ impl<'g> Renderer<'g> {
         let w = ((f64::from(ow) * k).round() as u32).max(1);
         let h = ((f64::from(oh) * k).round() as u32).max(1);
         self.cached("output", w, h, false, FORMAT)?;
-        let out = &self.targets["output"];
         let mode = Mode::Develop { spotted };
-        self.develop_into(s, &geometry, &s.crop, &View::default(), mode, out);
-        read_back(self.gpu, out)
+        let dest = Dest::Cached("output");
+        self.develop_into(s, &geometry, &s.crop, &View::default(), mode, dest);
+        self.read_checked("output")
+    }
+
+    /// Fails fast when the device is lost.
+    fn alive(&self) -> Result<(), PipelineError> {
+        if self.gpu.is_lost() {
+            return Err(PipelineError::DeviceLost);
+        }
+        Ok(())
+    }
+
+    /// Reads back the cached target `name`, then reports any device error recorded since the
+    /// last check (which takes precedence over the readback's own result).
+    fn read_checked(&self, name: &str) -> Result<RgbaImage, PipelineError> {
+        let img = read_back(&self.gpu, &self.targets[name]);
+        self.gpu.check()?;
+        img
     }
 
     /// Draws into `canvas` (sized by the caller, in any colour format the device renders to:
@@ -288,6 +349,7 @@ impl<'g> Renderer<'g> {
         opts: &DrawOptions,
         canvas: &Target,
     ) -> Result<(), PipelineError> {
+        self.alive()?;
         let (geometry, crop) = if opts.before {
             let whole = Crop {
                 x: 0.0,
@@ -313,36 +375,51 @@ impl<'g> Renderer<'g> {
                 spotted: self.prepare_caches(s)?,
             }
         };
-        self.develop_into(s, &geometry, &crop, &opts.view, mode, canvas);
-        Ok(())
+        self.develop_into(s, &geometry, &crop, &opts.view, mode, Dest::Canvas(canvas));
+        self.gpu.check()
     }
 
     /// The whole output with `s` at `edge` long edge (the web's `pixels`), top row first.
     pub fn pixels(&mut self, s: &EditSettings, edge: u32) -> Result<RgbaImage, PipelineError> {
+        self.pixels_into("thumb", s, edge)
+    }
+
+    /// `pixels` into the cached target `name`.
+    fn pixels_into(
+        &mut self,
+        name: &'static str,
+        s: &EditSettings,
+        edge: u32,
+    ) -> Result<RgbaImage, PipelineError> {
+        self.alive()?;
         let spotted = self.prepare_caches(s)?;
         let geometry = Geometry::from(s);
         let (ow, oh) = output_size(self.full_width, self.full_height, &geometry);
         let k = f64::from(edge) / f64::from(ow.max(oh));
         let w = ((f64::from(ow) * k).round() as u32).max(1);
         let h = ((f64::from(oh) * k).round() as u32).max(1);
-        self.cached("thumb", w, h, false, FORMAT)?;
-        let out = &self.targets["thumb"];
+        self.cached(name, w, h, false, FORMAT)?;
         let mode = Mode::Develop { spotted };
-        self.develop_into(s, &geometry, &s.crop, &View::default(), mode, out);
-        read_back(self.gpu, out)
+        let dest = Dest::Cached(name);
+        self.develop_into(s, &geometry, &s.crop, &View::default(), mode, dest);
+        self.read_checked(name)
     }
 
     /// The develop pass for `s` into `target` (the caches already prepared): the output of
     /// `geometry` cropped to `crop`, showing `view`. Shared by `render`, `draw` and `pixels`.
     fn develop_into(
-        &self,
+        &mut self,
         s: &EditSettings,
         geometry: &Geometry,
         crop: &Crop,
         view: &View,
         mode: Mode,
-        target: &Target,
+        dest: Dest,
     ) {
+        let target = match dest {
+            Dest::Cached(name) => &self.targets[name],
+            Dest::Canvas(t) => t,
+        };
         let (spotted, develop) = match mode {
             Mode::Before => (false, false),
             Mode::Develop { spotted } => (spotted, true),
@@ -365,19 +442,31 @@ impl<'g> Renderer<'g> {
         };
         let uniforms = Uniforms::new(s, &frame, sharp.is_some(), texture.is_some());
         let inputs = Inputs {
-            image: self.image(spotted),
+            // `self.image(spotted)`, by field so the arena below can be borrowed mutably.
+            image: if spotted {
+                &self.targets["spots"]
+            } else {
+                &self.source
+            },
             blur_m: &self.blur_m,
             blur_l: &self.blur_l,
             blur_s: sharp.unwrap_or(&self.blur_m),
             blur_t: texture.unwrap_or(&self.blur_m),
             curve: &self.curve.target,
         };
-        develop::run(self.gpu, &inputs, &uniforms, target);
+        develop::run(
+            &self.gpu,
+            &inputs,
+            &uniforms,
+            &mut self.develop_uniforms,
+            target,
+        );
     }
 
-    /// Brightness histogram of the edited output, from a 200 px render.
+    /// Brightness histogram of the edited output, from a 200 px render (in its own target,
+    /// so it does not evict `pixels`'s thumbnail).
     pub fn histogram(&mut self, s: &EditSettings) -> Result<Histogram, PipelineError> {
-        let img = self.pixels(s, 200)?;
+        let img = self.pixels_into("hist", s, 200)?;
         let mut h = Histogram {
             r: [0; 256],
             g: [0; 256],
@@ -411,7 +500,7 @@ impl<'g> Renderer<'g> {
                 old.texture.destroy();
             }
             self.targets
-                .insert(name, Target::new_with(self.gpu, w, h, mips, format)?);
+                .insert(name, Target::new_with(&self.gpu, w, h, mips, format)?);
         }
         Ok(&self.targets[name])
     }
