@@ -5,10 +5,17 @@
 //! and PNG take the 8-bit render; TIFF takes the half-float render (clamped to 0..1 and
 //! scaled to 16 bits only at the encode). EXIF is written for JPEG output only: PNG and TIFF
 //! exports carry none in this version.
+//!
+//! A run never stops at one bad photo: each failure is listed in the [`ExportReport`] and the
+//! rest are exported. Only the up-front checks (name collisions, existing files when not
+//! overwriting) fail the whole run, before anything is written. The progress callback can
+//! cancel after the current photo.
 
 use std::io::{Cursor, Write};
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use image::imageops::{FilterType, resize};
 use image::{DynamicImage, ImageBuffer, ImageFormat, Rgb, RgbImage};
@@ -94,11 +101,21 @@ pub struct Exported {
     pub height: u32,
 }
 
+/// What a run did: the photos written and the photos that could not be exported (in the
+/// order asked), and whether the progress callback cancelled it.
+#[derive(Debug)]
+pub struct ExportReport {
+    pub exported: Vec<Exported>,
+    pub failed: Vec<(i64, CatalogError)>,
+    pub cancelled: bool,
+}
+
 /// A row of `export_jobs`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Job {
     pub id: i64,
-    /// `running`, `done` or `failed`.
+    /// `running`, `done` (every photo exported), `failed` (the run was refused up front, or
+    /// some photos failed; `error` says which) or `cancelled`.
     pub status: String,
     pub done: i64,
     pub total: i64,
@@ -262,7 +279,8 @@ fn plan_one(
         row.camera.as_deref().unwrap_or(""),
     );
     let Destination::Folder(dir) = &spec.destination;
-    let path = dir.join(format!("{name}.{}", spec.format.extension()));
+    // The whole name too: a pattern can be a reserved name by itself (`CON`, `aux-{seq}`...).
+    let path = dir.join(format!("{}.{}", safe_stem(&name), spec.format.extension()));
     Ok((row, path))
 }
 
@@ -306,12 +324,20 @@ fn export_one(
     let Destination::Folder(dir) = &spec.destination;
 
     let settings = edits::get_settings(catalog, id)?.unwrap_or_else(EditSettings::default_settings);
-    let opened = open(
-        src,
-        Quality::Best,
-        &DevelopSettings::from_settings(&settings),
-        gpu.max_edge(),
-    )
+    let develop = DevelopSettings::from_settings(&settings);
+    let max_edge = gpu.max_edge();
+    // A decoder panic fails this photo, not the run.
+    let opened = std::panic::catch_unwind(|| {
+        #[cfg(feature = "test-hooks")]
+        if src.file_stem().is_some_and(|s| s == "lf-test-panic") {
+            panic!("test hook: the decoder panics on {}", src.display());
+        }
+        open(src, Quality::Best, &develop, max_edge)
+    })
+    .map_err(|_| {
+        log::error!("the decoder crashed exporting {}", row.path);
+        fail(&crate::import::DECODER_CRASHED, &row.path)
+    })?
     .map_err(|e| fail(&e, &row.path))?;
     if opened.reduced {
         return Err(fail(
@@ -355,6 +381,14 @@ fn export_one(
         Pixels::Sixteen(i) => i.dimensions(),
     };
     let (tw, th) = target_size(spec.size, w, h);
+    let limit = gpu.max_edge();
+    if tw > limit || th > limit {
+        return Err(CatalogError::TooLarge {
+            width: tw,
+            height: th,
+            limit,
+        });
+    }
     let pixels = if (tw, th) == (w, h) {
         pixels
     } else {
@@ -398,21 +432,7 @@ fn export_one(
     let _: &Picture = &opened.picture;
 
     std::fs::create_dir_all(dir)?;
-    let mut file = std::fs::OpenOptions::new();
-    file.write(true);
-    if spec.overwrite {
-        file.create(true).truncate(true);
-    } else {
-        file.create_new(true);
-    }
-    let mut file = file.open(&out_path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::AlreadyExists {
-            CatalogError::Exists(out_path.clone())
-        } else {
-            CatalogError::Io(e)
-        }
-    })?;
-    file.write_all(&bytes)?;
+    write_output(&out_path, &bytes, spec.overwrite)?;
     Ok(Exported {
         photo_id: id,
         path: out_path,
@@ -421,16 +441,68 @@ fn export_one(
     })
 }
 
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Write `bytes` to `path`. Overwriting goes through a temp file in the same folder and a
+/// rename, so a failure never leaves a truncated file where the old one was. Otherwise the
+/// file is created new (an existing one is [`CatalogError::Exists`]) and removed again if the
+/// write fails.
+fn write_output(path: &Path, bytes: &[u8], overwrite: bool) -> Result<()> {
+    if overwrite {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let tmp = path.with_file_name(format!(
+            ".{name}.{}-{}.tmp",
+            std::process::id(),
+            TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let result = (|| -> Result<()> {
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(bytes)?;
+            f.sync_all()?;
+            drop(f);
+            std::fs::rename(&tmp, path)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        return result;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                CatalogError::Exists(path.to_path_buf())
+            } else {
+                CatalogError::Io(e)
+            }
+        })?;
+    if let Err(e) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(e.into());
+    }
+    Ok(())
+}
+
 /// Export `photo_ids` in order. `progress(done, total)` is called before the first photo and
-/// after each. The first failure stops the run (files already written stay) and is recorded
-/// in `export_jobs`.
+/// after each one (exported or failed); returning `Break` cancels the run after the photo
+/// just finished. A photo that fails is listed in [`ExportReport::failed`] and the run goes
+/// on. Only the up-front checks fail the whole run (`Err`), before anything is written: two
+/// photos on one path ([`CatalogError::NameCollision`]) or, unless overwriting, an existing
+/// file ([`CatalogError::Exists`]). The run is recorded in `export_jobs`.
 pub fn run(
     gpu: Arc<Gpu>,
     catalog: &Catalog,
     photo_ids: &[i64],
     spec: &ExportSpec,
-    progress: &mut dyn FnMut(usize, usize),
-) -> Result<Vec<Exported>> {
+    progress: &mut dyn FnMut(usize, usize) -> ControlFlow<()>,
+) -> Result<ExportReport> {
     let total = photo_ids.len();
     let job = {
         let tx = catalog.write_tx()?;
@@ -443,35 +515,54 @@ pub fn run(
         tx.commit()?;
         id
     };
-    let mut out = Vec::with_capacity(total);
-    progress(0, total);
-    let mut result = Ok(());
+    let finish = |status: &str, done: usize, error: Option<String>| -> Result<()> {
+        catalog.conn.execute(
+            "UPDATE export_jobs SET status = ?2, done = ?3, error = ?4 WHERE id = ?1",
+            rusqlite::params![job, status, done as i64, error],
+        )?;
+        Ok(())
+    };
+    let mut report = ExportReport {
+        exported: Vec::with_capacity(total),
+        failed: Vec::new(),
+        cancelled: false,
+    };
     let planned = match plan(catalog, photo_ids, spec) {
         Ok(p) => p,
         Err(e) => {
-            result = Err(e);
-            Vec::new()
+            finish("failed", 0, Some(e.to_string()))?;
+            return Err(e);
         }
     };
+    report.cancelled = progress(0, total).is_break();
     for (i, (row, path)) in planned.into_iter().enumerate() {
-        match export_one(&gpu, catalog, photo_ids[i], &row, path, spec) {
-            Ok(e) => {
-                out.push(e);
-                progress(i + 1, total);
-            }
+        if report.cancelled {
+            break;
+        }
+        let id = photo_ids[i];
+        match export_one(&gpu, catalog, id, &row, path, spec) {
+            Ok(e) => report.exported.push(e),
             Err(e) => {
-                result = Err(e);
-                break;
+                log::warn!("export of photo {id} ({}) failed: {e}", row.path);
+                report.failed.push((id, e));
             }
         }
+        report.cancelled = progress(i + 1, total).is_break();
     }
-    let (status, error) = match &result {
-        Ok(()) => ("done", None),
-        Err(e) => ("failed", Some(e.to_string())),
+    let done = report.exported.len();
+    let error = report.failed.first().map(|(id, e)| {
+        format!(
+            "{} of {total} photos could not be exported; the first (photo {id}): {e}",
+            report.failed.len()
+        )
+    });
+    let status = if report.cancelled {
+        "cancelled"
+    } else if report.failed.is_empty() {
+        "done"
+    } else {
+        "failed"
     };
-    catalog.conn.execute(
-        "UPDATE export_jobs SET status = ?2, done = ?3, error = ?4 WHERE id = ?1",
-        rusqlite::params![job, status, out.len() as i64, error],
-    )?;
-    result.map(|()| out)
+    finish(status, done, error)?;
+    Ok(report)
 }

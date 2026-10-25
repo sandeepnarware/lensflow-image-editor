@@ -30,6 +30,11 @@ pub enum CatalogError {
         photos: (i64, i64),
     },
     #[error(
+        "Exporting at this size would make a {width}×{height} picture; the largest this \
+         graphics device allows is {limit} pixels on a side. Choose a smaller size."
+    )]
+    TooLarge { width: u32, height: u32, limit: u32 },
+    #[error(
         "This catalogue was made by a newer lensflow-ImageEditor. Update the app to open it \
          (catalogue schema {found}, this version understands up to {supported})."
     )]
