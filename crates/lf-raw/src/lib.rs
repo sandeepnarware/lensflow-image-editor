@@ -10,6 +10,7 @@ pub mod develop;
 mod error;
 pub mod exif;
 pub mod open;
+pub mod render;
 
 pub use error::RawError;
 
