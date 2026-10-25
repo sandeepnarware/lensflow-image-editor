@@ -1,4 +1,4 @@
-use lf_fixtures::{Manifest, case_json, compare, load_png, root};
+use lf_fixtures::{Manifest, Rect, case_json, compare, compare_region, load_png, root};
 use lf_pipeline::texture::{Source, read_back_level};
 use lf_pipeline::{Gpu, Renderer};
 use lf_settings::normalise;
@@ -91,6 +91,73 @@ fn spots_cases() {
     assert_eq!(r.len(), 12);
     assert_within("spots", &r);
 }
+/// Inside each spot (its centre `(x·w, y·h)`, radius `r·w` pixels, plus a 2 px margin) the
+/// largest error is under 4/255, strictly: a spot is a small part of the picture, so the
+/// whole-image mean and p999 would hide a wrong spot, and its p999 is meaningless.
+#[test]
+fn spots_regions_match() {
+    let gpu = Gpu::new().unwrap();
+    let m = Manifest::load().unwrap();
+    let bound = 4.0 / 255.0;
+    let mut lines = vec![];
+    let mut bad = vec![];
+    for name in m.sources.keys() {
+        let src = load_png(root().join(format!("sources/{name}.png"))).unwrap();
+        let (w, h) = src.dimensions();
+        for id in m.cases.iter().filter(|c| c.starts_with("spots-")) {
+            let json = case_json(id).unwrap();
+            let mut r = Renderer::new(&gpu, &src, w, h).unwrap();
+            let s = normalise(&json);
+            let got = r.render(&s).unwrap();
+            // The same render without the spots: the regions must see the spots.
+            let mut unspotted = s.clone();
+            unspotted.spots.clear();
+            let plain = r.render(&unspotted).unwrap();
+            let mut plain_worst: f64 = 0.0;
+            let want = load_png(root().join(format!("renders/{name}__{id}.png"))).unwrap();
+            let spots = json["spots"].as_array().expect("a spots case has spots");
+            assert!(!spots.is_empty(), "{id} has no spots");
+            let mut worst: f64 = 0.0;
+            for spot in spots {
+                let at = |k: &str| spot[k].as_f64().expect("spot field");
+                let (cx, cy) = (at("x") * f64::from(w), at("y") * f64::from(h));
+                let rect = Rect::around(cx, cy, at("r") * f64::from(w) + 2.0, w, h);
+                let c = compare_region(&got, &want, rect);
+                if !c.size_ok || c.max >= bound {
+                    bad.push(format!(
+                        "{name}__{id} spot at ({cx}, {cy}): max {:.3}/255",
+                        c.max * 255.0
+                    ));
+                }
+                worst = worst.max(c.max);
+                plain_worst = plain_worst.max(compare_region(&plain, &want, rect).max);
+            }
+            // spots-min's one 1 px heal can leave smooth content within the bound; spots-max's
+            // three large spots cannot.
+            assert!(
+                id != "spots-max" || plain_worst >= bound,
+                "{name}__{id}: the regions miss the spots"
+            );
+            lines.push(format!(
+                "{name}__{id} {:.0}/255 (without spots {:.0}/255)",
+                worst * 255.0,
+                plain_worst * 255.0
+            ));
+        }
+    }
+    assert_eq!(lines.len(), 12);
+    assert!(
+        bad.is_empty(),
+        "spots out of tolerance:
+{}",
+        bad.join(
+            "
+"
+        )
+    );
+    println!("parity spot regions: max {}", lines.join(", "));
+}
+
 #[test]
 fn all_228_renders_match() {
     let r = render_all(|_| true);
