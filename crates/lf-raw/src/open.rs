@@ -48,8 +48,9 @@ pub struct Opened {
     pub jpeg_exif_bytes: Option<Vec<u8>>,
 }
 
-const HEIC_BRANDS: [&[u8]; 10] = [
-    b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1", b"heim", b"heis", b"avif", b"avis",
+const HEIC_BRANDS: [&[u8]; 13] = [
+    b"heic", b"heix", b"hevc", b"hevx", b"hevm", b"hevs", b"heim", b"heis", b"heif", b"mif1",
+    b"msf1", b"avif", b"avis",
 ];
 
 fn is_tiff(h: &[u8]) -> bool {
@@ -82,6 +83,7 @@ fn kind_of_head(h: &[u8]) -> Kind {
         || h.starts_with(b"IIU\0")
         || h.starts_with(b"\0MRM")
         || h.starts_with(b"FOVb")
+        || (h.starts_with(b"II\x1a\0") && h.get(6..14) == Some(b"HEAPCCDR".as_slice()))
     {
         Kind::Raw
     } else {
@@ -151,10 +153,19 @@ pub fn open(
                 jpeg_exif_bytes: None,
             })
         }
-        Kind::Heic => Err(RawError::Unsupported {
-            path: path.to_path_buf(),
-            reason: "HEIC files aren’t supported yet.".to_string(),
-        }),
+        Kind::Heic => {
+            let head = read_head(path)?;
+            let avif = matches!(head.get(8..12), Some(b"avif" | b"avis"));
+            Err(RawError::Unsupported {
+                path: path.to_path_buf(),
+                reason: if avif {
+                    "AVIF files aren’t supported yet."
+                } else {
+                    "HEIC files aren’t supported yet."
+                }
+                .to_string(),
+            })
+        }
         Kind::Unknown => Err(RawError::NotAnImage {
             path: path.to_path_buf(),
         }),
@@ -163,6 +174,14 @@ pub fn open(
                 path: path.to_path_buf(),
                 source,
             })?;
+            if kind == Kind::Tiff
+                && let Some(reason) = unsupported_raw_tiff(path, &bytes)
+            {
+                return Err(RawError::Unsupported {
+                    path: path.to_path_buf(),
+                    reason,
+                });
+            }
             let corrupt = |reason: String| RawError::Corrupt {
                 path: path.to_path_buf(),
                 reason,
@@ -196,6 +215,47 @@ pub fn open(
                 jpeg_exif_bytes,
             })
         }
+    }
+}
+
+/// A TIFF-magic file rawler did not recognise: is it nonetheless a RAW (so `image`
+/// would only open its tiny preview)? Returns the user-facing reason when so.
+/// (a) rawler named a camera: surface that. (b) otherwise IFD0 is inspected for
+/// DNGVersion, or a Make/Model with SubIFDs or CFAPattern; a plain TIFF has none.
+fn unsupported_raw_tiff(path: &Path, bytes: &[u8]) -> Option<String> {
+    use exif::{Context, In, Reader, Tag};
+    let named = |make: &str, model: &str| {
+        let name = format!("{} {}", make.trim(), model.trim())
+            .trim()
+            .to_string();
+        (!name.is_empty()).then_some(name)
+    };
+    let from_rawler = rawler::rawsource::RawSource::new(path)
+        .ok()
+        .and_then(|src| rawler::get_decoder(&src).err());
+    if let Some(rawler::RawlerError::Unsupported { make, model, .. }) = &from_rawler
+        && let Some(name) = named(make, model)
+    {
+        return Some(format!("{name} RAW files aren’t supported yet."));
+    }
+    let exif = Reader::new()
+        .read_from_container(&mut Cursor::new(bytes))
+        .ok()?;
+    let has = |n: u16| exif.get_field(Tag(Context::Tiff, n), In::PRIMARY).is_some();
+    let text = |tag| {
+        exif.get_field(tag, In::PRIMARY)
+            .map(|f| f.display_value().to_string().trim_matches('"').to_string())
+            .unwrap_or_default()
+    };
+    let (make, model) = (text(Tag::Make), text(Tag::Model));
+    let camera_like = !(make.is_empty() && model.is_empty());
+    if has(0xC612) || (camera_like && (has(0x014A) || has(0x828E))) {
+        Some(match named(&make, &model) {
+            Some(name) => format!("{name} RAW files aren’t supported yet."),
+            None => "This RAW format isn’t supported yet.".to_string(),
+        })
+    } else {
+        None
     }
 }
 
