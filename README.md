@@ -5,6 +5,27 @@ brings the LensFlow web editor's develop pipeline to the desktop so that
 studios can edit full-resolution RAW files locally and get the same look the
 web editor produces.
 
+## Status
+
+This is Part 2a, core pipeline parity: the settings model and a headless GPU
+renderer that reproduces the web editor's output. RAW decoding, the
+catalogue, account sign-in and the app UI come in later parts.
+
+## Crates
+
+- `lf-settings`: the develop settings model and `normalise`, plus curves,
+  shader values, geometry, looks and settings groups, ported from the web
+  editor.
+- `lf-pipeline`: the headless wgpu renderer (`Gpu`, textures with mip chains,
+  and the copy, gaussian, spots and develop passes) behind `Renderer`, which
+  renders, draws a preview, and returns pixels and a histogram. It also holds
+  the `lf-render` example:
+  `cargo run -p lf-pipeline --example lf-render -- <in.png> <settings.json> <out.png>`
+  renders one PNG with normalised settings and prints the output size and the
+  adapter used.
+- `lf-fixtures`: loads the golden fixtures in `tests/fixtures` and compares
+  renders against them (mean, 99.9th percentile and maximum error).
+
 ## Build and test
 
 ```bash
@@ -13,9 +34,20 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Rust stable is pinned by `rust-toolchain.toml`. GPU tests can run on
-software Vulkan: set `WGPU_BACKEND=vulkan` and `LF_ALLOW_FALLBACK_ADAPTER=1`
-(on Linux, install `mesa-vulkan-drivers libvulkan1`).
+`cargo test --workspace` runs the parity suite (all 228 renders: 6 sources
+by 38 cases) on a real GPU or on software Vulkan. Rust stable is pinned by
+`rust-toolchain.toml`.
+
+Environment variables:
+
+- `LF_ALLOW_FALLBACK_ADAPTER`: `0` forbids a software adapter, so a missing
+  GPU is an error; anything else, or unset, allows one. CI sets `1` and runs
+  on Mesa lavapipe.
+- `WGPU_BACKEND`: wgpu's own backend selector (for example `vulkan`). CI sets
+  `vulkan`.
+
+On Linux without a GPU, install `mesa-vulkan-drivers libvulkan1` and run the
+tests with `WGPU_BACKEND=vulkan LF_ALLOW_FALLBACK_ADAPTER=1`.
 
 ## Parity rule
 
