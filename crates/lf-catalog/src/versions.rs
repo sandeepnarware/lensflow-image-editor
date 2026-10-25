@@ -9,7 +9,7 @@ use crate::model::{Version, now, ts};
 use crate::sidecar::Sidecar;
 
 pub fn add(catalog: &Catalog, photo_id: i64, label: &str, s: &EditSettings) -> Result<Version> {
-    let tx = catalog.conn.unchecked_transaction()?;
+    let tx = catalog.write_tx()?;
     check_photo(&tx, photo_id)?;
     let v = Version {
         id: uuid::Uuid::new_v4().to_string(),
@@ -40,16 +40,19 @@ pub fn list(catalog: &Catalog, photo_id: i64) -> Result<Vec<Version>> {
 
 /// Make a version's settings current (recorded in history); returns the sidecar to write.
 pub fn use_version(catalog: &Catalog, photo_id: i64, version_id: &str) -> Result<Sidecar> {
-    let found = list(catalog, photo_id)?
+    let tx = catalog.write_tx()?;
+    let found = load_versions(&tx, photo_id)?
         .into_iter()
         .find(|v| v.id == version_id);
     let v = found.ok_or_else(|| CatalogError::NotFound(format!("version {version_id}")))?;
-    edits::set_settings(catalog, photo_id, &v.settings)
+    let sidecar = edits::set_settings_in(&tx, photo_id, &v.settings)?;
+    tx.commit()?;
+    Ok(sidecar)
 }
 
 /// True when a version was removed.
 pub fn delete(catalog: &Catalog, photo_id: i64, version_id: &str) -> Result<bool> {
-    let tx = catalog.conn.unchecked_transaction()?;
+    let tx = catalog.write_tx()?;
     let n = tx.execute(
         "DELETE FROM versions WHERE id = ?1 AND photo_id = ?2",
         (version_id, photo_id),

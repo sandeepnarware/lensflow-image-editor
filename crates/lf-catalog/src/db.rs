@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use crate::model::{NewPhoto, now, ts};
 
@@ -22,7 +22,8 @@ pub enum CatalogError {
 pub type Result<T> = std::result::Result<T, CatalogError>;
 
 /// Each entry is one migration; the schema version is the number applied.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE folders (
     id INTEGER PRIMARY KEY,
     path TEXT NOT NULL UNIQUE,
@@ -97,7 +98,15 @@ CREATE TABLE export_jobs (
     total INTEGER NOT NULL DEFAULT 0,
     error TEXT
 );
-"#];
+"#,
+    r#"
+CREATE TABLE sidecar_meta (
+    photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+    v INTEGER NOT NULL,
+    extra TEXT NOT NULL
+);
+"#,
+];
 
 pub struct Catalog {
     pub(crate) conn: Connection,
@@ -134,6 +143,15 @@ impl Catalog {
         Ok(Catalog { conn })
     }
 
+    /// A write transaction that takes the write lock up front (no deferred read-then-write
+    /// upgrade, which fails with SQLITE_BUSY under WAL when another connection writes).
+    pub(crate) fn write_tx(&self) -> Result<Transaction<'_>> {
+        Ok(Transaction::new_unchecked(
+            &self.conn,
+            TransactionBehavior::Immediate,
+        )?)
+    }
+
     pub fn schema_version(&self) -> Result<i64> {
         Ok(self.conn.query_row(
             "SELECT COALESCE(MAX(version), 0) FROM schema_version",
@@ -144,7 +162,7 @@ impl Catalog {
 
     /// The folder's id, adding it when new.
     pub fn add_folder(&self, path: &str) -> Result<i64> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.write_tx()?;
         tx.execute(
             "INSERT OR IGNORE INTO folders (path, added_at) VALUES (?1, ?2)",
             (path, ts(now())),
@@ -158,7 +176,7 @@ impl Catalog {
 
     /// Insert a photo row and return its id.
     pub fn add_photo(&self, folder_id: i64, p: &NewPhoto) -> Result<i64> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.write_tx()?;
         let t = ts(now());
         tx.execute(
             "INSERT INTO photos (folder_id, path, file_size, mtime, width, height, camera, lens,
