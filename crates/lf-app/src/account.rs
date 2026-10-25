@@ -113,11 +113,15 @@ pub fn gate(client: &Client, cache_dir: &Path) -> Msg {
     ))
 }
 
-/// The error was a hiccup (no connection, rate limit, server trouble), not an answer.
+/// The error was a hiccup (no connection, rate limit, server trouble, a garbled reply),
+/// not an answer.
 pub fn is_transient(err: &AccountError) -> bool {
     matches!(
         err,
-        AccountError::Network(_) | AccountError::RateLimited | AccountError::Server(500..=599, _)
+        AccountError::Network(_)
+            | AccountError::RateLimited
+            | AccountError::BadReply(_)
+            | AccountError::Server(500..=599, _)
     )
 }
 

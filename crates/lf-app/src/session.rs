@@ -22,9 +22,6 @@ pub const READ_ONLY_BANNER: &str =
 pub const NO_STUDIO_MESSAGE: &str =
     "Your account is not part of a studio yet. Ask your studio's owner to invite you.";
 
-/// The permission the server's `desktop/*` routes require.
-pub const DESKTOP_PERMISSION: &str = "galleries.manage";
-
 /// How often the entitlement is checked while the app is open.
 pub const GATE_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
 
@@ -130,11 +127,6 @@ pub enum StudioChoice {
     None,
 }
 
-/// The studio lets this person use the desktop editor (`galleries.manage`).
-pub fn can_use_desktop(studio: &StudioSummary) -> bool {
-    studio.permissions.iter().any(|p| p == DESKTOP_PERMISSION)
-}
-
 /// The remembered studio when it is still one of the user's, else the only one, else ask.
 pub fn choose_studio(user: &User, remembered: Option<&str>) -> StudioChoice {
     let remembered = remembered.and_then(|slug| user.studios.iter().find(|s| s.slug == slug));
@@ -161,7 +153,7 @@ impl Session {
     /// The session after the user picked `studio` (before any entitlement call): `None`
     /// means go on and check the entitlement.
     pub fn on_studio_chosen(studio: &StudioSummary) -> Option<Session> {
-        (!can_use_desktop(studio)).then(|| Session::NoPermission {
+        (!studio.can_use_desktop()).then(|| Session::NoPermission {
             studio: studio.name.clone(),
         })
     }
@@ -179,7 +171,7 @@ impl Session {
             Decision::AllowStale(entitlement, age) => {
                 allowed(studio, entitlement, Some(age), current_version)
             }
-            Decision::Lock(LockReason::Refused, _) if !can_use_desktop(studio) => {
+            Decision::Lock(LockReason::Refused, _) if !studio.can_use_desktop() => {
                 Session::NoPermission {
                     studio: studio.name.clone(),
                 }
@@ -236,7 +228,7 @@ fn allowed(
         .clone()
         .filter(|release| version::newer(&release.version, current_version));
     // The gate locks paused and suspended studios, so only Active reaches here with full
-    // rights; read-only and any standing added later run read-only.
+    // rights; ReadOnly, Unknown and any standing added later run read-only.
     let read_only = !matches!(entitlement.standing, Standing::Active);
     Session::Active {
         studio: studio.clone(),
@@ -365,6 +357,24 @@ mod tests {
             ),
             "read-only still opens the editor: {next:?}"
         );
+        let unknown = Decision::Allow(Entitlement::example(Standing::Unknown, true));
+        assert!(!unknown.gallery_export_allowed());
+        let next = Session::signing_in().on_decision(
+            unknown,
+            &user(std::slice::from_ref(&s)),
+            &s,
+            CURRENT,
+        );
+        assert!(
+            matches!(
+                next,
+                Session::Active {
+                    read_only: true,
+                    ..
+                }
+            ),
+            "unknown standing runs read-only"
+        );
         assert_eq!(
             READ_ONLY_BANNER,
             "Your LensFlow plan has lapsed: editing works, but preset sync and AI are off until you renew."
@@ -453,8 +463,6 @@ mod tests {
             Some(Session::NoPermission { .. })
         ));
         assert!(Session::on_studio_chosen(&allowed()).is_none());
-        assert!(can_use_desktop(&allowed()));
-        assert!(!can_use_desktop(&viewer));
     }
 
     #[test]
