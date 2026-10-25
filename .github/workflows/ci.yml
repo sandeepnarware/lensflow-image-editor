@@ -33,5 +33,16 @@ jobs:
       - name: Fetch RAW sample corpus
         continue-on-error: true
         run: bash scripts/fetch-raw-samples.sh
+      - name: Report RAW sample corpus
+        id: samples
+        run: |
+          n=$(find tests/raw-samples/files -type f 2>/dev/null | wc -l)
+          total=$(grep -c '"sha256"' tests/raw-samples/manifest.json)
+          echo "RAW samples present: $n of $total" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$n" -lt "$total" ]; then echo "::warning::RAW samples present: $n of $total (the sample tests will skip the rest)"; fi
+          if [ "$n" -eq "$total" ]; then echo "require=1" >> "$GITHUB_OUTPUT"; else echo "require=0" >> "$GITHUB_OUTPUT"; fi
       # --nocapture so the parity tests print their worst figures on success (nothing else prints).
-      - run: cargo test --workspace -- --nocapture
+      - name: Test
+        env:
+          LF_REQUIRE_SAMPLES: ${{ steps.samples.outputs.require }}
+        run: cargo test --workspace -- --nocapture

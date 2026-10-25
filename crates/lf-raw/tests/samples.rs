@@ -16,20 +16,31 @@ fn real_camera_samples_open() {
     let manifest = std::fs::read_to_string(corpus_dir().join("manifest.json")).unwrap();
     let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
     let mut failures = Vec::new();
+    let (mut opened, mut skipped) = (0, 0);
     for s in manifest["samples"].as_array().unwrap() {
         let name = s["name"].as_str().unwrap();
         let camera = s["camera"].as_str().unwrap();
         let path = corpus_dir().join("files").join(name);
         if !path.exists() {
             println!("skipped: no sample for {name} (run scripts/fetch-raw-samples.sh)");
+            skipped += 1;
             continue;
         }
-        if let Err(e) = check(name, camera, &path) {
-            println!("FAIL {name} ({camera}): {e}");
-            failures.push(format!("{name} ({camera}): {e}"));
+        match check(name, camera, &path) {
+            Ok(()) => opened += 1,
+            Err(e) => {
+                println!("FAIL {name} ({camera}): {e}");
+                failures.push(format!("{name} ({camera}): {e}"));
+            }
         }
     }
+    let total = opened + skipped + failures.len();
+    println!("RAW samples: {opened} opened, {skipped} skipped of {total}");
     assert!(failures.is_empty(), "failures:\n{}", failures.join("\n"));
+    assert!(
+        skipped == 0 || std::env::var("LF_REQUIRE_SAMPLES").as_deref() != Ok("1"),
+        "LF_REQUIRE_SAMPLES=1 but {skipped} of {total} samples are missing"
+    );
 }
 
 fn check(name: &str, camera: &str, path: &std::path::Path) -> Result<(), String> {
