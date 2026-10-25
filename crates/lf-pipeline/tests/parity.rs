@@ -20,7 +20,26 @@ fn render_all(filter: impl Fn(&str) -> bool) -> Vec<(String, lf_fixtures::Compar
     out
 }
 
-fn assert_within(results: &[(String, lf_fixtures::Comparison)]) {
+/// The worst mean, p999 and max over `results`, each with the render that produced it.
+fn worst(results: &[(String, lf_fixtures::Comparison)]) -> String {
+    let pick = |f: fn(&lf_fixtures::Comparison) -> f64| {
+        let (n, c) = results
+            .iter()
+            .max_by(|a, b| f(&a.1).total_cmp(&f(&b.1)))
+            .expect("at least one render");
+        format!("{:.3}/255 ({n})", f(c) * 255.0)
+    };
+    format!(
+        "worst mean {}, p999 {}, max {}",
+        pick(|c| c.mean),
+        pick(|c| c.p999),
+        pick(|c| c.max)
+    )
+}
+
+/// Fails on any render outside the gate; on success prints the worst figures (shown in CI,
+/// which runs the tests with `--nocapture`), so drift is visible before it fails.
+fn assert_within(label: &str, results: &[(String, lf_fixtures::Comparison)]) {
     let t = Manifest::load().unwrap().thresholds;
     let bad: Vec<_> = results
         .iter()
@@ -37,13 +56,18 @@ fn assert_within(results: &[(String, lf_fixtures::Comparison)]) {
             .collect::<Vec<_>>()
             .join("\n")
     );
+    println!(
+        "parity {label}: {} renders, {}",
+        results.len(),
+        worst(results)
+    );
 }
 
 #[test]
 fn identity_is_exact() {
     let r = render_all(|c| c == "identity");
     assert_eq!(r.len(), 6);
-    assert_within(&r);
+    assert_within("identity", &r);
     assert!(
         r.iter().all(|(_, c)| c.max == 0.0),
         "identity must be bit-exact"
@@ -53,25 +77,25 @@ fn identity_is_exact() {
 fn blur_dependent_cases() {
     let r = render_all(|c| ["detail-max", "light-max", "light-min", "look-moody"].contains(&c));
     assert_eq!(r.len(), 24);
-    assert_within(&r);
+    assert_within("blur-dependent", &r);
 }
 #[test]
 fn every_case_except_spots() {
     let r = render_all(|c| !c.starts_with("spots-"));
     assert_eq!(r.len(), 216);
-    assert_within(&r);
+    assert_within("every case except spots", &r);
 }
 #[test]
 fn spots_cases() {
     let r = render_all(|c| c.starts_with("spots-"));
     assert_eq!(r.len(), 12);
-    assert_within(&r);
+    assert_within("spots", &r);
 }
 #[test]
 fn all_228_renders_match() {
     let r = render_all(|_| true);
     assert_eq!(r.len(), 228);
-    assert_within(&r);
+    assert_within("all 228", &r);
 }
 
 /// The caches follow the spots as the web's `spotsKey` and `detailKey` do: one renderer taken
