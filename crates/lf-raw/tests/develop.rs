@@ -286,3 +286,179 @@ fn colour_matrix_maps_camera_white_to_srgb_white() {
     }
     assert_eq!(color::cam_to_srgb(None, color::D65_WHITE), color::IDENTITY);
 }
+
+/// A Nikon D40 `ColorMatrix` (XYZ to camera, D65), as published in Adobe's DNG
+/// converter tables: a real, far-from-identity matrix.
+const D40_MATRIX: [[f32; 3]; 3] = [
+    [0.6992, -0.1668, -0.0806],
+    [-0.8138, 1.5748, 0.2543],
+    [-0.0874, 0.0850, 0.7897],
+];
+
+/// A flat 32x32 RGGB frame (white 4095, black 0) whose R, G and B samples are
+/// `cam` × white, developed with the D40 matrix and `wb`.
+fn flat_d40(cam: [f32; 3], wb: [f32; 3], highlights: Highlights) -> [f32; 3] {
+    let (w, h) = (32u32, 32u32);
+    let mut data = vec![0u16; (w * h) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let c = match (y & 1, x & 1) {
+                (0, 0) => 0,
+                (1, 1) => 2,
+                _ => 1,
+            };
+            data[(y * w + x) as usize] = (cam[c] * 4095.0).round() as u16;
+        }
+    }
+    let mut raw = plain_frame(
+        w,
+        h,
+        Cfa::Bayer {
+            pattern: [[Color::Red, Color::Green], [Color::Green, Color::Blue]],
+        },
+        data,
+        4095.0,
+    );
+    raw.wb = [wb[0], wb[1], wb[2], wb[1]];
+    raw.xyz_to_cam = Some(D40_MATRIX);
+    let s = DevelopSettings {
+        profile: Profile::Linear,
+        highlights,
+    };
+    px(&develop(&raw, Quality::Best, &s, 8192).unwrap(), 16, 16)
+}
+
+/// The colour a camera value should develop to with no highlight handling at all:
+/// white balance, matrix, gamma.
+fn direct_d40(cam: [f32; 3], wb: [f32; 3]) -> [f32; 3] {
+    let m = color::cam_to_srgb(Some(D40_MATRIX), color::D65_WHITE);
+    let balanced = [cam[0] * wb[0], cam[1] * wb[1], cam[2] * wb[2]];
+    color::apply(&m, balanced).map(|v| v.max(0.0).powf(1.0 / 2.2))
+}
+
+fn spread(c: [f32; 3]) -> f32 {
+    c.iter().copied().fold(f32::MIN, f32::max) - c.iter().copied().fold(f32::MAX, f32::min)
+}
+
+#[test]
+fn a_clipped_sensor_patch_develops_neutral_with_a_real_matrix() {
+    // Every channel at white; daylight-like multipliers push R and B above 1.0 after
+    // white balance, which (clamped after the matrix) used to come out magenta.
+    let wb = [2.1, 1.0, 1.45];
+    let clip = flat_d40([1.0; 3], wb, Highlights::Clip);
+    println!("clipped patch, Clip: {clip:?}");
+    assert!(spread(clip) < 0.01, "{clip:?}");
+    assert!(clip.iter().all(|&v| (v - 1.0).abs() < 0.01), "{clip:?}");
+
+    let rec = flat_d40([1.0; 3], wb, Highlights::Reconstruct);
+    println!("clipped patch, Reconstruct: {rec:?}");
+    assert!(spread(rec) < 0.01, "{rec:?}");
+    assert!(rec.iter().all(|&v| v > 1.0), "{rec:?}");
+}
+
+#[test]
+fn reconstruct_leaves_bright_unclipped_colours_alone() {
+    // A saturated red well below sensor clipping.
+    let cam = [0.45, 0.12, 0.05];
+
+    // In-range after conversion: Reconstruct and Clip agree.
+    let wb = [1.25, 1.0, 1.3];
+    let (clip, rec) = (
+        flat_d40(cam, wb, Highlights::Clip),
+        flat_d40(cam, wb, Highlights::Reconstruct),
+    );
+    println!("unclipped red: Clip {clip:?}, Reconstruct {rec:?}");
+    for c in 0..3 {
+        assert!((clip[c] - rec[c]).abs() < 0.01, "{clip:?} vs {rec:?}");
+    }
+
+    // Strong multipliers take its red above 1.0 after the matrix, but the sensor never
+    // clipped, so Reconstruct must not pull it toward grey (it used to blend by
+    // (m - 1) / m * 2 on the converted maximum).
+    let wb = [2.6, 1.0, 1.3];
+    let want = direct_d40(cam, wb);
+    let rec = flat_d40(cam, wb, Highlights::Reconstruct);
+    println!("unclipped red, strong WB: want {want:?}, Reconstruct {rec:?}");
+    assert!(want[0] > 1.0, "the case must leave the range: {want:?}");
+    for c in 0..3 {
+        assert!((want[c] - rec[c]).abs() < 0.01, "{want:?} vs {rec:?}");
+    }
+}
+
+#[test]
+fn preview_bins_a_bayer_frame_to_half_size() {
+    let (w, h) = (96u32, 64u32);
+    let src = picture(w, h);
+    let linear = Rgb32FImage::from_fn(w, h, |x, y| {
+        let p = src.get_pixel(x, y).0;
+        Rgb([0, 1, 2].map(|c| (p[c] as f32 / 255.0).powf(2.2)))
+    });
+    let raw = dng("preview", &linear);
+    let d = develop(&raw, Quality::Preview, &LINEAR_CLIP, 8192).unwrap();
+    assert_eq!((d.frame.width, d.frame.height), (w / 2, h / 2));
+    assert_eq!((d.full_width, d.full_height), (w, h));
+    assert!(d.reduced);
+
+    // Reference: the linear picture box-downscaled 2x2, gamma encoded.
+    let (mut sum, mut n) = (0.0f64, 0usize);
+    for y in 0..h / 2 {
+        for x in 0..w / 2 {
+            let got = px(&d, x, y);
+            for (c, g) in got.iter().enumerate() {
+                let mut m = 0.0f32;
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    m += linear.get_pixel(2 * x + dx, 2 * y + dy).0[c];
+                }
+                let want = (m / 4.0).powf(1.0 / 2.2);
+                sum += (g - want).abs() as f64;
+                n += 1;
+            }
+        }
+    }
+    let mean = sum / n as f64 * 255.0;
+    println!("preview vs 2x2 box reference: mean {mean:.3}/255");
+    assert!(mean < 1.0, "mean error {mean}/255");
+}
+
+#[test]
+fn preview_bins_x_trans_by_three_and_rgb_by_two() {
+    use Color::{Blue as B, Green as G, Red as R};
+    let pattern = [
+        [G, G, R, G, G, B],
+        [G, G, B, G, G, R],
+        [B, R, G, R, B, G],
+        [G, G, B, G, G, R],
+        [G, G, R, G, G, B],
+        [R, B, G, B, R, G],
+    ];
+    let (w, h) = (36u32, 24u32);
+    let level = |c: Color| match c {
+        R => 1000u16,
+        G => 2000,
+        B => 3000,
+    };
+    let data = (0..w * h)
+        .map(|i| level(pattern[(i / w) as usize % 6][(i % w) as usize % 6]))
+        .collect();
+    let raw = plain_frame(w, h, Cfa::XTrans { pattern }, data, 4000.0);
+    let d = develop(&raw, Quality::Preview, &LINEAR_CLIP, 8192).unwrap();
+    assert_eq!((d.frame.width, d.frame.height), (12, 8));
+    assert_eq!((d.full_width, d.full_height, d.reduced), (w, h, true));
+    let want = [0.25f32, 0.5, 0.75].map(|v| f16_of(v.powf(1.0 / 2.2)));
+    for (x, y) in [(0, 0), (5, 3), (11, 7)] {
+        assert_eq!(px(&d, x, y), want, "({x}, {y})");
+    }
+
+    // An already-demosaiced frame: 2x2 means.
+    let data = (0..4u32 * 2)
+        .flat_map(|i| {
+            let v = if i % 4 < 2 { 0 } else { 1000 };
+            [v, v, v]
+        })
+        .collect();
+    let raw = plain_frame(4, 2, Cfa::Rgb, data, 1000.0);
+    let d = develop(&raw, Quality::Preview, &LINEAR_CLIP, 8192).unwrap();
+    assert_eq!((d.frame.width, d.frame.height), (2, 1));
+    assert_eq!(px(&d, 0, 0), [0.0; 3]);
+    assert_eq!(px(&d, 1, 0), [1.0; 3]);
+}

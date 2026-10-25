@@ -2,20 +2,29 @@
 //!
 //! [`develop`] runs, in order:
 //!
-//! 1. demosaic ([`crate::demosaic::run`]): camera RGB, 0..1 = the sensor's range;
+//! 1. demosaic ([`crate::demosaic::run`]): camera RGB, 0..1 = the sensor's range
+//!    (`Quality::Preview` bins instead: half size for Bayer, a third for X-Trans);
 //! 2. white balance: multiply by the as-shot `wb` (green = 1);
-//! 3. colour: [`color::cam_to_srgb`] (identity when the file has no matrix);
-//! 4. highlights: `Clip` clamps each channel at 1.0; `Reconstruct` blends pixels whose
-//!    largest channel `m` exceeds 1.0 toward neutral `(Y, Y, Y)` (Rec. 709 luminance)
-//!    by `t = clamp((m - 1) / m * 2, 0, 1)`, keeping `Y`, which may stay above 1.0;
-//! 5. base curve ([`curve::apply`]);
-//! 6. downscale, when the long edge exceeds `max_edge`: an integer box filter of
+//! 3. colour: [`color::cam_to_srgb`] (identity when the file has no matrix), with the
+//!    highlight handling around it:
+//!    - `Clip` (dcraw style): the white-balanced camera RGB is clamped at 1.0 *before*
+//!      the matrix, so a clipped sensor area (camera white after WB is (1, 1, 1),
+//!      which the matrix maps to sRGB white) stays neutral instead of turning magenta;
+//!      the matrix output is clamped at 1.0 too;
+//!    - `Reconstruct`: driven by sensor clipping, not by the converted colour. With
+//!      `m` the largest *camera* channel before white balance, a pixel is blended
+//!      toward neutral `(Y, Y, Y)` (Rec. 709 luminance of the converted colour) by
+//!      `t = clamp((m - 0.98) / 0.02, 0, 1)`, keeping `Y`, which may stay above 1.0.
+//!      Unclipped colours (`m <= 0.98`) are untouched, even when the matrix takes
+//!      them above 1.0;
+//! 4. base curve ([`curve::apply`]);
+//! 5. downscale, when the long edge exceeds `max_edge`: an integer box filter of
 //!    factor `ceil(long_edge / max_edge)`, averaged in linear light (this step runs
 //!    before gamma, which the brief allows and which is cheaper and exact);
-//! 7. gamma encode `pow(max(x, 0), 1 / 2.2)`, no clamp;
-//! 8. orientation (EXIF 1..8) and conversion to RGBA f16 (alpha 1).
+//! 6. gamma encode `pow(max(x, 0), 1 / 2.2)`, no clamp;
+//! 7. orientation (EXIF 1..8) and conversion to RGBA f16 (alpha 1).
 //!
-//! Steps 2 to 5 are one pass over the demosaiced buffer, in place.
+//! Steps 2 to 4 are one pass over the demosaiced buffer, in place.
 
 use crate::demosaic::{self, Quality};
 use crate::{Orientation, RawError, RawFrame, color, curve};
@@ -32,7 +41,7 @@ pub const GAMMA: f32 = 2.2;
 const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
 /// Part of the frame cache key: bump whenever develop output changes for the same input.
-pub const DEVELOP_ALGO_VERSION: u32 = 1;
+pub const DEVELOP_ALGO_VERSION: u32 = 2;
 
 /// A developed picture.
 #[derive(Debug, Clone)]
@@ -42,7 +51,8 @@ pub struct Developed {
     /// Size before any reduction (after orientation, so it has the frame's aspect).
     pub full_width: u32,
     pub full_height: u32,
-    /// True when the frame was box-downscaled to fit `max_edge`.
+    /// True when the frame is smaller than the full frame: box-downscaled to fit
+    /// `max_edge`, or binned by `Quality::Preview`.
     pub reduced: bool,
     /// True when the EXIF orientation was not 1 and the buffer was turned or flipped.
     pub orientation_applied: bool,
@@ -68,11 +78,16 @@ pub fn develop(
     data.par_chunks_mut(3 * w as usize).for_each(|row| {
         for p in row.as_chunks_mut::<3>().0 {
             let balanced = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
-            let mut c = color::apply(&m, balanced);
-            match highlights {
-                Highlights::Clip => c = c.map(|v| v.min(1.0)),
-                Highlights::Reconstruct => reconstruct(&mut c),
-            }
+            let c = match highlights {
+                Highlights::Clip => {
+                    color::apply(&m, balanced.map(|v| v.min(1.0))).map(|v| v.min(1.0))
+                }
+                Highlights::Reconstruct => {
+                    let mut c = color::apply(&m, balanced);
+                    reconstruct(&mut c, clip_weight(p[0].max(p[1]).max(p[2])));
+                    c
+                }
+            };
             for (out, v) in p.iter_mut().zip(c) {
                 *out = curve::apply(profile, v);
             }
@@ -91,7 +106,10 @@ pub fn develop(
 
     let inv_gamma = 1.0 / GAMMA;
     let o = raw.orientation;
-    let (full_width, full_height) = oriented_size(o, rgb.width, rgb.height);
+    // The full frame's size (the crop), also when Preview binned it smaller.
+    let crop = demosaic::clamp_crop(raw);
+    let (full_width, full_height) = oriented_size(o, crop.w, crop.h);
+    let reduced = reduced || quality == Quality::Preview;
     let frame = orient_to_f16(w, h, o, |i| {
         let s = &data[i * 3..i * 3 + 3];
         [
@@ -133,10 +151,10 @@ pub fn develop_rgb8(img: &RgbaImage, orientation: Orientation) -> Developed {
 }
 
 /// The 8-bit picture turned or flipped upright for EXIF orientation `o` (same index
-/// maths as [`develop_rgb8`]); a copy of `img` when `o` is 1.
-pub fn orient_rgba8(img: &RgbaImage, o: Orientation) -> RgbaImage {
+/// maths as [`develop_rgb8`]); `img` itself when `o` is 1.
+pub fn orient_rgba8(img: RgbaImage, o: Orientation) -> RgbaImage {
     if o.exif() == 1 {
-        return img.clone();
+        return img;
     }
     let (w, h) = img.dimensions();
     let (ow, oh) = oriented_size(o, w, h);
@@ -193,14 +211,22 @@ pub fn box_downscale_rgba8(img: &RgbaImage, max_edge: u32) -> Option<RgbaImage> 
     RgbaImage::from_raw(nw, nh, out)
 }
 
-/// Pull an over-range colour toward neutral, keeping its luminance.
+/// Camera level (fraction of white, before white balance) from which a channel
+/// counts as clipped; the neutral blend ramps up over the last 2 %.
+const CLIP_START: f32 = 0.98;
+
+/// How far a pixel whose largest camera channel is `m` is pulled toward neutral.
 #[inline]
-fn reconstruct(c: &mut [f32; 3]) {
-    let m = c[0].max(c[1]).max(c[2]);
-    if m <= 1.0 {
+fn clip_weight(m: f32) -> f32 {
+    ((m - CLIP_START) / (1.0 - CLIP_START)).clamp(0.0, 1.0)
+}
+
+/// Blend a converted colour toward neutral by `t`, keeping its luminance.
+#[inline]
+fn reconstruct(c: &mut [f32; 3], t: f32) {
+    if t <= 0.0 {
         return;
     }
-    let t = ((m - 1.0) / m.max(1e-6) * 2.0).clamp(0.0, 1.0);
     let y = LUMA[0] * c[0] + LUMA[1] * c[1] + LUMA[2] * c[2];
     for v in c.iter_mut() {
         *v += t * (y - *v);

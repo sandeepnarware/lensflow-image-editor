@@ -9,9 +9,12 @@
 //! - `Quality::Fast`: bilinear ([`bilinear`]), Bayer and X-Trans.
 //! - `Quality::Best`: AHD for Bayer ([`ahd`]); a provisional inverse-distance
 //!   interpolation for X-Trans ([`xtrans`]).
+//! - `Quality::Preview`: no interpolation; blocks of samples are binned into one
+//!   pixel ([`preview`]): half size for Bayer and RGB, a third for X-Trans.
 
 mod ahd;
 mod bilinear;
+mod preview;
 mod xtrans;
 
 use crate::{Cfa, Color, RawFrame, Rect};
@@ -22,6 +25,10 @@ pub enum Quality {
     Fast,
     /// AHD for Bayer; 3-colour inverse-distance interpolation for X-Trans.
     Best,
+    /// Binned, not interpolated: a 2x2 superpixel per output pixel for Bayer (half
+    /// size, a quarter of the memory), 3x3 for X-Trans (a third of the size). For
+    /// thumbnails and first looks.
+    Preview,
 }
 
 /// Linear camera-space RGB, interleaved, row-major.
@@ -32,9 +39,28 @@ pub struct LinearRgb {
     pub data: Vec<f32>,
 }
 
-/// Demosaic `raw` at the given quality (parallel over rows with rayon).
+/// Demosaic `raw` at the given quality (parallel over rows with rayon). The output is
+/// the crop's size, except with `Quality::Preview` (see [`Quality`]).
 pub fn run(raw: &RawFrame, quality: Quality) -> LinearRgb {
     let crop = clamp_crop(raw);
+    if quality == Quality::Preview {
+        let (data, width, height) = match &raw.cfa {
+            Cfa::Rgb => preview::rgb(raw, crop),
+            Cfa::Bayer { pattern } => {
+                let p = pattern.map(|row| row.map(index));
+                preview::mosaic(raw, crop, 2, |x, y| p[y & 1][x & 1])
+            }
+            Cfa::XTrans { pattern } => {
+                let p = pattern.map(|row| row.map(index));
+                preview::mosaic(raw, crop, 3, |x, y| p[y % 6][x % 6])
+            }
+        };
+        return LinearRgb {
+            width,
+            height,
+            data,
+        };
+    }
     let data = match &raw.cfa {
         Cfa::Rgb => pass_through(raw, crop),
         Cfa::Bayer { pattern } => {
@@ -42,7 +68,7 @@ pub fn run(raw: &RawFrame, quality: Quality) -> LinearRgb {
             let pattern = pattern.map(|row| row.map(index));
             match quality {
                 Quality::Fast => bilinear::bayer(&plane, pattern, crop),
-                Quality::Best => ahd::run(&plane, pattern, crop),
+                Quality::Best | Quality::Preview => ahd::run(&plane, pattern, crop),
             }
         }
         Cfa::XTrans { pattern } => {
@@ -50,7 +76,7 @@ pub fn run(raw: &RawFrame, quality: Quality) -> LinearRgb {
             let pattern = pattern.map(|row| row.map(index));
             match quality {
                 Quality::Fast => xtrans::run(&plane, &pattern, crop, xtrans::Weighting::Mean3x3),
-                Quality::Best => xtrans::run(
+                Quality::Best | Quality::Preview => xtrans::run(
                     &plane,
                     &pattern,
                     crop,
@@ -75,7 +101,8 @@ fn index(c: Color) -> usize {
     }
 }
 
-fn clamp_crop(raw: &RawFrame) -> Rect {
+/// The frame's crop, clamped to the sensor.
+pub(crate) fn clamp_crop(raw: &RawFrame) -> Rect {
     let x = raw.crop.x.min(raw.width);
     let y = raw.crop.y.min(raw.height);
     Rect {
