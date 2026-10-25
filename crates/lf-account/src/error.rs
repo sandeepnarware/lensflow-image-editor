@@ -28,6 +28,10 @@ pub enum AccountError {
     RateLimited,
     #[error("server error {0}: {1}")]
     Server(u16, String),
+    /// A successful reply this version could not read (a changed payload): transient, so
+    /// the entitlement gate leans on its cached answer instead of locking.
+    #[error("the server sent a reply this version does not understand: {0}")]
+    BadReply(String),
     #[error("the studio is not found")]
     StudioNotFound,
     #[error("a two-factor code is required")]

@@ -53,8 +53,9 @@ packaging (2d) follow. 2c-i is libraries only: there is no UI yet.
 ## LensFlow account (lf-account)
 
 Base URLs: production `https://lensflow.in/api`, development
-`https://dev.lensflow.in/api` (`Instance::Prod` / `Dev`; `Custom(url)` for
-tests). Every request carries `Accept: application/json`,
+`https://dev.lensflow.in/api` (`Instance::Prod` / `Dev`; `Instance::custom(url)`
+for anything else, which refuses a URL that is not `https`, except `http` to
+`localhost` or `127.0.0.1` for local development and tests). Every request carries `Accept: application/json`,
 `X-LensFlow-Client: desktop` and `User-Agent: lensflow-ImageEditor/<version>
 (<os>)`; once signed in, `Authorization: Bearer <token>`; once a studio is
 chosen, `X-Studio: <slug>`. Timeouts: 20 s to connect, 30 s to read (120 s for
@@ -65,7 +66,9 @@ Endpoints used: `POST auth/login` (email, password, optional
 and call again), `GET auth/me`, `POST auth/logout`, `GET desktop/entitlement`,
 `GET desktop/download/{platform}`, `POST desktop/grade` (multipart: mode
 `extract` or `review`, a reference JPEG and a contact-sheet JPEG each under
-700 KB, up to 16 example looks, and for a review the current settings), and
+700 KB, up to 16 example looks, and for a review the current settings; the
+examples JSON must stay within 16,384 characters and the settings JSON within
+8,192, checked before sending), and
 `galleries/edit-presets` (list, create, PATCH, delete). Preset sync names a
 local preset `<name> (desktop)` (or `(desktop 2)`, ...) when the name is taken.
 
@@ -82,16 +85,21 @@ How a response becomes behaviour (`client.rs`, `entitlement.rs`):
 | 422 `plan_limit` | The AI allowance is used up |
 | other 422 | Field validation errors |
 | network error, 429, 5xx | Transient: lean on the cached entitlement (below) |
+| 200 the client cannot read | Transient (`BadReply`, logged): a payload change never locks the app |
 | any other 4xx | Refused: locked, with the server's message |
 
 Entitlement rules. The reply carries `enabled`, `standing`
-(`active`, `read_only`, `paused`, `suspended`), AI availability and remaining
-count, the studio, `min_version` and the latest release.
+(`active`, `read_only`, `paused`, `suspended`; a standing this version does not
+know is read as `Unknown` and treated as read-only), AI availability and
+remaining count (optional), the studio, `min_version` and the latest release.
+A studio from sign-in can use the desktop editor when its member has
+`galleries.manage` (`StudioSummary::can_use_desktop`).
 
 - Active and enabled: everything works. AI grading only while the AI
   allowance is available.
 - Read-only: edit locally, but no export to the gallery, no AI and no preset
-  sync (`export_allowed`, `ai_allowed` and `sync_allowed` are false).
+  sync (`gallery_export_allowed`, `ai_allowed` and `sync_allowed` are false).
+  Export to disk is always allowed while the app is unlocked.
 - Paused, suspended, or not enabled for the studio: locked.
 - Offline: after a network failure, 429 or 5xx, a cached entitlement is trusted
   for 7 days from its `checked_at` (`AllowStale`), unless it was itself a lock.
@@ -104,7 +112,8 @@ Where things live. The sign-in token goes in the OS keychain (service
 `lensflow-ImageEditor`, account = the API base URL). With no usable keychain it
 falls back to a file `token-<hash>` (0600 on Unix) in the `directories`
 project config dir (`ProjectDirs::from("in", "lensflow",
-"lensflow-ImageEditor")`), with a logged warning. The entitlement cache is
+"lensflow-ImageEditor")`), with a logged warning; on a system with no config
+dir, `<temp dir>/lensflow-ImageEditor` (never the current directory). The entitlement cache is
 `entitlement.json`, written atomically in a folder the app chooses
 (`entitlement::Cache::new(dir)`); the crate does not pick that folder.
 

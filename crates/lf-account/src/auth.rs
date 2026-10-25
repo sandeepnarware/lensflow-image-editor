@@ -17,6 +17,13 @@ pub struct StudioSummary {
     pub subscription_paused: bool,
 }
 
+impl StudioSummary {
+    /// The desktop editor is for people who manage galleries (`galleries.manage`).
+    pub fn can_use_desktop(&self) -> bool {
+        self.permissions.iter().any(|p| p == "galleries.manage")
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct User {
     pub id: u64,

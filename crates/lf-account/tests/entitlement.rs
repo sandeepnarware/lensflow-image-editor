@@ -8,7 +8,7 @@ const DAY: Duration = Duration::from_secs(86_400);
 
 fn client(server: &MockServer) -> Client {
     let url = url::Url::parse(&server.url("/api")).unwrap();
-    Client::new(Instance::Custom(url), "1.0.0")
+    Client::new(Instance::custom(url).unwrap(), "1.0.0")
         .with_token("t")
         .with_studio("frames")
 }
@@ -109,7 +109,7 @@ fn fresh_active_allows() {
         Ok(ent(Standing::Active, true, Duration::ZERO)),
     );
     assert!(matches!(d, Decision::Allow(_)));
-    assert!(d.ai_allowed() && d.export_allowed() && d.sync_allowed());
+    assert!(d.ai_allowed() && d.gallery_export_allowed() && d.sync_allowed());
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn network_error_with_a_two_day_cache_is_allowed_stale() {
         Decision::AllowStale(_, age) => assert!(*age >= 2 * DAY && *age < 3 * DAY),
         other => panic!("{other:?}"),
     }
-    assert!(d.export_allowed());
+    assert!(d.gallery_export_allowed());
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn network_error_with_an_eight_day_cache_locks_offline() {
     assert!(
         matches!(&d, Decision::Lock(LockReason::Offline, m) if m == "Connect to the internet to keep using lensflow-ImageEditor.")
     );
-    assert!(!d.export_allowed());
+    assert!(!d.gallery_export_allowed());
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn stale_read_only_cache_keeps_its_flags_off() {
         Err(AccountError::Network("down".into())),
     );
     assert!(matches!(d, Decision::AllowStale(..)));
-    assert!(!d.ai_allowed() && !d.export_allowed() && !d.sync_allowed());
+    assert!(!d.ai_allowed() && !d.gallery_export_allowed() && !d.sync_allowed());
 }
 
 #[test]
@@ -233,7 +233,7 @@ fn read_only_allows_with_ai_export_and_sync_off() {
         Ok(ent(Standing::ReadOnly, true, Duration::ZERO)),
     );
     assert!(matches!(d, Decision::Allow(_)));
-    assert!(!d.ai_allowed() && !d.export_allowed() && !d.sync_allowed());
+    assert!(!d.ai_allowed() && !d.gallery_export_allowed() && !d.sync_allowed());
 }
 
 #[test]
@@ -241,7 +241,7 @@ fn ai_needs_availability_too() {
     let mut e = ent(Standing::Active, true, Duration::ZERO);
     e.ai.available = false;
     let d = Gate::evaluate(SystemTime::now(), None, Ok(e));
-    assert!(!d.ai_allowed() && d.export_allowed());
+    assert!(!d.ai_allowed() && d.gallery_export_allowed());
 }
 
 #[test]
@@ -253,7 +253,7 @@ fn fresh_unauthorized_means_sign_in() {
         Err(AccountError::Unauthorized),
     );
     assert!(matches!(d, Decision::SignIn));
-    assert!(!d.export_allowed());
+    assert!(!d.gallery_export_allowed());
 }
 
 #[test]
@@ -319,7 +319,7 @@ fn studio_not_found_asks_to_choose_a_studio() {
     );
     let d = Gate::refresh(&client(&server), &cache, SystemTime::now());
     assert!(matches!(d, Decision::ChooseStudio), "{d:?}");
-    assert!(!d.export_allowed());
+    assert!(!d.gallery_export_allowed());
     assert!(cache.load().is_none());
 }
 
@@ -329,7 +329,6 @@ fn definite_refusals_do_not_use_the_grace() {
     for err in [
         AccountError::Server(404, "gone".into()),
         AccountError::Server(400, "bad".into()),
-        AccountError::Server(200, "unexpected reply".into()),
         AccountError::Validation(Default::default()),
     ] {
         let d = Gate::evaluate(SystemTime::now(), Some(&cached), Err(err));
@@ -338,6 +337,7 @@ fn definite_refusals_do_not_use_the_grace() {
     for err in [
         AccountError::RateLimited,
         AccountError::Server(502, "x".into()),
+        AccountError::BadReply("unexpected reply".into()),
     ] {
         let d = Gate::evaluate(SystemTime::now(), Some(&cached), Err(err));
         assert!(matches!(d, Decision::AllowStale(..)), "{d:?}");
@@ -423,4 +423,60 @@ fn a_cache_without_checked_at_is_ancient() {
         Err(AccountError::Network("x".into())),
     );
     assert!(matches!(d, Decision::Lock(LockReason::Offline, _)), "{d:?}");
+}
+
+#[test]
+fn an_unknown_standing_is_read_only_not_a_lock() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET).path("/api/desktop/entitlement");
+        then.status(200).json_body(body(true, "grace_period"));
+    });
+    let e = entitlement::check(&client(&server)).unwrap();
+    assert_eq!(e.standing, Standing::Unknown);
+    let d = Gate::evaluate(SystemTime::now(), None, Ok(e));
+    assert!(matches!(d, Decision::Allow(_)), "{d:?}");
+    assert!(!d.ai_allowed() && !d.gallery_export_allowed() && !d.sync_allowed());
+}
+
+#[test]
+fn remaining_may_be_large_or_missing() {
+    let server = MockServer::start();
+    let mut b = body(true, "active");
+    b["data"]["ai"]["remaining"] = json!(10_000_000_000u64);
+    let mut m = server.mock(|when, then| {
+        when.method(GET).path("/api/desktop/entitlement");
+        then.status(200).json_body(b);
+    });
+    let e = entitlement::check(&client(&server)).unwrap();
+    assert_eq!(e.ai.remaining, Some(10_000_000_000));
+    m.delete();
+    let mut b = body(true, "active");
+    b["data"]["ai"].as_object_mut().unwrap().remove("remaining");
+    server.mock(|when, then| {
+        when.method(GET).path("/api/desktop/entitlement");
+        then.status(200).json_body(b);
+    });
+    assert_eq!(
+        entitlement::check(&client(&server)).unwrap().ai.remaining,
+        None
+    );
+}
+
+#[test]
+fn an_unreadable_200_reply_is_transient_and_uses_the_grace() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = Cache::new(dir.path());
+    cache.save(&ent(Standing::Active, true, DAY));
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET).path("/api/desktop/entitlement");
+        then.status(200)
+            .json_body(json!({"data": {"enabled": "maybe", "standing": 7}}));
+    });
+    let err = entitlement::check(&client(&server)).unwrap_err();
+    assert!(matches!(err, AccountError::BadReply(_)), "{err:?}");
+    let d = Gate::refresh(&client(&server), &cache, SystemTime::now());
+    assert!(matches!(d, Decision::AllowStale(..)), "{d:?}");
+    assert!(cache.load().is_some(), "the cache is kept");
 }
