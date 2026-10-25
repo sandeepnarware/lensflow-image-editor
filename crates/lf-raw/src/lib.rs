@@ -1,6 +1,7 @@
 //! Decoding of camera RAW files into sensor data (via rawler).
 
 pub mod decode;
+pub mod demosaic;
 mod error;
 
 pub use error::RawError;
@@ -55,9 +56,13 @@ pub struct RawFrame {
     pub cfa: Cfa,
     /// Row-major samples; `width * height` (Bayer, X-Trans) or `* 3` (Rgb).
     pub data: Vec<u16>,
+    /// Black level per CFA position, in the 2x2 repeat's row-major order
+    /// (top-left, top-right, bottom-left, bottom-right; RGGB gives [R, G1, G2, B]).
+    /// For `Cfa::Rgb` frames the first three entries are per channel (R, G, B).
     pub black: [f32; 4],
     pub white: f32,
-    /// As-shot white-balance multipliers (R, G, B, G2), green normalised to 1.
+    /// As-shot white-balance multipliers per colour, [R, G, B, G2] (not per CFA
+    /// position), green normalised to 1; G2 mirrors G when the file has none.
     pub wb: [f32; 4],
     pub xyz_to_cam: Option<[[f32; 3]; 3]>,
     pub crop: Rect,

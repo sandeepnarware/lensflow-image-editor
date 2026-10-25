@@ -63,6 +63,7 @@ fn rationals(tag: u16, kind: u16, v: &[(i32, u32)]) -> Entry {
 /// Mosaic `image` through `pattern` (0 = R, 1 = G, 2 = B, over a 2x2 tile) and
 /// write a DNG. Each channel is divided by its white-balance multiplier first, so
 /// decoding and multiplying by the as-shot WB restores the image.
+#[allow(dead_code)] // not every test binary uses both writers
 pub fn write(
     path: &Path,
     image: &Rgb32FImage,
@@ -72,11 +73,28 @@ pub fn write(
     wb: [f32; 3],
     matrix: [[f32; 3]; 3],
 ) {
+    write_with_blacks(path, image, pattern, [black; 4], white, wb, matrix);
+}
+
+/// As [`write`], with a black level per 2x2 position (row-major: top-left,
+/// top-right, bottom-left, bottom-right).
+#[allow(dead_code)] // not every test binary uses both writers
+pub fn write_with_blacks(
+    path: &Path,
+    image: &Rgb32FImage,
+    pattern: [u8; 4],
+    blacks: [u16; 4],
+    white: u16,
+    wb: [f32; 3],
+    matrix: [[f32; 3]; 3],
+) {
     let (w, h) = image.dimensions();
     let mut pixels = Vec::with_capacity((w * h * 2) as usize);
     for y in 0..h {
         for x in 0..w {
-            let c = pattern[((y % 2) * 2 + x % 2) as usize] as usize;
+            let pos = ((y % 2) * 2 + x % 2) as usize;
+            let c = pattern[pos] as usize;
+            let black = blacks[pos];
             let v = (image.get_pixel(x, y).0[c] / wb[c]).clamp(0.0, 1.0);
             let s = black as f32 + v * (white - black) as f32;
             pixels.extend_from_slice(&(s.round() as u16).to_le_bytes());
@@ -114,7 +132,7 @@ pub fn write(
         bytes(50706, &[1, 4, 0, 0]),
         ascii(50708, "Synthetic"),
         short(50713, &[2, 2]),
-        short(50714, &[black; 4]),
+        short(50714, &blacks),
         long(50717, &[white as u32]),
         rationals(50721, 10, &flat),
         rationals(
