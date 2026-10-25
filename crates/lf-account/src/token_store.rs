@@ -30,10 +30,25 @@ impl TokenStore {
     }
 
     fn entry(&self) -> Option<keyring::Entry> {
+        self.entry_for(&self.account)
+    }
+
+    fn entry_for(&self, account: &str) -> Option<keyring::Entry> {
         if !self.use_keyring {
             return None;
         }
-        keyring::Entry::new(SERVICE, &self.account).ok()
+        match keyring::Entry::new(SERVICE, account) {
+            Ok(e) => Some(e),
+            Err(err) => {
+                static WARNED: std::sync::Once = std::sync::Once::new();
+                WARNED.call_once(|| {
+                    log::warn!(
+                        "the OS keychain is not available ({err}); the sign-in token is kept in a private file"
+                    )
+                });
+                None
+            }
+        }
     }
 
     fn file(&self) -> PathBuf {
@@ -43,7 +58,10 @@ impl TokenStore {
 
     /// True when the keychain accepts a write and a read back (tests use it to skip cleanly).
     pub fn keyring_works(&self) -> bool {
-        let Some(e) = self.entry() else { return false };
+        // A separate account so the probe never touches a stored token.
+        let Some(e) = self.entry_for(&format!("{}#probe", self.account)) else {
+            return false;
+        };
         match e.set_password("probe") {
             Ok(()) => {
                 let ok = e.get_password().is_ok();
@@ -64,7 +82,11 @@ impl TokenStore {
         }
         let t = fs::read_to_string(self.file()).ok()?;
         let t = t.trim().to_string();
-        (!t.is_empty()).then_some(t)
+        if t.is_empty() {
+            return None;
+        }
+        log::info!("using the sign-in token file (no keychain entry)");
+        Some(t)
     }
 
     pub fn save(&self, token: &str) {
@@ -85,24 +107,33 @@ impl TokenStore {
     }
 
     fn write_file(&self, token: &str) -> std::io::Result<()> {
-        fs::create_dir_all(&self.dir)?;
-        let path = self.file();
+        log::info!("storing the sign-in token in {}", self.dir.display());
         #[cfg(unix)]
         {
             use std::io::Write;
-            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&self.dir)?;
+            let path = self.file();
+            // Private from the first byte: a 0600 temp file, renamed into place.
+            let tmp = path.with_extension("tmp");
+            let _ = fs::remove_file(&tmp);
             let mut f = fs::OpenOptions::new()
                 .write(true)
-                .create(true)
-                .truncate(true)
+                .create_new(true)
                 .mode(0o600)
-                .open(&path)?;
+                .open(&tmp)?;
             f.write_all(token.as_bytes())?;
-            // open() keeps the mode of an existing file: force it.
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            f.sync_all()?;
+            fs::rename(&tmp, &path)
         }
         #[cfg(not(unix))]
-        fs::write(&path, token)
+        {
+            fs::create_dir_all(&self.dir)?;
+            fs::write(self.file(), token)
+        }
     }
 
     pub fn clear(&self) {

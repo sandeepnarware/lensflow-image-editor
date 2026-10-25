@@ -156,6 +156,7 @@ fn map_response(resp: Response) -> Result<Value, AccountError> {
     let code = body.get("code").and_then(Value::as_str).unwrap_or("");
     Err(match (status, code) {
         (401, _) => AccountError::Unauthorized,
+        (404, "studio_not_found") => AccountError::StudioNotFound,
         (403 | 402, "studio_suspended") => AccountError::Locked(LockReason::Suspended, message),
         (403 | 402, "desktop_editor_disabled") => {
             AccountError::Locked(LockReason::NotEnabled, message)

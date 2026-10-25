@@ -284,3 +284,143 @@ fn cache_round_trips_and_refresh_updates_it_on_ok() {
     std::fs::write(dir.path().join("entitlement.json"), "{nope").unwrap();
     assert!(cache.load().is_none());
 }
+
+fn refuse_mock(server: &MockServer, status: u16, body: serde_json::Value) {
+    server.mock(|when, then| {
+        when.method(GET).path("/api/desktop/entitlement");
+        then.status(status).json_body(body);
+    });
+}
+
+#[test]
+fn a_403_without_a_code_locks_as_refused_even_with_a_fresh_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = Cache::new(dir.path());
+    cache.save(&ent(Standing::Active, true, Duration::ZERO));
+    let server = MockServer::start();
+    refuse_mock(&server, 403, json!({"message": "You may not do that."}));
+    let d = Gate::refresh(&client(&server), &cache, SystemTime::now());
+    assert!(
+        matches!(&d, Decision::Lock(LockReason::Refused, m) if m == "You may not do that."),
+        "{d:?}"
+    );
+}
+
+#[test]
+fn studio_not_found_asks_to_choose_a_studio() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = Cache::new(dir.path());
+    cache.save(&ent(Standing::Active, true, Duration::ZERO));
+    let server = MockServer::start();
+    refuse_mock(
+        &server,
+        404,
+        json!({"message": "Studio not found.", "code": "studio_not_found"}),
+    );
+    let d = Gate::refresh(&client(&server), &cache, SystemTime::now());
+    assert!(matches!(d, Decision::ChooseStudio), "{d:?}");
+    assert!(!d.export_allowed());
+    assert!(cache.load().is_none());
+}
+
+#[test]
+fn definite_refusals_do_not_use_the_grace() {
+    let cached = ent(Standing::Active, true, DAY);
+    for err in [
+        AccountError::Server(404, "gone".into()),
+        AccountError::Server(400, "bad".into()),
+        AccountError::Server(200, "unexpected reply".into()),
+        AccountError::Validation(Default::default()),
+    ] {
+        let d = Gate::evaluate(SystemTime::now(), Some(&cached), Err(err));
+        assert!(matches!(d, Decision::Lock(LockReason::Refused, _)), "{d:?}");
+    }
+    for err in [
+        AccountError::RateLimited,
+        AccountError::Server(502, "x".into()),
+    ] {
+        let d = Gate::evaluate(SystemTime::now(), Some(&cached), Err(err));
+        assert!(matches!(d, Decision::AllowStale(..)), "{d:?}");
+    }
+}
+
+#[test]
+fn fresh_locked_then_network_error_stays_locked() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = Cache::new(dir.path());
+    let server = MockServer::start();
+    let mut ok = server.mock(|when, then| {
+        when.method(GET).path("/api/desktop/entitlement");
+        then.status(200).json_body(body(true, "active"));
+    });
+    assert!(matches!(
+        Gate::refresh(&client(&server), &cache, SystemTime::now()),
+        Decision::Allow(_)
+    ));
+    ok.delete();
+    let mut locked = server.mock(|when, then| {
+        when.method(GET).path("/api/desktop/entitlement");
+        then.status(402)
+            .json_body(json!({"message": "paused", "code": "subscription_paused"}));
+    });
+    assert!(matches!(
+        Gate::refresh(&client(&server), &cache, SystemTime::now()),
+        Decision::Lock(LockReason::Paused, _)
+    ));
+    locked.delete();
+    server.mock(|when, then| {
+        when.method(GET).path("/api/desktop/entitlement");
+        then.status(503);
+    });
+    let d = Gate::refresh(&client(&server), &cache, SystemTime::now());
+    assert!(matches!(d, Decision::Lock(LockReason::Offline, _)), "{d:?}");
+}
+
+#[test]
+fn unauthorized_clears_the_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = Cache::new(dir.path());
+    cache.save(&ent(Standing::Active, true, Duration::ZERO));
+    let server = MockServer::start();
+    refuse_mock(&server, 401, json!({"message": "Unauthenticated."}));
+    assert!(matches!(
+        Gate::refresh(&client(&server), &cache, SystemTime::now()),
+        Decision::SignIn
+    ));
+    assert!(cache.load().is_none());
+}
+
+#[test]
+fn a_cache_dated_in_the_future_is_expired() {
+    let mut cached = Entitlement::example(Standing::Active, true);
+    cached.checked_at = SystemTime::now() + Duration::from_secs(3600);
+    let d = Gate::evaluate(
+        SystemTime::now(),
+        Some(&cached),
+        Err(AccountError::Network("x".into())),
+    );
+    assert!(matches!(d, Decision::Lock(LockReason::Offline, _)), "{d:?}");
+    // A little clock skew is tolerated.
+    cached.checked_at = SystemTime::now() + Duration::from_secs(60);
+    let d = Gate::evaluate(
+        SystemTime::now(),
+        Some(&cached),
+        Err(AccountError::Network("x".into())),
+    );
+    assert!(matches!(d, Decision::AllowStale(..)), "{d:?}");
+}
+
+#[test]
+fn a_cache_without_checked_at_is_ancient() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut v = serde_json::to_value(Entitlement::example(Standing::Active, true)).unwrap();
+    v.as_object_mut().unwrap().remove("checked_at");
+    std::fs::write(dir.path().join("entitlement.json"), v.to_string()).unwrap();
+    let cached = Cache::new(dir.path()).load().unwrap();
+    let d = Gate::evaluate(
+        SystemTime::now(),
+        Some(&cached),
+        Err(AccountError::Network("x".into())),
+    );
+    assert!(matches!(d, Decision::Lock(LockReason::Offline, _)), "{d:?}");
+}

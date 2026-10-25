@@ -60,3 +60,37 @@ fn a_file_token_is_found_when_the_keyring_is_enabled_but_empty() {
     both.clear();
     assert_eq!(file_only.load(), None);
 }
+
+#[test]
+fn keyring_probe_does_not_destroy_a_stored_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("https://probe-test-{}.test/api", std::process::id());
+    let store = TokenStore::open_in(&url, dir.path(), true);
+    if !store.keyring_works() {
+        eprintln!("no keychain here, skipping");
+        return;
+    }
+    store.save("keep-me");
+    assert!(store.keyring_works());
+    assert_eq!(store.load().as_deref(), Some("keep-me"));
+    store.clear();
+}
+
+#[cfg(unix)]
+#[test]
+fn config_dir_is_private_and_file_is_never_world_readable() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = tempfile::tempdir().unwrap();
+    let dir = base.path().join("cfg");
+    let store = TokenStore::open_in("https://perm.test/api", &dir, false);
+    store.save("t");
+    assert_eq!(
+        std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    store.save("t2");
+    for e in std::fs::read_dir(&dir).unwrap() {
+        let m = e.unwrap().metadata().unwrap().permissions().mode() & 0o777;
+        assert_eq!(m, 0o600);
+    }
+}
