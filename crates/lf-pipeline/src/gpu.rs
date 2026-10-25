@@ -1,9 +1,10 @@
 //! The headless device every pass runs on.
 //!
 //! A [`Gpu`] is shared (`Arc<Gpu>`) between renderers and, in the app, with the UI's own
-//! wgpu device ([`Gpu::from_device`]). Errors wgpu does not hand to an error scope are
-//! recorded here instead of panicking (wgpu's default), and a lost device sets a flag; the
-//! renderer turns both into [`PipelineError::Gpu`] and [`PipelineError::DeviceLost`].
+//! wgpu device ([`Gpu::from_device`]). Each renderer call runs under its own (per-thread)
+//! error scopes, so it reports only the errors it caused. Errors no scope captures (work
+//! outside any renderer call) are logged and recorded here instead of panicking (wgpu's
+//! default), for [`Gpu::take_error`]; a lost device sets a flag that every call checks.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -44,7 +45,7 @@ pub struct Gpu {
     pub limits: wgpu::Limits,
     pub samplers: Samplers,
     pub(crate) pipelines: Pipelines,
-    /// The last uncaptured error's message, taken by [`Gpu::check`].
+    /// The last uncaptured error's message, taken by [`Gpu::take_error`].
     last_error: Arc<Mutex<Option<String>>>,
     /// Set by the device-lost callback.
     lost: Arc<AtomicBool>,
@@ -119,13 +120,15 @@ impl Gpu {
         {
             let last_error = last_error.clone();
             device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
+                log::error!("uncaptured graphics device error: {e}");
                 let mut slot = last_error.lock().unwrap_or_else(|p| p.into_inner());
                 *slot = Some(e.to_string());
             }));
         }
         {
             let lost = lost.clone();
-            device.set_device_lost_callback(move |_reason, _message| {
+            device.set_device_lost_callback(move |reason, message| {
+                log::error!("graphics device lost ({reason:?}): {message}");
                 lost.store(true, Ordering::SeqCst);
             });
         }
@@ -155,7 +158,9 @@ impl Gpu {
         self.lost.load(Ordering::SeqCst)
     }
 
-    /// The last uncaptured error recorded since the previous call, cleared by this call.
+    /// The last uncaptured error recorded since the previous call, cleared by this call: a
+    /// log tap for errors raised outside any renderer call (renderer calls capture their own
+    /// errors in error scopes and never see these).
     pub fn take_error(&self) -> Option<String> {
         self.last_error
             .lock()
@@ -163,16 +168,14 @@ impl Gpu {
             .take()
     }
 
-    /// [`PipelineError::DeviceLost`] when the device is lost, else [`PipelineError::Gpu`]
-    /// with the last uncaptured error since the previous check (take-and-clear).
+    /// [`PipelineError::DeviceLost`] when the device is lost. Uncaptured errors are not
+    /// reported here (on a shared device they may be another thread's); see
+    /// [`Gpu::take_error`].
     pub fn check(&self) -> Result<(), PipelineError> {
         if self.is_lost() {
             return Err(PipelineError::DeviceLost);
         }
-        match self.take_error() {
-            Some(msg) => Err(PipelineError::Gpu(msg)),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     /// The longest texture edge this device accepts.

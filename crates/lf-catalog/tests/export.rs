@@ -2,6 +2,7 @@ mod support {
     pub mod synthetic_dng;
 }
 
+use std::ops::ControlFlow;
 use std::path::Path;
 
 use image::{ImageReader, Rgb, Rgb32FImage, RgbaImage};
@@ -83,13 +84,19 @@ fn jpeg_of_a_png_has_the_pipelines_output_size() {
         &c,
         &ids,
         &spec(Format::Jpeg { quality: 90 }, out.path()),
-        &mut |d, t| seen.push((d, t)),
+        &mut |d, t| {
+            seen.push((d, t));
+            ControlFlow::Continue(())
+        },
     )
     .unwrap();
     let (w, h) = output_size(120, 80, &Geometry::from(&s));
-    assert_eq!((done[0].width, done[0].height), (w, h));
-    assert_eq!(image::image_dimensions(&done[0].path).unwrap(), (w, h));
-    assert_eq!(done[0].path, out.path().join("a.jpg"));
+    assert_eq!((done.exported[0].width, done.exported[0].height), (w, h));
+    assert_eq!(
+        image::image_dimensions(&done.exported[0].path).unwrap(),
+        (w, h)
+    );
+    assert_eq!(done.exported[0].path, out.path().join("a.jpg"));
     assert_eq!(seen.last(), Some(&(1, 1)));
     let job = export::last_job(&c).unwrap().unwrap();
     assert_eq!((job.status.as_str(), job.done, job.total), ("done", 1, 1));
@@ -104,9 +111,12 @@ fn size_long_edge_resizes() {
     let out = tempfile::tempdir().unwrap();
     let mut sp = spec(Format::Png, out.path());
     sp.size = Size::LongEdge(60);
-    let done = export::run(gpu, &c, &ids, &sp, &mut |_, _| {}).unwrap();
-    assert_eq!(image::image_dimensions(&done[0].path).unwrap(), (60, 40));
-    assert_eq!((done[0].width, done[0].height), (60, 40));
+    let done = export::run(gpu, &c, &ids, &sp, &mut |_, _| ControlFlow::Continue(())).unwrap();
+    assert_eq!(
+        image::image_dimensions(&done.exported[0].path).unwrap(),
+        (60, 40)
+    );
+    assert_eq!((done.exported[0].width, done.exported[0].height), (60, 40));
 }
 
 #[test]
@@ -120,8 +130,8 @@ fn a_jpeg_sources_app1_is_carried_byte_for_byte() {
     let out = tempfile::tempdir().unwrap();
     let mut sp = spec(Format::Jpeg { quality: 85 }, out.path());
     sp.metadata = Metadata::All;
-    let done = export::run(gpu, &c, &ids, &sp, &mut |_, _| {}).unwrap();
-    let bytes = std::fs::read(&done[0].path).unwrap();
+    let done = export::run(gpu, &c, &ids, &sp, &mut |_, _| ControlFlow::Continue(())).unwrap();
+    let bytes = std::fs::read(&done.exported[0].path).unwrap();
     // Straight after the encoder's JFIF header (18 bytes), as the web's `insertExif` does.
     assert_eq!(&bytes[2..4], &[0xff, 0xe0]);
     assert_eq!(&bytes[20..20 + kept.len()], kept.as_slice());
@@ -163,11 +173,14 @@ fn tiff16_keeps_16_bit_precision_and_clamps_only_at_the_encode() {
         &c,
         &ids,
         &spec(Format::Tiff16, out.path()),
-        &mut |_, _| {},
+        &mut |_, _| ControlFlow::Continue(()),
     )
     .unwrap();
-    assert_eq!(done[0].path.extension().unwrap(), "tif");
-    let img = ImageReader::open(&done[0].path).unwrap().decode().unwrap();
+    assert_eq!(done.exported[0].path.extension().unwrap(), "tif");
+    let img = ImageReader::open(&done.exported[0].path)
+        .unwrap()
+        .decode()
+        .unwrap();
     let img = img.into_rgb16();
     assert_eq!(img.dimensions(), (64, 48));
     let off_grid = img.pixels().filter(|p| p.0[0] % 257 != 0).count();
@@ -186,8 +199,11 @@ fn raw_exports_get_a_minimal_exif_from_the_summary() {
         let out = tempfile::tempdir().unwrap();
         let mut sp = spec(Format::Jpeg { quality: 80 }, out.path());
         sp.metadata = meta;
-        let done = export::run(gpu.clone(), &c, &ids, &sp, &mut |_, _| {}).unwrap();
-        let s = read_summary(&std::fs::read(&done[0].path).unwrap());
+        let done = export::run(gpu.clone(), &c, &ids, &sp, &mut |_, _| {
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        let s = read_summary(&std::fs::read(&done.exported[0].path).unwrap());
         match meta {
             Metadata::All => {
                 assert_eq!(s.make.as_deref(), Some("Synthetic"));
@@ -293,8 +309,9 @@ fn rename_applies_to_the_file_and_date_falls_back_to_mtime() {
     let out = tempfile::tempdir().unwrap();
     let mut sp = spec(Format::Png, out.path());
     sp.rename = Pattern("{seq}_{name}_{date}".into());
-    let done = export::run(gpu, &c, &ids, &sp, &mut |_, _| {}).unwrap();
+    let done = export::run(gpu, &c, &ids, &sp, &mut |_, _| ControlFlow::Continue(())).unwrap();
     let names: Vec<String> = done
+        .exported
         .iter()
         .map(|d| d.path.file_name().unwrap().to_string_lossy().into_owned())
         .collect();
@@ -318,9 +335,15 @@ fn overwrite_false_refuses_an_existing_path() {
     let (c, ids) = catalogue(src.path());
     let out = tempfile::tempdir().unwrap();
     let sp = spec(Format::Png, out.path());
-    export::run(gpu.clone(), &c, &ids, &sp, &mut |_, _| {}).unwrap();
+    export::run(gpu.clone(), &c, &ids, &sp, &mut |_, _| {
+        ControlFlow::Continue(())
+    })
+    .unwrap();
     let before = std::fs::read(out.path().join("a.png")).unwrap();
-    let err = export::run(gpu.clone(), &c, &ids, &sp, &mut |_, _| {}).unwrap_err();
+    let err = export::run(gpu.clone(), &c, &ids, &sp, &mut |_, _| {
+        ControlFlow::Continue(())
+    })
+    .unwrap_err();
     match err {
         CatalogError::Exists(p) => assert_eq!(p, out.path().join("a.png")),
         e => panic!("{e}"),
@@ -331,7 +354,7 @@ fn overwrite_false_refuses_an_existing_path() {
     assert!(job.error.unwrap().contains("a.png"));
     let mut again = sp.clone();
     again.overwrite = true;
-    export::run(gpu, &c, &ids, &again, &mut |_, _| {}).unwrap();
+    export::run(gpu, &c, &ids, &again, &mut |_, _| ControlFlow::Continue(())).unwrap();
 }
 
 #[test]
@@ -345,7 +368,10 @@ fn two_photos_on_one_name_fail_before_anything_is_written() {
         let out = tempfile::tempdir().unwrap();
         let mut sp = spec(Format::Png, out.path());
         sp.overwrite = overwrite;
-        let err = export::run(gpu.clone(), &c, &ids, &sp, &mut |_, _| {}).unwrap_err();
+        let err = export::run(gpu.clone(), &c, &ids, &sp, &mut |_, _| {
+            ControlFlow::Continue(())
+        })
+        .unwrap_err();
         match &err {
             CatalogError::NameCollision { path, photos } => {
                 assert_eq!(path, &out.path().join("a.png"));
@@ -362,8 +388,9 @@ fn two_photos_on_one_name_fail_before_anything_is_written() {
     let mut sp = spec(Format::Png, out.path());
     sp.rename = Pattern("{name}-{seq}".into());
     assert_eq!(
-        export::run(gpu, &c, &ids, &sp, &mut |_, _| {})
+        export::run(gpu, &c, &ids, &sp, &mut |_, _| ControlFlow::Continue(()))
             .unwrap()
+            .exported
             .len(),
         2
     );
@@ -383,7 +410,7 @@ fn an_existing_file_anywhere_in_the_batch_stops_the_export_before_it_starts() {
         &c,
         &ids,
         &spec(Format::Png, out.path()),
-        &mut |_, _| {},
+        &mut |_, _| ControlFlow::Continue(()),
     )
     .unwrap_err();
     assert!(matches!(err, CatalogError::Exists(p) if p == out.path().join("b.png")));
@@ -442,4 +469,155 @@ fn very_long_text_is_cut_instead_of_dropping_the_exif() {
     )
     .unwrap();
     assert!(app1.len() < 65_536);
+}
+
+#[test]
+fn one_bad_photo_in_the_middle_does_not_stop_the_rest() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    for n in ["a", "b", "c"] {
+        png(&src.path().join(format!("{n}.png")), 32, 32);
+    }
+    let (c, ids) = catalogue(src.path());
+    std::fs::write(src.path().join("b.png"), b"no longer a png").unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let mut seen = Vec::new();
+    let report = export::run(
+        gpu,
+        &c,
+        &ids,
+        &spec(Format::Png, out.path()),
+        &mut |d, t| {
+            seen.push((d, t));
+            ControlFlow::Continue(())
+        },
+    )
+    .unwrap();
+    assert_eq!(report.exported.len(), 2);
+    assert_eq!(report.failed.len(), 1);
+    assert_eq!(report.failed[0].0, ids[1]);
+    assert!(!report.cancelled);
+    assert!(out.path().join("a.png").exists() && out.path().join("c.png").exists());
+    assert!(!out.path().join("b.png").exists());
+    assert_eq!(seen, [(0, 3), (1, 3), (2, 3), (3, 3)]);
+    let job = export::last_job(&c).unwrap().unwrap();
+    assert_eq!((job.status.as_str(), job.done, job.total), ("failed", 2, 3));
+    assert!(job.error.unwrap().contains("1 of 3"));
+}
+
+#[test]
+fn a_progress_break_cancels_after_the_current_photo() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    for n in ["a", "b", "c"] {
+        png(&src.path().join(format!("{n}.png")), 32, 32);
+    }
+    let (c, ids) = catalogue(src.path());
+    let out = tempfile::tempdir().unwrap();
+    let report = export::run(
+        gpu,
+        &c,
+        &ids,
+        &spec(Format::Png, out.path()),
+        &mut |d, _| {
+            if d >= 1 {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        },
+    )
+    .unwrap();
+    assert!(report.cancelled);
+    assert_eq!(report.exported.len(), 1);
+    assert!(report.failed.is_empty());
+    assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 1);
+    let job = export::last_job(&c).unwrap().unwrap();
+    assert_eq!((job.status.as_str(), job.done), ("cancelled", 1));
+}
+
+#[test]
+fn a_decoder_panic_fails_that_photo_only() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    png(&src.path().join("a.png"), 32, 32);
+    png(&src.path().join("lf-test-panic.png"), 32, 32);
+    let (c, ids) = catalogue(src.path());
+    let out = tempfile::tempdir().unwrap();
+    let report = export::run(
+        gpu,
+        &c,
+        &ids,
+        &spec(Format::Png, out.path()),
+        &mut |_, _| ControlFlow::Continue(()),
+    )
+    .unwrap();
+    assert_eq!(report.exported.len(), 1);
+    assert_eq!(report.failed.len(), 1);
+    assert!(
+        report.failed[0]
+            .1
+            .to_string()
+            .contains("the decoder crashed on this file"),
+        "{}",
+        report.failed[0].1
+    );
+}
+
+#[test]
+fn a_reserved_name_from_the_pattern_itself_is_made_safe() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    png(&src.path().join("a.png"), 32, 32);
+    let (c, ids) = catalogue(src.path());
+    let out = tempfile::tempdir().unwrap();
+    let mut sp = spec(Format::Png, out.path());
+    sp.rename = Pattern("CON".into());
+    let report = export::run(gpu, &c, &ids, &sp, &mut |_, _| ControlFlow::Continue(())).unwrap();
+    assert_eq!(report.exported[0].path, out.path().join("CON_.png"));
+}
+
+#[test]
+fn a_percent_size_beyond_the_device_limit_is_refused_for_that_photo() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    png(&src.path().join("a.png"), 32, 32);
+    let (c, ids) = catalogue(src.path());
+    let out = tempfile::tempdir().unwrap();
+    let mut sp = spec(Format::Png, out.path());
+    let factor = (gpu.max_edge() as f32 / 32.0 + 1.0) * 100.0;
+    sp.size = Size::Percent(factor);
+    let report = export::run(gpu, &c, &ids, &sp, &mut |_, _| ControlFlow::Continue(())).unwrap();
+    assert!(report.exported.is_empty());
+    match &report.failed[0].1 {
+        e @ CatalogError::TooLarge { limit, .. } => {
+            assert!(*limit > 0);
+            assert!(e.to_string().contains("smaller size"), "{e}");
+        }
+        e => panic!("{e}"),
+    }
+    assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn overwrite_replaces_through_a_temp_file_and_leaves_nothing_else() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    png(&src.path().join("a.png"), 32, 32);
+    let (c, ids) = catalogue(src.path());
+    let out = tempfile::tempdir().unwrap();
+    std::fs::write(out.path().join("a.png"), b"old").unwrap();
+    let mut sp = spec(Format::Png, out.path());
+    sp.overwrite = true;
+    let report = export::run(gpu, &c, &ids, &sp, &mut |_, _| ControlFlow::Continue(())).unwrap();
+    assert_eq!(report.exported.len(), 1);
+    assert_eq!(
+        image::image_dimensions(out.path().join("a.png")).unwrap(),
+        (32, 32)
+    );
+    let names: Vec<_> = std::fs::read_dir(out.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["a.png"]);
 }

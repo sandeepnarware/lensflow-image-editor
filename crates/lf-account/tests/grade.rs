@@ -13,7 +13,7 @@ const JPEG_SHEET: &[u8] = &[
 
 fn client(server: &MockServer) -> Client {
     let url = url::Url::parse(&server.url("/api")).unwrap();
-    Client::new(Instance::Custom(url), "1.0.0")
+    Client::new(Instance::custom(url).unwrap(), "1.0.0")
         .with_token("t")
         .with_studio("frames")
 }
@@ -152,4 +152,58 @@ fn guards_reject_bad_input_without_a_request() {
     guard(Mode::Extract, JPEG_REF, b"", 0, false, "sheet");
     guard(Mode::Extract, JPEG_REF, JPEG_SHEET, 17, false, "examples");
     guard(Mode::Review, JPEG_REF, JPEG_SHEET, 0, false, "settings");
+}
+
+#[test]
+fn oversized_examples_or_settings_are_refused_before_sending() {
+    let server = MockServer::start();
+    let m = server.mock(|when, then| {
+        when.method(POST).path("/api/desktop/grade");
+        then.status(200).json_body(json!({"data": {}}));
+    });
+    let big = lf_settings::looks::Look {
+        id: "big",
+        name: "Big",
+        settings: json!({ "notes": "x".repeat(17_000) }),
+    };
+    let err = grade::extract(
+        &client(&server),
+        Mode::Extract,
+        JPEG_REF,
+        JPEG_SHEET,
+        &[&big],
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&err, AccountError::Validation(f) if f.contains_key("examples")),
+        "{err:?}"
+    );
+
+    let mut s = lf_settings::EditSettings::default_settings();
+    s.spots = (0..200)
+        .map(|i| lf_settings::Spot {
+            x: f64::from(i) / 1000.0 + 0.123_456_789,
+            y: 0.987_654_321,
+            sx: 0.111_111_111,
+            sy: 0.222_222_222,
+            r: 0.033_333_333,
+            mode: lf_settings::SpotMode::Heal,
+        })
+        .collect();
+    assert!(s.to_value().to_string().chars().count() > 8192);
+    let err = grade::extract(
+        &client(&server),
+        Mode::Review,
+        JPEG_REF,
+        JPEG_SHEET,
+        &[],
+        Some(&s),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&err, AccountError::Validation(f) if f.contains_key("settings")),
+        "{err:?}"
+    );
+    m.assert_calls(0);
 }

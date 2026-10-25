@@ -14,10 +14,9 @@ pub struct TokenStore {
 
 impl TokenStore {
     pub fn open(instance: &Instance) -> TokenStore {
-        let dir = directories::ProjectDirs::from("in", "lensflow", "lensflow-ImageEditor")
-            .map(|d| d.config_dir().to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
-        Self::open_in(instance.base_url().as_str(), &dir, true)
+        let project = directories::ProjectDirs::from("in", "lensflow", "lensflow-ImageEditor")
+            .map(|d| d.config_dir().to_path_buf());
+        Self::open_in(instance.base_url().as_str(), &config_dir(project), true)
     }
 
     /// For tests and the app's own config dir: `use_keyring = false` keeps everything in the file.
@@ -155,5 +154,32 @@ pub fn handle_unauthorized(store: &TokenStore, err: &AccountError) -> bool {
         true
     } else {
         false
+    }
+}
+
+/// The project config dir, or (when the platform has none, e.g. no home directory) a folder
+/// in the temp dir with a warning; never the current directory.
+fn config_dir(project: Option<PathBuf>) -> PathBuf {
+    project.unwrap_or_else(|| {
+        let dir = std::env::temp_dir().join("lensflow-ImageEditor");
+        log::warn!(
+            "no config folder for this user; the token file (if needed) goes in {}",
+            dir.display()
+        );
+        dir
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_project_dir_falls_back_to_the_temp_dir_not_the_current_dir() {
+        let dir = config_dir(None);
+        assert_eq!(dir, std::env::temp_dir().join("lensflow-ImageEditor"));
+        assert!(dir.is_absolute());
+        let given = PathBuf::from("/x/config");
+        assert_eq!(config_dir(Some(given.clone())), given);
     }
 }

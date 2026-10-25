@@ -59,16 +59,22 @@ pub fn read(path: &Path) -> Result<Option<Sidecar>> {
     let mut versions = Vec::new();
     if let Some(Value::Array(list)) = map.remove("versions") {
         for item in list {
-            let (Some(id), Some(created)) = (
-                item.get("id").and_then(Value::as_str),
-                item.get("created_at")
-                    .and_then(Value::as_str)
-                    .and_then(parse_ts),
-            ) else {
+            if !item.is_object() {
                 continue;
-            };
+            }
+            // A version missing its id or date is kept (a new id, the epoch), never dropped.
+            let id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map_or_else(|| uuid::Uuid::new_v4().to_string(), str::to_string);
+            let created = item
+                .get("created_at")
+                .and_then(Value::as_str)
+                .and_then(parse_ts)
+                .unwrap_or(DateTime::UNIX_EPOCH);
             versions.push(Version {
-                id: id.to_string(),
+                id,
                 label: item
                     .get("label")
                     .and_then(Value::as_str)
@@ -120,7 +126,16 @@ impl Sidecar {
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Atomic: write a temp file in the same directory, flush it, then rename over the target.
+/// An existing file that is not a valid sidecar is never replaced
+/// ([`CatalogError::Corrupt`]): it may hold edits a person wants to recover.
 pub fn write(path: &Path, sidecar: &Sidecar) -> Result<()> {
+    if let Err(CatalogError::Corrupt(why)) = read(path) {
+        return Err(CatalogError::Corrupt(format!(
+            "{} is damaged ({why}); it was left as it is, so this photo's edits are not saved \
+             beside it until it is repaired or removed",
+            path.display()
+        )));
+    }
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

@@ -145,6 +145,7 @@ fastrand v2.5.0                          Apache-2.0 OR MIT
 fax v0.2.7                               MIT
 fdeflate v0.3.7                          MIT OR Apache-2.0
 fearless_simd v0.4.1                     Apache-2.0 OR MIT
+filetime v0.2.29                         MIT/Apache-2.0
 flate2 v1.1.10                           MIT OR Apache-2.0
 foldhash v0.2.0                          Zlib
 font-types v0.12.7                       MIT OR Apache-2.0
@@ -534,8 +535,8 @@ unmodified as a normal Cargo dependency, so you can replace it with your own bui
 option-ext (MPL-2.0, pulled in by directories) is file-level copyleft; it is used
 unmodified as a normal Cargo dependency, so you can replace it with your own build.
 The reqwest HTTP client uses rustls (no OpenSSL); the keyring crate talks to the Windows
-Credential Manager, the macOS Keychain and the Linux Secret Service. httpmock and tempfile
-are development-only and are not shipped.
+Credential Manager, the macOS Keychain and the Linux Secret Service. httpmock, tempfile and
+filetime are development-only and are not shipped.
 SQLite (bundled statically by libsqlite3-sys) is in the public domain.
 epaint_default_fonts bundles unmodified fonts: Hack (MIT), Noto Emoji (SIL Open Font
 Licence 1.1), Ubuntu-Light (Ubuntu Font Licence 1.0) and emoji-icon-font (MIT).

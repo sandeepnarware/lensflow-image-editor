@@ -6,7 +6,7 @@ use serde_json::json;
 
 fn client(server: &MockServer) -> Client {
     let url = url::Url::parse(&server.url("/api")).unwrap();
-    Client::new(Instance::Custom(url), "1.2.3")
+    Client::new(Instance::custom(url).unwrap(), "1.2.3")
 }
 
 fn user_json() -> serde_json::Value {
@@ -139,7 +139,7 @@ fn sign_out_ignores_failures() {
     m.assert();
     // Unreachable server too.
     let dead = Client::new(
-        Instance::Custom(url::Url::parse("http://127.0.0.1:1/api").unwrap()),
+        Instance::custom(url::Url::parse("http://127.0.0.1:1/api").unwrap()).unwrap(),
         "1",
     );
     auth::sign_out(&dead.with_token("t"));
@@ -186,7 +186,7 @@ fn status_codes_map_to_typed_errors() {
 #[test]
 fn unreachable_server_is_a_network_error() {
     let dead = Client::new(
-        Instance::Custom(url::Url::parse("http://127.0.0.1:1/api").unwrap()),
+        Instance::custom(url::Url::parse("http://127.0.0.1:1/api").unwrap()).unwrap(),
         "1",
     );
     assert!(matches!(

@@ -54,8 +54,32 @@ fn device_lost_is_reported_not_panicked() {
     assert!(!r.is_lost());
     r.render(&s).unwrap();
 
-    // A validation error outside any error scope: wgpu's default handler would panic.
+    // A validation error outside any renderer call (another thread's, or the UI's) is not
+    // the renderer's: it is logged and kept for `take_error`, and the render is clean.
     bad_bind_group(&gpu);
+    r.render(&s).unwrap();
+    assert!(gpu.take_error().is_some_and(|m| !m.is_empty()));
+    assert!(gpu.take_error().is_none(), "taken and cleared");
+
+    // The same error under the caller's own error scope is the scope's.
+    let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    bad_bind_group(&gpu);
+    assert!(pollster::block_on(scope.pop()).is_some());
+    r.render(&s).unwrap();
+    assert!(gpu.take_error().is_none());
+}
+
+#[test]
+fn an_error_inside_a_call_is_that_calls_and_resets_the_caches() {
+    let _guard = one_at_a_time();
+    let gpu = Gpu::new().unwrap();
+    let img = photo();
+    let s = normalise(&json!({ "sharpen": 40, "texture": 20 }));
+    let mut r = Renderer::new(gpu.clone(), &img, 48, 32).unwrap();
+    let good = r.render(&s).unwrap();
+    assert!(r.has_cached("sharp") && r.has_cached("texture"));
+
+    r.inject_validation_error();
     match r.render(&s) {
         Err(PipelineError::Gpu(msg)) => assert!(!msg.is_empty()),
         other => panic!(
@@ -63,14 +87,54 @@ fn device_lost_is_reported_not_panicked() {
             other.map(|i| i.dimensions())
         ),
     }
-    // Taken and cleared: the next render is clean.
-    r.render(&s).unwrap();
+    assert!(
+        !r.has_cached("sharp") && !r.has_cached("texture") && !r.has_cached("output"),
+        "caches dropped after a device error"
+    );
+    assert!(
+        gpu.take_error().is_none(),
+        "captured by the call, not uncaptured"
+    );
+    // The next call on the same renderer succeeds with fresh caches.
+    assert!(r.render(&s).unwrap().as_raw() == good.as_raw());
+    for call in 0..3 {
+        r.inject_validation_error();
+        let failed = match call {
+            0 => r.pixels(&s, 20).is_err(),
+            1 => r.histogram(&s).is_err(),
+            _ => r.render_f16(&s).is_err(),
+        };
+        assert!(failed, "call {call} did not report the error");
+        r.pixels(&s, 20).unwrap();
+    }
+}
 
-    // The same error under an error scope is the scope's, not the renderer's.
-    let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
-    bad_bind_group(&gpu);
-    assert!(pollster::block_on(scope.pop()).is_some());
-    r.render(&s).unwrap();
+#[test]
+fn an_error_on_one_thread_does_not_fail_another_threads_render() {
+    let _guard = one_at_a_time();
+    let gpu = Gpu::new().unwrap();
+    let s = normalise(&json!({ "exposure": 0.3 }));
+    let mut a = Renderer::new(gpu.clone(), &photo(), 48, 32).unwrap();
+    let mut b = Renderer::new(gpu.clone(), &photo(), 48, 32).unwrap();
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let (ba, bb) = (barrier.clone(), barrier);
+    let sa = s.clone();
+    let ta = std::thread::spawn(move || {
+        ba.wait();
+        (0..20).all(|_| {
+            a.inject_validation_error();
+            a.render(&sa).is_err()
+        })
+    });
+    let tb = std::thread::spawn(move || {
+        bb.wait();
+        (0..20).all(|_| b.render(&s).is_ok())
+    });
+    assert!(
+        ta.join().unwrap(),
+        "every injected error reached its own call"
+    );
+    assert!(tb.join().unwrap(), "the other thread never saw them");
 }
 
 #[test]

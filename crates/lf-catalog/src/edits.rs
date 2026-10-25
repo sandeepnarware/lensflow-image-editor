@@ -270,19 +270,33 @@ pub fn redo(catalog: &Catalog, photo_id: i64) -> Result<Option<Sidecar>> {
     step(catalog, photo_id, false)
 }
 
-/// Apply the conflict rule between the database and a sidecar found on reopen: a strictly newer
-/// sidecar wins and the database takes its settings and versions; otherwise the database wins and
-/// the sidecar is rewritten (when the photo has edits, or a sidecar exists to correct).
+/// Apply the conflict rule between the database and a sidecar found on reopen (and on import):
+/// a strictly newer sidecar wins and the database takes its settings and versions (a stamp in
+/// the future is adopted as now, and the sidecar rewritten with it); otherwise the database
+/// wins. The sidecar is rewritten only when the database is strictly newer or the content
+/// (`v`, settings, versions) differs; an equal sidecar is left alone. With no sidecar, one is
+/// written when the photo has edits.
 pub fn reconcile(
     catalog: &Catalog,
     photo_id: i64,
     sidecar: Option<&Sidecar>,
 ) -> Result<Reconciled> {
     let tx = catalog.write_tx()?;
-    check_photo(&tx, photo_id)?;
-    let db = load_edits(&tx, photo_id)?;
+    let result = reconcile_in(&tx, photo_id, sidecar)?;
+    tx.commit()?;
+    Ok(result)
+}
+
+/// [`reconcile`] inside the caller's transaction.
+pub(crate) fn reconcile_in(
+    tx: &Transaction,
+    photo_id: i64,
+    sidecar: Option<&Sidecar>,
+) -> Result<Reconciled> {
+    check_photo(tx, photo_id)?;
+    let db = load_edits(tx, photo_id)?;
     if let Some(sc) = sidecar {
-        put_meta(&tx, photo_id, sc)?;
+        put_meta(tx, photo_id, sc)?;
     }
     let result = match (db, sidecar) {
         (None, None) => Reconciled {
@@ -291,10 +305,14 @@ pub fn reconcile(
         },
         (Some(_), None) => Reconciled {
             source: Source::Db,
-            sidecar_to_write: Some(build_sidecar(&tx, photo_id)?),
+            sidecar_to_write: Some(build_sidecar(tx, photo_id)?),
         },
         (db, Some(sc)) if db.as_ref().is_none_or(|(_, t)| sc.updated_at > *t) => {
-            put_edits(&tx, photo_id, &sc.settings, sc.updated_at)?;
+            // A stamp from a clock set ahead would win every later comparison: adopt it as now.
+            let now = now();
+            let clamped = sc.updated_at > now;
+            let at = if clamped { now } else { sc.updated_at };
+            put_edits(tx, photo_id, &sc.settings, at)?;
             tx.execute("DELETE FROM versions WHERE photo_id = ?1", [photo_id])?;
             for v in &sc.versions {
                 // A sidecar copied from another photo may carry ids that photo owns.
@@ -323,17 +341,28 @@ pub fn reconcile(
             // History restarts from the adopted state.
             tx.execute("DELETE FROM history WHERE photo_id = ?1", [photo_id])?;
             tx.execute("DELETE FROM history_cursor WHERE photo_id = ?1", [photo_id])?;
-            push_history(&tx, photo_id, &sc.settings, sc.updated_at)?;
+            push_history(tx, photo_id, &sc.settings, at)?;
             Reconciled {
                 source: Source::Sidecar,
-                sidecar_to_write: None,
+                sidecar_to_write: if clamped {
+                    Some(build_sidecar(tx, photo_id)?)
+                } else {
+                    None
+                },
             }
         }
-        (_, Some(_)) => Reconciled {
-            source: Source::Db,
-            sidecar_to_write: Some(build_sidecar(&tx, photo_id)?),
-        },
+        (Some((_, t)), Some(sc)) => {
+            let built = build_sidecar(tx, photo_id)?;
+            let same = t == sc.updated_at
+                && built.v == sc.v
+                && built.settings == sc.settings
+                && built.versions == sc.versions;
+            Reconciled {
+                source: Source::Db,
+                sidecar_to_write: if same { None } else { Some(built) },
+            }
+        }
+        (None, Some(_)) => unreachable!("a sidecar with no edits in the database is adopted"),
     };
-    tx.commit()?;
     Ok(result)
 }

@@ -23,6 +23,25 @@ pub fn try_shared_gpu() -> Option<Arc<Gpu>> {
     .clone()
 }
 
+/// Makes a bind group whose texture binding is given a sampler: a validation error, captured
+/// by the calling thread's innermost validation scope (or uncaptured when there is none).
+pub fn provoke_validation_error(gpu: &Gpu) {
+    let layout = gpu
+        .device
+        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("deliberately mismatched"),
+            entries: &[crate::passes::texture_entry(0)],
+        });
+    let _ = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("deliberately mismatched"),
+        layout: &layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::Sampler(&gpu.samplers.linear_clamp),
+        }],
+    });
+}
+
 /// The test binary's one device; panics when there is none.
 pub fn shared_gpu() -> Arc<Gpu> {
     try_shared_gpu().expect("no GPU adapter")

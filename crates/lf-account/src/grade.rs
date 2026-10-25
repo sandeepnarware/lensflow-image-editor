@@ -21,6 +21,10 @@ impl Mode {
 
 const MAX_BYTES: usize = 700 * 1024;
 const MAX_EXAMPLES: usize = 16;
+/// The server's limits on the JSON text fields (`GradeRequest`: `max:16384`, `max:8192`,
+/// counted in characters).
+const MAX_EXAMPLES_CHARS: usize = 16_384;
+const MAX_SETTINGS_CHARS: usize = 8_192;
 
 fn invalid<T>(field: &str, message: &str) -> Result<T, AccountError> {
     Err(AccountError::Validation(
@@ -74,13 +78,30 @@ pub fn extract(
         .iter()
         .map(|l| json!({"id": l.id, "name": l.name, "settings": l.settings}))
         .collect();
+    let examples = Value::Array(examples).to_string();
+    if examples.chars().count() > MAX_EXAMPLES_CHARS {
+        return invalid(
+            "examples",
+            "The example looks are too large to send; use fewer of them.",
+        );
+    }
+    let settings = settings.map(|s| s.to_value().to_string());
+    if settings
+        .as_ref()
+        .is_some_and(|s| s.chars().count() > MAX_SETTINGS_CHARS)
+    {
+        return invalid(
+            "settings",
+            "The current edit is too large to send for review (often too many spots); remove some and try again.",
+        );
+    }
     let mut form = Form::new()
         .text("mode", mode.as_str())
         .part("reference", jpeg(reference_jpeg, "reference.jpg"))
         .part("sheet", jpeg(sheet_jpeg, "sheet.jpg"))
-        .text("examples", Value::Array(examples).to_string());
+        .text("examples", examples);
     if let Some(s) = settings {
-        form = form.text("settings", s.to_value().to_string());
+        form = form.text("settings", s);
     }
     let long = client.long();
     let body = long.send(
