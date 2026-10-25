@@ -15,6 +15,12 @@ kamadak-exif.workspace = true
 log.workspace = true
 lf-pipeline = { path = "../lf-pipeline" }
 lf-settings = { path = "../lf-settings" }
+sha2.workspace = true
+hex.workspace = true
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
+crc32fast = "1"
 
 [dev-dependencies]
 serde_json.workspace = true
+tempfile = "3"
+filetime = "0.2"

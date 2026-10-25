@@ -186,6 +186,7 @@ litemap v0.8.3                           Unicode-3.0
 litrs v1.0.1                             MIT OR Apache-2.0
 lock_api v0.4.14                         MIT OR Apache-2.0
 log v0.4.34                              MIT OR Apache-2.0
+lz4_flex v0.11.6                         MIT
 md5 v0.8.1                               Apache-2.0 OR MIT
 memchr v2.8.3                            Unlicense OR MIT
 memmap2 v0.9.12                          MIT OR Apache-2.0
