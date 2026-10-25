@@ -1,0 +1,22 @@
+[package]
+name = "lf-account"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "multipart", "rustls"] }
+url = "2"
+log = "0.4"
+directories = "6"
+sha2.workspace = true
+hex.workspace = true
+keyring = "4"
+
+[dev-dependencies]
+httpmock = "0.8"
+tempfile = "3"

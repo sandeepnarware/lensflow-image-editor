@@ -1,0 +1,258 @@
+use crate::{AccountError, Client, LockReason};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// A cached entitlement is trusted for this long after `checked_at`.
+pub const GRACE: Duration = Duration::from_secs(7 * 86_400);
+const OFFLINE_MESSAGE: &str = "Connect to the internet to keep using lensflow-ImageEditor.";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Standing {
+    Active,
+    ReadOnly,
+    Paused,
+    Suspended,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AiStatus {
+    pub available: bool,
+    pub remaining: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StudioInfo {
+    pub id: u64,
+    pub name: String,
+    #[serde(default)]
+    pub logo_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Release {
+    pub version: String,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub published_at: Option<String>,
+}
+
+mod secs {
+    use super::*;
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(t: &SystemTime, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u64(
+            t.duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        )
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<SystemTime, D::Error> {
+        Ok(UNIX_EPOCH + Duration::from_secs(u64::deserialize(d)?))
+    }
+
+    pub fn now() -> SystemTime {
+        SystemTime::now()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Entitlement {
+    pub enabled: bool,
+    pub standing: Standing,
+    pub ai: AiStatus,
+    pub studio: StudioInfo,
+    #[serde(default)]
+    pub min_version: Option<String>,
+    #[serde(default)]
+    pub latest: Option<Release>,
+    #[serde(with = "secs", default = "secs::now")]
+    pub checked_at: SystemTime,
+}
+
+impl Entitlement {
+    /// A plausible entitlement for tests and previews.
+    #[doc(hidden)]
+    pub fn example(standing: Standing, enabled: bool) -> Entitlement {
+        Entitlement {
+            enabled,
+            standing,
+            ai: AiStatus {
+                available: true,
+                remaining: Some(10),
+            },
+            studio: StudioInfo {
+                id: 1,
+                name: "Studio".into(),
+                logo_url: None,
+            },
+            min_version: None,
+            latest: None,
+            checked_at: SystemTime::now(),
+        }
+    }
+}
+
+/// `GET desktop/entitlement`.
+pub fn check(client: &Client) -> Result<Entitlement, AccountError> {
+    let reply = client.get_json("desktop/entitlement")?;
+    let data = reply.get("data").cloned().unwrap_or(reply);
+    let mut e: Entitlement = serde_json::from_value(data)
+        .map_err(|e| AccountError::Server(200, format!("unexpected reply: {e}")))?;
+    e.checked_at = SystemTime::now();
+    Ok(e)
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct DownloadLink {
+    pub url: String,
+    pub sha256: String,
+    pub version: String,
+    pub size: u64,
+    pub expires_at: String,
+}
+
+/// `GET desktop/download/{platform}`.
+pub fn download_link(client: &Client, platform: &str) -> Result<DownloadLink, AccountError> {
+    let reply = client.get_json(&format!("desktop/download/{platform}"))?;
+    let data: Value = reply.get("data").cloned().unwrap_or(reply);
+    serde_json::from_value(data)
+        .map_err(|e| AccountError::Server(200, format!("unexpected reply: {e}")))
+}
+
+/// The last good entitlement, on disk, for the offline grace.
+pub struct Cache {
+    path: PathBuf,
+}
+
+impl Cache {
+    pub fn new(dir: &Path) -> Cache {
+        Cache {
+            path: dir.join("entitlement.json"),
+        }
+    }
+
+    /// None when missing or unreadable.
+    pub fn load(&self) -> Option<Entitlement> {
+        serde_json::from_slice(&std::fs::read(&self.path).ok()?).ok()
+    }
+
+    pub fn save(&self, e: &Entitlement) {
+        let write = || -> std::io::Result<()> {
+            if let Some(dir) = self.path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            let tmp = self.path.with_extension("json.tmp");
+            std::fs::write(&tmp, serde_json::to_vec(e).map_err(std::io::Error::other)?)?;
+            std::fs::rename(&tmp, &self.path)
+        };
+        if let Err(err) = write() {
+            log::warn!("could not cache the entitlement: {err}");
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Decision {
+    Allow(Entitlement),
+    /// Allowed on a cached entitlement this old.
+    AllowStale(Entitlement, Duration),
+    Lock(LockReason, String),
+    SignIn,
+}
+
+impl Decision {
+    fn active(&self) -> Option<&Entitlement> {
+        match self {
+            Decision::Allow(e) | Decision::AllowStale(e, _) => {
+                Some(e).filter(|e| e.standing == Standing::Active)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn ai_allowed(&self) -> bool {
+        self.active().is_some_and(|e| e.ai.available)
+    }
+
+    pub fn export_allowed(&self) -> bool {
+        self.active().is_some()
+    }
+
+    /// Preset sync; false in `read_only`.
+    pub fn sync_allowed(&self) -> bool {
+        self.active().is_some()
+    }
+}
+
+pub struct Gate;
+
+impl Gate {
+    /// Pure decision from the cached and the fresh result.
+    pub fn evaluate(
+        now: SystemTime,
+        cached: Option<&Entitlement>,
+        fresh: Result<Entitlement, AccountError>,
+    ) -> Decision {
+        match fresh {
+            Ok(e) => match Self::lock_for(&e) {
+                Some((reason, msg)) => Decision::Lock(reason, msg),
+                None => Decision::Allow(e),
+            },
+            Err(AccountError::Unauthorized) => Decision::SignIn,
+            Err(AccountError::Locked(reason, msg)) => Decision::Lock(reason, msg),
+            Err(_) => match cached {
+                Some(c) => {
+                    let age = now.duration_since(c.checked_at).unwrap_or(Duration::ZERO);
+                    if age > GRACE {
+                        return Self::offline();
+                    }
+                    match Self::lock_for(c) {
+                        Some((reason, msg)) => Decision::Lock(reason, msg),
+                        None => Decision::AllowStale(c.clone(), age),
+                    }
+                }
+                None => Self::offline(),
+            },
+        }
+    }
+
+    fn offline() -> Decision {
+        Decision::Lock(LockReason::Offline, OFFLINE_MESSAGE.to_string())
+    }
+
+    fn lock_for(e: &Entitlement) -> Option<(LockReason, String)> {
+        match (e.enabled, e.standing) {
+            (false, _) => Some((
+                LockReason::NotEnabled,
+                "The desktop editor is not enabled for your studio. Ask LensFlow to switch it on."
+                    .into(),
+            )),
+            (_, Standing::Paused) => Some((
+                LockReason::Paused,
+                "lensflow-ImageEditor is paused while your LensFlow subscription is paused. Resume your plan to use it again."
+                    .into(),
+            )),
+            (_, Standing::Suspended) => Some((
+                LockReason::Suspended,
+                "This studio is suspended. Contact the platform owner.".into(),
+            )),
+            _ => None,
+        }
+    }
+
+    /// Checks with the server, updates the cache on success, and decides.
+    pub fn refresh(client: &Client, cache: &Cache, now: SystemTime) -> Decision {
+        let fresh = check(client);
+        if let Ok(e) = &fresh {
+            cache.save(e);
+        }
+        let cached = cache.load();
+        Self::evaluate(now, cached.as_ref(), fresh)
+    }
+}
