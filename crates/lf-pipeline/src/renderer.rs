@@ -1,6 +1,7 @@
 //! The web's `Renderer`: draws a photo with edit settings. Work is cached by what it depends
 //! on, as the web does: the wide blurs once, the detail blurs again only when sharpening or
-//! texture change, the curve texture only when the curves change.
+//! texture or the spots change, the spots only when they change, the curve texture only when
+//! the curves change.
 
 use std::collections::HashMap;
 
@@ -8,7 +9,7 @@ use crate::curve_texture::CurveTexture;
 use crate::error::PipelineError;
 use crate::gpu::Gpu;
 use crate::passes::develop::{self, Frame, Inputs, Uniforms};
-use crate::passes::{copy, gaussian};
+use crate::passes::{copy, gaussian, spots};
 use crate::texture::{Source, Target, read_back};
 use image::RgbaImage;
 use lf_settings::EditSettings;
@@ -18,8 +19,12 @@ use lf_settings::geometry::{Geometry, output_size, output_to_source, turned_size
 /// blur alike).
 pub const SMALL_EDGE: f64 = 384.0;
 
-/// The sigmas the detail blurs were last made with (the web's `detailKey`).
-type DetailKey = (Option<f64>, Option<f64>);
+/// The spots' JSON (the web's `spotsKey`, `JSON.stringify(s.spots)`; empty when none).
+type SpotsKey = String;
+
+/// What the detail blurs were last made from (the web's `detailKey`): the spots' key and the
+/// sigmas, so the blurs are rebuilt from the spotted image when the spots change.
+type DetailKey = (SpotsKey, Option<f64>, Option<f64>);
 
 pub struct Renderer<'g> {
     gpu: &'g Gpu,
@@ -38,6 +43,7 @@ pub struct Renderer<'g> {
     _small: Target,
     _tmp_small: Target,
     targets: HashMap<&'static str, Target>,
+    spots_key: SpotsKey,
     detail_key: Option<DetailKey>,
 }
 
@@ -81,6 +87,7 @@ impl<'g> Renderer<'g> {
             _small: small,
             _tmp_small: tmp_small,
             targets: HashMap::new(),
+            spots_key: String::new(),
             detail_key: None,
         })
     }
@@ -90,18 +97,44 @@ impl<'g> Renderer<'g> {
         output_size(self.full_width, self.full_height, &Geometry::from(s))
     }
 
-    /// The detail blurs (cached) and the curve texture for `s`. Spots are not applied yet:
-    /// the photo is developed from the source.
-    pub fn prepare(&mut self, s: &EditSettings) -> Result<(), PipelineError> {
+    /// The spots, the detail blurs (each cached) and the curve texture for `s`; returns the
+    /// image to develop from: the spotted target when `s` has spots, else the source.
+    pub fn prepare(&mut self, s: &EditSettings) -> Result<&Target, PipelineError> {
+        let spotted = self.prepare_caches(s)?;
+        Ok(self.image(spotted))
+    }
+
+    /// `prepare` without the borrow: true when the photo is developed from the spotted target.
+    fn prepare_caches(&mut self, s: &EditSettings) -> Result<bool, PipelineError> {
+        let (w, h) = (self.width, self.height);
+        let spots_key = if s.spots.is_empty() {
+            String::new()
+        } else {
+            serde_json::to_string(&s.spots).expect("spots serialise")
+        };
+        if !s.spots.is_empty() {
+            self.cached("spots", w, h, true)?;
+            if spots_key != self.spots_key {
+                let target = &self.targets["spots"];
+                spots::run(self.gpu, &self.source, target, &s.spots, w, h);
+                self.spots_key = spots_key.clone();
+                self.detail_key = None;
+            }
+        } else if !self.spots_key.is_empty() {
+            self.spots_key.clear();
+            self.detail_key = None;
+        }
+        let spotted = !s.spots.is_empty();
+
         // Blur radii in full-size pixels, scaled to the working size.
         let sharp_sigma = (s.sharpen_radius * self.scale).max(0.35);
         let texture_sigma = (4.0 * self.scale).max(0.6);
         let key = (
+            spots_key,
             (s.sharpen > 0.0).then_some(sharp_sigma),
             (s.texture != 0.0).then_some(texture_sigma),
         );
-        if self.detail_key != Some(key) {
-            let (w, h) = (self.width, self.height);
+        if self.detail_key.as_ref() != Some(&key) {
             self.cached("tmp", w, h, false)?;
             if s.sharpen > 0.0 {
                 self.cached("sharp", w, h, true)?;
@@ -109,25 +142,35 @@ impl<'g> Renderer<'g> {
             if s.texture != 0.0 {
                 self.cached("texture", w, h, true)?;
             }
+            let image = self.image(spotted);
             let tmp = &self.targets["tmp"];
             if s.sharpen > 0.0 {
                 let to = &self.targets["sharp"];
-                gaussian::blur(self.gpu, &self.source, to, tmp, sharp_sigma as f32);
+                gaussian::blur(self.gpu, image, to, tmp, sharp_sigma as f32);
             }
             if s.texture != 0.0 {
                 let to = &self.targets["texture"];
-                gaussian::blur(self.gpu, &self.source, to, tmp, texture_sigma as f32);
+                gaussian::blur(self.gpu, image, to, tmp, texture_sigma as f32);
             }
             self.detail_key = Some(key);
         }
         self.curve.update(self.gpu, &s.curve);
-        Ok(())
+        Ok(spotted)
+    }
+
+    /// The image to develop from: the spotted target, or the source.
+    fn image(&self, spotted: bool) -> &Target {
+        if spotted {
+            &self.targets["spots"]
+        } else {
+            &self.source
+        }
     }
 
     /// The edited photo as saving renders it (`renderJpeg` up to the JPEG step): the output
     /// size scaled to the working size, the whole output, row 0 = the top of the picture.
     pub fn render(&mut self, s: &EditSettings) -> Result<RgbaImage, PipelineError> {
-        self.prepare(s)?;
+        let spotted = self.prepare_caches(s)?;
         let geometry = Geometry::from(s);
         let (ow, oh) = output_size(self.full_width, self.full_height, &geometry);
         let k = f64::from(self.width) / f64::from(self.full_width);
@@ -151,7 +194,7 @@ impl<'g> Renderer<'g> {
         let texture = self.targets.get("texture");
         let uniforms = Uniforms::new(s, &frame, sharp.is_some(), texture.is_some());
         let inputs = Inputs {
-            image: &self.source,
+            image: self.image(spotted),
             blur_m: &self.blur_m,
             blur_l: &self.blur_l,
             blur_s: sharp.unwrap_or(&self.blur_m),

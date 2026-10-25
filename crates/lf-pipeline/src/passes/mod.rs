@@ -3,6 +3,7 @@
 pub mod copy;
 pub mod develop;
 pub mod gaussian;
+pub mod spots;
 
 use crate::gpu::Gpu;
 use crate::texture::FORMAT;
@@ -16,6 +17,10 @@ const GAUSSIAN: &str = concat!(
     include_str!("../shaders/fullscreen.wgsl"),
     include_str!("../shaders/gaussian.wgsl")
 );
+const SPOTS: &str = concat!(
+    include_str!("../shaders/fullscreen.wgsl"),
+    include_str!("../shaders/spots.wgsl")
+);
 const DEVELOP: &str = concat!(
     include_str!("../shaders/fullscreen.wgsl"),
     include_str!("../shaders/develop.wgsl")
@@ -27,6 +32,7 @@ pub const SHADERS: &[(&str, &str)] = &[
     ("fullscreen.wgsl", FULLSCREEN),
     ("copy.wgsl", COPY),
     ("gaussian.wgsl", GAUSSIAN),
+    ("spots.wgsl", SPOTS),
     ("develop.wgsl", DEVELOP),
 ];
 
@@ -284,6 +290,7 @@ pub(crate) struct Pipelines {
     pub copy: FullscreenPass,
     pub mip: FullscreenPass,
     pub gaussian: FullscreenPass,
+    pub spots: FullscreenPass,
     pub develop: FullscreenPass,
 }
 
@@ -293,6 +300,7 @@ impl Pipelines {
             copy: FullscreenPass::new(device, "copy", COPY, "fs_copy", false),
             mip: FullscreenPass::new(device, "mip", COPY, "fs_mip", false),
             gaussian: FullscreenPass::new(device, "gaussian", GAUSSIAN, "fs_gaussian", true),
+            spots: FullscreenPass::new(device, "spots", SPOTS, "fs_spots", true),
             develop: develop::pipeline(device, DEVELOP),
         }
     }

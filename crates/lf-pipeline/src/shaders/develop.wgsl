@@ -9,6 +9,10 @@
 // GLSL's; but it does not depend on helper lanes past the target's last row or column, which
 // some drivers (WARP) fill with garbage, and it allows the early return for pixels outside
 // the frame. As the brief asks, the 5×5 noise loop and the curve lookups sample level 0.
+//
+// Clarity's midtone weight squares `t = clamp(2*y2 - 1, -1, 1)` as `t * t` where the GLSL
+// writes `pow(t, 2.0)`: `pow` of a negative base is undefined on real GPUs (it is computed
+// as exp2(2*log2(t))); `t * t` is the same value for every finite `t`.
 
 struct Uniforms {
     matrix: mat3x3<f32>,    // uMatrix: output UV → photo UV
@@ -195,7 +199,8 @@ fn develop(photo: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
     if (u.clarity != 0.0) {
         let y2 = max(luma(c), 1.0e-4);
         let ybl = (yb - bp) / (wp - bp);
-        let mid = 1.0 - pow(clamp(2.0 * y2 - 1.0, -1.0, 1.0), 2.0);
+        let t = clamp(2.0 * y2 - 1.0, -1.0, 1.0);
+        let mid = 1.0 - t * t; // GLSL: pow(t, 2.0) (see the header)
         let y3 = max(y2 + u.clarity * 0.8 * (y2 - ybl) * mid, 0.0);
         c *= y3 / y2;
     }
