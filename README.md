@@ -25,7 +25,8 @@ packaging (2d) follow. 2c-i is libraries only: there is no UI yet.
   source with headroom above 1.0).
 - `lf-raw`: opens any supported photo (`open::open`, kind sniffed from magic
   bytes, never the extension): decodes RAW with `rawler`, demosaics (bilinear
-  or AHD; X-Trans is simple), white-balances, converts to linear sRGB, applies
+  or AHD; X-Trans is simple; or a binned `Preview` at half size for thumbnails),
+  white-balances, converts to linear sRGB, applies
   the develop profile and highlight handling, and returns an `Opened` picture.
   `render::renderer_for` turns it into a `Renderer`. It also holds the
   `lf-render` example (see below).
@@ -170,13 +171,23 @@ resolution through the GPU pipeline.
 
 ## Supported files
 
-- RAW (checked against the sample corpus): Canon CR2 and CR3, Nikon NEF,
-  Sony ARW, Fujifilm RAF (X-Trans), Olympus ORF, Panasonic RW2, Pentax PEF
-  and DNG.
-- JPEG, PNG, TIFF and WebP.
+- RAW (checked against the sample corpus): Canon CR2 (full resolution and
+  sRAW) and CR3, Nikon NEF, Sony ARW, Fujifilm RAF (X-Trans), Olympus ORF,
+  Panasonic RW2, Pentax PEF and DNG.
+- JPEG, PNG, TIFF and WebP. TIFFs exported by Lightroom, Photoshop or DPP open
+  as pictures even when they carry the camera's `Make` (Canon, Hasselblad...):
+  a TIFF is treated as RAW only on RAW evidence (a `DNGVersion` tag, the CR2
+  signature, or CFA / LinearRaw sensor data in an IFD or SubIFD).
 - HEIC and AVIF are not supported yet: opening one gives a plain error.
   (Their embedded previews are HEVC too, so they cannot be shown without an
   HEVC decoder.)
+- Known decoder gaps (rawler 0.8), reported as "not supported" rather than
+  damaged: Nikon High Efficiency (HE / HE*) NEF, DNG 1.7 with JPEG XL
+  compression, and some Sony ARW and Phase One IIQ variants.
+- A truncated file is refused as incomplete before decoding (TIFF-based RAW,
+  RAF and CR3 are checked against their headers; a cut RW2 is caught when the
+  decoder fails on it). A decoder panic is reported as a damaged file, never a
+  crash, so release builds must keep `panic = "unwind"`.
 
 ## Headroom rule
 
@@ -184,9 +195,11 @@ A RAW file records light above what an 8-bit picture can hold. Development
 keeps those values as unclamped half floats (above 1.0) all the way to the
 develop pass, so pulling highlights down later brings detail back instead of
 flat white. By default the profile is `camera` (a gentle toe and shoulder
-curve) and highlights are `reconstruct` (over-range colour is pulled toward
-neutral, keeping its brightness); `desktop.develop` in the settings can pick
-`linear` and `clip` (clamp each channel at 1.0). An 8-bit file has no
+curve) and highlights are `reconstruct` (where the sensor clipped, colour is
+pulled toward neutral, keeping its brightness above 1.0; bright colours that did
+not clip are left alone); `desktop.develop` in the settings can pick `linear` and
+`clip` (white-balanced camera values clamped at 1.0 before the colour matrix, so
+clipped areas stay white instead of turning magenta). An 8-bit file has no
 headroom, so it takes the web-identical 8-bit path and its output is the one
 the parity gate covers.
 
@@ -196,13 +209,17 @@ the parity gate covers.
 goes through `Renderer::new` (RGBA8 chain, as the web editor); `Picture::Float`
 (RAW) is uploaded as `Rgba16Float` with mips and goes through
 `Renderer::from_texture`, whose whole chain stays half float. Float
-intermediates can differ from the 8-bit chain by under 1/255 on blur-dependent
-settings; the parity gate, not bit-identity, is the contract.
+intermediates are not bit-identical to the 8-bit chain, and not always inside the
+parity gate: running the 228 fixtures through the float chain (Part 2b, task 1,
+WARP) left most within it, but five sharpen and detail renders fell outside (worst
+mean 1.03/255, p99.9 5/255, max 14/255), because sharpening amplifies the web
+editor's 8-bit blur rounding about four times. That is why 8-bit files keep the
+8-bit chain. RAW renders have no web golden; the gate covers the 8-bit path only.
 
 ## RAW sample corpus
 
-`tests/raw-samples/` pins nine small CC0 files from raw.pixls.us (one per
-format, about 80 MB). Fetch them with `scripts/fetch-raw-samples.sh` (or
+`tests/raw-samples/` pins ten small CC0 files from raw.pixls.us (one per
+format, plus a full-resolution CR2 next to the Canon sRAW one; about 87 MB). Fetch them with `scripts/fetch-raw-samples.sh` (or
 `scripts/fetch-raw-samples.ps1`); they land in the git-ignored
 `tests/raw-samples/files/`. Without them the corpus tests print a skip note
 and pass. See `tests/raw-samples/README.md`.
@@ -216,7 +233,7 @@ cap) so reopening a photo skips the demosaic. The caller picks the directory;
 
 ```bash
 cargo run --release -p lf-raw --example lf-render -- <in> <settings.json> <out.png> \
-  [--develop camera|linear] [--highlights clip|reconstruct] [--quality fast|best]
+  [--develop camera|linear] [--highlights clip|reconstruct] [--quality fast|best|preview]
 ```
 
 `<in>` is any supported file. The develop flags override `desktop.develop` in
