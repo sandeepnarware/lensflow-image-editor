@@ -1,0 +1,144 @@
+{
+  "v": 2,
+  "exposure": 0,
+  "contrast": -12,
+  "highlights": 0,
+  "shadows": 0,
+  "whites": 0,
+  "blacks": 0,
+  "temperature": 0,
+  "tint": 0,
+  "vibrance": 0,
+  "saturation": -12,
+  "hsl": {
+    "red": {
+      "h": 0,
+      "s": 0,
+      "l": 0
+    },
+    "orange": {
+      "h": 0,
+      "s": 0,
+      "l": 0
+    },
+    "yellow": {
+      "h": 0,
+      "s": 0,
+      "l": 0
+    },
+    "green": {
+      "h": 0,
+      "s": 0,
+      "l": 0
+    },
+    "aqua": {
+      "h": 0,
+      "s": 0,
+      "l": 0
+    },
+    "blue": {
+      "h": 0,
+      "s": 0,
+      "l": 0
+    },
+    "purple": {
+      "h": 0,
+      "s": 0,
+      "l": 0
+    },
+    "magenta": {
+      "h": 0,
+      "s": 0,
+      "l": 0
+    }
+  },
+  "curve": {
+    "rgb": [
+      [
+        0,
+        0.08
+      ],
+      [
+        0.25,
+        0.25
+      ],
+      [
+        0.75,
+        0.76
+      ],
+      [
+        1,
+        0.95
+      ]
+    ],
+    "r": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ]
+    ],
+    "g": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ]
+    ],
+    "b": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ]
+    ]
+  },
+  "grading": {
+    "shadows": {
+      "hue": 200,
+      "sat": 12
+    },
+    "midtones": {
+      "hue": 30,
+      "sat": 0
+    },
+    "highlights": {
+      "hue": 45,
+      "sat": 10
+    },
+    "balance": 0
+  },
+  "clarity": 0,
+  "texture": 0,
+  "dehaze": 0,
+  "sharpen": 0,
+  "sharpenRadius": 1,
+  "noise": 0,
+  "colorNoise": 0,
+  "vignette": 0,
+  "vignetteMidpoint": 50,
+  "grain": 18,
+  "grainSize": 25,
+  "bw": false,
+  "rotate": 0,
+  "flipH": false,
+  "flipV": false,
+  "angle": 0,
+  "crop": {
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1
+  },
+  "aspect": "original",
+  "spots": []
+}

@@ -1,0 +1,15 @@
+LensFlow Image Editor
+Copyright 2026 LensFlow / Sandeep Kumar Narware
+
+Licensed under the Apache License, Version 2.0.
+
+Test fixtures
+-------------
+tests/fixtures/ holds golden renders produced by the LensFlow web editor
+(its WebGL develop pipeline, rendered headless with SwiftShader) from
+procedurally generated source images. They are copied verbatim and are the
+parity target for this editor.
+
+Bundled components
+------------------
+(None yet. Third-party components bundled with releases are listed here.)

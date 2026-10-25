@@ -1,0 +1,17 @@
+[workspace]
+resolver = "3"
+members = ["crates/lf-settings", "crates/lf-pipeline", "crates/lf-fixtures"]
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/sandeepnarware/lensflow-image-editor"
+
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+anyhow = "1.0.104"
+thiserror = "2.0.21"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+sha2 = "0.11.1"
+hex = "0.4.3"
