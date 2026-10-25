@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/lf-settings", "crates/lf-pipeline", "crates/lf-fixtures", "crates/lf-raw"]
+members = ["crates/lf-settings", "crates/lf-pipeline", "crates/lf-fixtures", "crates/lf-raw", "crates/lf-grade"]
 
 [workspace.package]
 edition = "2024"
