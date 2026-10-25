@@ -11,6 +11,12 @@ path = "src/main.rs"
 
 [dependencies]
 lf-pipeline = { path = "../lf-pipeline" }
+lf-account = { path = "../lf-account" }
+# Downloads the installer from its signed link (not through the account client, so the
+# bearer token never goes to the storage host). Same version and features as lf-account.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+sha2.workspace = true
+hex.workspace = true
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "accesskit", "persistence", "x11", "wayland"] }
 directories = "6"
 semver = "1"
@@ -23,3 +29,4 @@ image.workspace = true
 [dev-dependencies]
 egui_kittest = "0.37"
 tempfile = "3"
+httpmock = "0.8"

@@ -1,7 +1,11 @@
 //! Background work: one serial worker thread per [`Lane`], answering through one channel
 //! of [`Msg`] values that the UI drains every frame.
 
+use crate::update::DownloadProgress;
 use eframe::egui;
+use lf_account::AccountError;
+use lf_account::auth::{SignedIn, User};
+use lf_account::entitlement::Decision;
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -29,10 +33,20 @@ impl Lane {
 }
 
 /// What a job sends back to the UI. Later screens add their own variants.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum Msg {
     /// The job named `name` panicked; `message` is the panic's text.
     JobFailed { name: String, message: String },
+    /// `auth/login` answered (`TwoFactorRequired` means ask for the code).
+    SignedIn(Result<SignedIn, AccountError>),
+    /// `auth/me` answered (at launch, with the stored token).
+    Me(Result<User, AccountError>),
+    /// The entitlement gate decided.
+    Gate(Decision),
+    /// `auth/logout` was sent (its answer does not matter).
+    SignedOut,
+    /// The installer download moved on or finished.
+    Download(DownloadProgress),
     #[cfg(test)]
     Probe(&'static str),
 }
@@ -51,6 +65,23 @@ pub struct Jobs {
     open: Sender<Job>,
     io: Sender<Job>,
     results: Receiver<Msg>,
+    reporter: Reporter,
+}
+
+/// Lets a running job send messages before it finishes (progress).
+#[derive(Clone)]
+pub struct Reporter {
+    results: Sender<Msg>,
+    ctx: egui::Context,
+}
+
+impl Reporter {
+    /// Sends `msg` to the UI and wakes it; dropped silently once the app has gone.
+    pub fn send(&self, msg: Msg) {
+        if self.results.send(msg).is_ok() {
+            self.ctx.request_repaint();
+        }
+    }
 }
 
 impl Jobs {
@@ -63,6 +94,10 @@ impl Jobs {
             open: start(Lane::Open),
             io: start(Lane::Io),
             results,
+            reporter: Reporter {
+                results: results_tx.clone(),
+                ctx: ctx.clone(),
+            },
         }
     }
 
@@ -83,6 +118,11 @@ impl Jobs {
                 lane.thread_name()
             );
         }
+    }
+
+    /// A handle a job can capture to report progress while it runs.
+    pub fn reporter(&self) -> Reporter {
+        self.reporter.clone()
     }
 
     /// Every message sent since the last call, without waiting.
@@ -127,11 +167,19 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
-    fn drain_until(jobs: &Jobs, count: usize) -> Vec<Msg> {
+    fn label(msg: &Msg) -> String {
+        match msg {
+            Msg::Probe(text) => (*text).to_owned(),
+            Msg::JobFailed { name, message } => format!("{name} failed: {message}"),
+            other => format!("{other:?}"),
+        }
+    }
+
+    fn drain_until(jobs: &Jobs, count: usize) -> Vec<String> {
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut got = Vec::new();
         while got.len() < count && Instant::now() < deadline {
-            got.extend(jobs.drain());
+            got.extend(jobs.drain().iter().map(label));
             std::thread::sleep(Duration::from_millis(5));
         }
         got
@@ -149,18 +197,17 @@ mod tests {
         jobs.spawn(Lane::Io, "third", || Msg::Probe("third"));
 
         let got = drain_until(&jobs, 3);
-        assert_eq!(
-            got,
-            vec![
-                Msg::JobFailed {
-                    name: "first".into(),
-                    message: "disk on fire".into()
-                },
-                Msg::Probe("second"),
-                Msg::Probe("third"),
-            ]
-        );
+        assert_eq!(got, ["first failed: disk on fire", "second", "third"]);
         assert!(jobs.drain().is_empty());
+
+        jobs.spawn(Lane::Io, "progress", {
+            let reporter = jobs.reporter();
+            move || {
+                reporter.send(Msg::Probe("halfway"));
+                Msg::Probe("done")
+            }
+        });
+        assert_eq!(drain_until(&jobs, 2), ["halfway", "done"]);
     }
 
     #[test]
@@ -173,14 +220,7 @@ mod tests {
             });
         }
         let mut got = drain_until(&jobs, 3);
-        got.sort_by_key(|m| format!("{m:?}"));
-        assert_eq!(
-            got,
-            vec![
-                Msg::Probe("lf-account"),
-                Msg::Probe("lf-io"),
-                Msg::Probe("lf-open")
-            ]
-        );
+        got.sort();
+        assert_eq!(got, ["lf-account", "lf-io", "lf-open"]);
     }
 }
