@@ -72,6 +72,8 @@ pub fn mip_level_count(width: u32, height: u32) -> u32 {
 }
 
 impl Target {
+    /// A `width`×`height` target (with a full mip chain when `mips`). A zero side is
+    /// [`PipelineError::EmptyImage`]; a side over the device's limit is `TooLarge`.
     pub fn new(gpu: &Gpu, width: u32, height: u32, mips: bool) -> Result<Target, PipelineError> {
         Source::upload_size_check(gpu, width, height)?;
         let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
@@ -127,8 +129,11 @@ impl Target {
 pub struct Source;
 
 impl Source {
-    /// Refuses sizes the device cannot hold, without allocating anything.
+    /// Refuses empty images and sizes the device cannot hold, without allocating anything.
     pub fn upload_size_check(gpu: &Gpu, width: u32, height: u32) -> Result<(), PipelineError> {
+        if width == 0 || height == 0 {
+            return Err(PipelineError::EmptyImage);
+        }
         let limit = gpu.max_edge();
         if width > limit || height > limit {
             return Err(PipelineError::TooLarge {

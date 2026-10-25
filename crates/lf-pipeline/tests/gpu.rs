@@ -38,6 +38,26 @@ fn a_photo_over_the_texture_limit_is_refused() {
 }
 
 #[test]
+fn an_empty_image_is_refused() {
+    let gpu = Gpu::new().unwrap();
+    let err = Target::new(&gpu, 0, 5, false).err().unwrap();
+    assert!(matches!(err, PipelineError::EmptyImage));
+    assert_eq!(err.to_string(), "The photo has no pixels.");
+    assert!(matches!(
+        Source::upload_size_check(&gpu, 10, 0),
+        Err(PipelineError::EmptyImage)
+    ));
+
+    let empty = RgbaImage::new(0, 10);
+    let r = lf_pipeline::Renderer::new(&gpu, &empty, 0, 10);
+    assert!(matches!(r.err(), Some(PipelineError::EmptyImage)));
+    // A real image with a zero full size would give an infinite scale.
+    let one = RgbaImage::new(4, 4);
+    let r = lf_pipeline::Renderer::new(&gpu, &one, 0, 4);
+    assert!(matches!(r.err(), Some(PipelineError::EmptyImage)));
+}
+
+#[test]
 fn copy_round_trips_a_picture() {
     let gpu = Gpu::new().unwrap();
     let img = checker(37, 23);

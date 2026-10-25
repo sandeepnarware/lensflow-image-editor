@@ -88,7 +88,8 @@ pub struct Renderer<'g> {
 
 impl<'g> Renderer<'g> {
     /// Uploads `image` (the working copy of a `full_width`×`full_height` photo) with mips and
-    /// makes the wide blurs from a small copy, as the web's constructor.
+    /// makes the wide blurs from a small copy, as the web's constructor. A zero width or height
+    /// (of the image or of the full size) is [`PipelineError::EmptyImage`].
     pub fn new(
         gpu: &'g Gpu,
         image: &RgbaImage,
@@ -96,6 +97,9 @@ impl<'g> Renderer<'g> {
         full_height: u32,
     ) -> Result<Renderer<'g>, PipelineError> {
         let (width, height) = image.dimensions();
+        if width == 0 || height == 0 || full_width == 0 || full_height == 0 {
+            return Err(PipelineError::EmptyImage);
+        }
         let source = Source::upload(gpu, image, true)?;
         let curve = CurveTexture::new(gpu)?;
 
