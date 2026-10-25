@@ -21,6 +21,14 @@ pub enum CatalogError {
     Export(String),
     #[error("already exists: {}", .0.display())]
     Exists(std::path::PathBuf),
+    #[error(
+        "photos {} and {} would both be exported to {}; add {{seq}} to the file name pattern",
+        .photos.0, .photos.1, .path.display()
+    )]
+    NameCollision {
+        path: std::path::PathBuf,
+        photos: (i64, i64),
+    },
 }
 
 pub type Result<T> = std::result::Result<T, CatalogError>;
