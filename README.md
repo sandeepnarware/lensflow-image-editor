@@ -7,9 +7,10 @@ web editor produces.
 
 ## Status
 
-This is Part 2a, core pipeline parity: the settings model and a headless GPU
-renderer that reproduces the web editor's output. RAW decoding, the
-catalogue, account sign-in and the app UI come in later parts.
+Part 2a (core pipeline parity: the settings model and a headless GPU renderer
+that reproduces the web editor's output) and Part 2b (RAW decoding and
+development, so `lf-render` opens camera files) are built. The app UI comes in
+a later part.
 
 ## Crates
 
@@ -19,12 +20,72 @@ catalogue, account sign-in and the app UI come in later parts.
 - `lf-pipeline`: the headless wgpu renderer (`Gpu`, textures with mip chains,
   and the copy, gaussian, spots and develop passes) behind `Renderer`, which
   renders, draws a preview, and returns pixels and a histogram. It also holds
-  the `lf-render` example:
-  `cargo run -p lf-pipeline --example lf-render -- <in.png> <settings.json> <out.png>`
-  renders one PNG with normalised settings and prints the output size and the
-  adapter used.
+  `Renderer::new` (8-bit source) and `Renderer::from_texture` (half-float
+  source with headroom above 1.0).
+- `lf-raw`: opens any supported photo (`open::open`, kind sniffed from magic
+  bytes, never the extension): decodes RAW with `rawler`, demosaics (bilinear
+  or AHD; X-Trans is simple), white-balances, converts to linear sRGB, applies
+  the develop profile and highlight handling, and returns an `Opened` picture.
+  `render::renderer_for` turns it into a `Renderer`. It also holds the
+  `lf-render` example (see below).
 - `lf-fixtures`: loads the golden fixtures in `tests/fixtures` and compares
   renders against them (mean, 99.9th percentile and maximum error).
+
+## Supported files
+
+- RAW (checked against the sample corpus): Canon CR2 and CR3, Nikon NEF,
+  Sony ARW, Fujifilm RAF (X-Trans), Olympus ORF, Panasonic RW2, Pentax PEF
+  and DNG.
+- JPEG, PNG, TIFF and WebP.
+- HEIC and AVIF are not supported yet: opening one gives a plain error.
+  (Their embedded previews are HEVC too, so they cannot be shown without an
+  HEVC decoder.)
+
+## Headroom rule
+
+A RAW file records light above what an 8-bit picture can hold. Development
+keeps those values as unclamped half floats (above 1.0) all the way to the
+develop pass, so pulling highlights down later brings detail back instead of
+flat white. By default the profile is `camera` (a gentle toe and shoulder
+curve) and highlights are `reconstruct` (over-range colour is pulled toward
+neutral, keeping its brightness); `desktop.develop` in the settings can pick
+`linear` and `clip` (clamp each channel at 1.0). An 8-bit file has no
+headroom, so it takes the web-identical 8-bit path and its output is the one
+the parity gate covers.
+
+## 8-bit and float paths
+
+`render::renderer_for` picks the path from the picture: `Picture::EightBit`
+goes through `Renderer::new` (RGBA8 chain, as the web editor); `Picture::Float`
+(RAW) is uploaded as `Rgba16Float` with mips and goes through
+`Renderer::from_texture`, whose whole chain stays half float. Float
+intermediates can differ from the 8-bit chain by under 1/255 on blur-dependent
+settings; the parity gate, not bit-identity, is the contract.
+
+## RAW sample corpus
+
+`tests/raw-samples/` pins nine small CC0 files from raw.pixls.us (one per
+format, about 80 MB). Fetch them with `scripts/fetch-raw-samples.sh` (or
+`scripts/fetch-raw-samples.ps1`); they land in the git-ignored
+`tests/raw-samples/files/`. Without them the corpus tests print a skip note
+and pass. See `tests/raw-samples/README.md`.
+
+`lf_raw::cache::FrameCache` keeps developed RAW frames on disk (one `.lff` file
+per file, quality and develop-settings key, LZ4-compressed, trimmed to a byte
+cap) so reopening a photo skips the demosaic. The caller picks the directory;
+`lf-render` does not use it.
+
+## lf-render
+
+```bash
+cargo run --release -p lf-raw --example lf-render -- <in> <settings.json> <out.png> \
+  [--develop camera|linear] [--highlights clip|reconstruct] [--quality fast|best]
+```
+
+`<in>` is any supported file. The develop flags override `desktop.develop` in
+the settings file. It prints the kind, the output size (and the original size
+when a very large file was reduced) and the adapter used; any error prints a
+plain message and exits 1.
 
 ## Build and test
 
