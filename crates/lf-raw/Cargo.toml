@@ -10,7 +10,8 @@ rawler = "0.8"
 rayon.workspace = true
 thiserror.workspace = true
 half.workspace = true
-image.workspace = true
+image = { workspace = true, features = ["jpeg", "tiff", "webp"] }
+kamadak-exif.workspace = true
 log.workspace = true
 lf-pipeline = { path = "../lf-pipeline" }
 lf-settings = { path = "../lf-settings" }
