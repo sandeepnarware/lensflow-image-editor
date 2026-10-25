@@ -22,7 +22,11 @@ packaging (2d) follow. 2c-i is libraries only: there is no UI yet.
   and the copy, gaussian, spots and develop passes) behind `Renderer`, which
   renders, draws a preview, and returns pixels and a histogram. It also holds
   `Renderer::new` (8-bit source) and `Renderer::from_texture` (half-float
-  source with headroom above 1.0).
+  source with headroom above 1.0). Each renderer call runs under its own
+  (per-thread) wgpu error scopes, so on a device shared with the UI or other
+  threads it reports only the errors it caused (`PipelineError::Gpu`,
+  `OutOfMemory`) and then drops its caches; errors raised outside any call are
+  logged and kept for `Gpu::take_error`.
 - `lf-raw`: opens any supported photo (`open::open`, kind sniffed from magic
   bytes, never the extension): decodes RAW with `rawler`, demosaics (bilinear
   or AHD; X-Trans is simple; or a binned `Preview` at half size for thumbnails),

@@ -20,6 +20,11 @@ impl CurveTexture {
         Ok(CurveTexture { target, key: None })
     }
 
+    /// Forget what was uploaded, so the next [`CurveTexture::update`] uploads again.
+    pub fn invalidate(&mut self) {
+        self.key = None;
+    }
+
     /// Uploads `curves` when they differ from the last upload. Returns whether it uploaded.
     pub fn update(&mut self, gpu: &Gpu, curves: &Curves) -> bool {
         if self.key.as_ref() == Some(curves) {
