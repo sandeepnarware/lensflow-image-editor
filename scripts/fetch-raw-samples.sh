@@ -8,7 +8,7 @@ manifest="$root/tests/raw-samples/manifest.json"
 dir="$root/tests/raw-samples/files"
 mkdir -p "$dir"
 sha() { if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
-field() { grep "\"$1\"" | sed 's/.*: *"\{0,1\}\([^",]*\)"\{0,1\},\{0,1\}$/\1/'; }
+field() { grep "\"$1\"" | sed 's/^[^:]*: *//; s/,$//; s/^"//; s/"$//'; }
 names=(); urls=(); hashes=()
 while IFS= read -r l; do names+=("$l"); done < <(field name < "$manifest")
 while IFS= read -r l; do urls+=("$l"); done < <(field url < "$manifest")
