@@ -15,4 +15,6 @@ pub enum RawError {
     Corrupt { path: PathBuf, reason: String },
     #[error("{}: is not a RAW photo", path.display())]
     NotAnImage { path: PathBuf },
+    #[error("the photo has no pixels inside its crop")]
+    Empty,
 }

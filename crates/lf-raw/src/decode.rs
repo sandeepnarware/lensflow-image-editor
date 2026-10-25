@@ -72,12 +72,27 @@ pub fn decode_raw(path: &Path) -> Result<RawFrame, RawError> {
     let g = wb[1];
     wb = [wb[0] / g, 1.0, wb[2] / g, wb[3] / g];
 
-    let xyz_to_cam = raw
+    // Prefer D65; otherwise the daylight-like matrices (adapting from them is the
+    // smallest step), then anything (the order of the others is deterministic).
+    let preference = |ill: &Illuminant| match ill {
+        Illuminant::D65 => 0,
+        Illuminant::D55 => 1,
+        Illuminant::D50 => 2,
+        Illuminant::D75 => 3,
+        _ => 4,
+    };
+    let (xyz_to_cam, matrix_white) = raw
         .color_matrix
-        .get(&Illuminant::D65)
-        .or_else(|| raw.color_matrix.values().next())
-        .filter(|m| m.len() >= 9)
-        .map(|m| [[m[0], m[1], m[2]], [m[3], m[4], m[5]], [m[6], m[7], m[8]]]);
+        .iter()
+        .filter(|(_, m)| m.len() >= 9)
+        .min_by_key(|(ill, _)| (preference(ill), **ill))
+        .map(|(ill, m)| {
+            (
+                Some([[m[0], m[1], m[2]], [m[3], m[4], m[5]], [m[6], m[7], m[8]]]),
+                crate::color::white_of_exif_illuminant(*ill as u16),
+            )
+        })
+        .unwrap_or((None, crate::color::D65_WHITE));
 
     let r = raw.crop_area.or(raw.active_area);
     let crop = match r {
@@ -115,6 +130,7 @@ pub fn decode_raw(path: &Path) -> Result<RawFrame, RawError> {
         white,
         wb,
         xyz_to_cam,
+        matrix_white,
         crop,
         orientation,
         make: raw.clean_make.clone(),

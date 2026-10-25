@@ -1,7 +1,11 @@
-//! Decoding of camera RAW files into sensor data (via rawler).
+//! Decoding of camera RAW files into sensor data (via rawler), and developing it
+//! into a picture ([`develop`]).
 
+pub mod color;
+pub mod curve;
 pub mod decode;
 pub mod demosaic;
+pub mod develop;
 mod error;
 
 pub use error::RawError;
@@ -64,7 +68,12 @@ pub struct RawFrame {
     /// As-shot white-balance multipliers per colour, [R, G, B, G2] (not per CFA
     /// position), green normalised to 1; G2 mirrors G when the file has none.
     pub wb: [f32; 4],
+    /// The DNG `ColorMatrix` (XYZ to camera, a row per camera channel): the D65
+    /// entry when the file has one.
     pub xyz_to_cam: Option<[[f32; 3]; 3]>,
+    /// XYZ white point (Y = 1) of the illuminant `xyz_to_cam` was calibrated for
+    /// ([`color::D65_WHITE`] when it is D65 or unknown); develop adapts it to D65.
+    pub matrix_white: [f32; 3],
     pub crop: Rect,
     pub orientation: Orientation,
     pub make: String,
