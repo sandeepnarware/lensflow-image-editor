@@ -12,7 +12,8 @@
 //!    5-tap filter `[-1/4, 1/2, 1/2, 1/2, -1/4]` over the mosaic row (the mean of the
 //!    two green neighbours plus a Laplacian correction from the site's own colour),
 //!    limited to the range of those two greens so it cannot overshoot; vertical
-//!    likewise down the column.
+//!    likewise down the column. The range limit is not in the paper: it is a
+//!    generic overshoot limiter added here, not taken from any implementation.
 //! 2. **Red and blue from colour differences.** For each direction, a missing red
 //!    (blue) value is that direction's green plus the mean of `R - G` (`B - G`)
 //!    over the neighbouring red (blue) sites in the 3x3 window, using the same
