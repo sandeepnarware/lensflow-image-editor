@@ -132,6 +132,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        self.jobs.shutdown(std::time::Duration::from_secs(10));
         if let Err(e) = self.prefs.save(&self.dirs.config) {
             log::error!("could not save preferences: {e}");
         }
