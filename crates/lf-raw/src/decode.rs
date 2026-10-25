@@ -14,7 +14,7 @@ pub fn decode_raw(path: &Path) -> Result<RawFrame, RawError> {
     };
     std::fs::File::open(path).map_err(io)?;
 
-    let raw = rawler::decode_file(path).map_err(|e| match e {
+    let mut raw = rawler::decode_file(path).map_err(|e| match e {
         RawlerError::DecoderFailed(reason) => RawError::Corrupt {
             path: path.to_path_buf(),
             reason,
@@ -37,8 +37,8 @@ pub fn decode_raw(path: &Path) -> Result<RawFrame, RawError> {
         reason: reason.to_string(),
     };
 
-    let data = match &raw.data {
-        RawImageData::Integer(v) => v.clone(),
+    let data = match std::mem::replace(&mut raw.data, RawImageData::Integer(Vec::new())) {
+        RawImageData::Integer(v) => v,
         RawImageData::Float(_) => return Err(unsupported("floating-point sensor data")),
     };
     let (width, height) = (raw.width as u32, raw.height as u32);
