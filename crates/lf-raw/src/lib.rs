@@ -7,6 +7,8 @@ pub mod decode;
 pub mod demosaic;
 pub mod develop;
 mod error;
+pub mod exif;
+pub mod open;
 
 pub use error::RawError;
 

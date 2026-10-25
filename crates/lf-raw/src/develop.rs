@@ -129,6 +129,67 @@ pub fn develop_rgb8(img: &RgbaImage, orientation: Orientation) -> Developed {
     }
 }
 
+/// The 8-bit picture turned or flipped upright for EXIF orientation `o` (same index
+/// maths as [`develop_rgb8`]); a copy of `img` when `o` is 1.
+pub fn orient_rgba8(img: &RgbaImage, o: Orientation) -> RgbaImage {
+    if o.exif() == 1 {
+        return img.clone();
+    }
+    let (w, h) = img.dimensions();
+    let (ow, oh) = oriented_size(o, w, h);
+    let src = img.as_raw();
+    let mut out = vec![0u8; ow as usize * oh as usize * 4];
+    if ow > 0 {
+        out.par_chunks_mut(ow as usize * 4)
+            .enumerate()
+            .for_each(|(oy, row)| {
+                for (ox, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                    let (sx, sy) = source_of(o, w as usize, h as usize, ox, oy);
+                    let i = (sy * w as usize + sx) * 4;
+                    px.copy_from_slice(&src[i..i + 4]);
+                }
+            });
+    }
+    RgbaImage::from_raw(ow, oh, out).unwrap_or_else(|| RgbaImage::new(0, 0))
+}
+
+/// Integer box downscale of an 8-bit picture by `ceil(long_edge / max_edge)` (rounded
+/// averages; partial edge blocks average the pixels they have). None when it already
+/// fits.
+pub fn box_downscale_rgba8(img: &RgbaImage, max_edge: u32) -> Option<RgbaImage> {
+    let (w, h) = img.dimensions();
+    let factor = w.max(h).div_ceil(max_edge.max(1));
+    if factor <= 1 {
+        return None;
+    }
+    let (nw, nh) = (w.div_ceil(factor), h.div_ceil(factor));
+    let src = img.as_raw();
+    let (wu, hu, f) = (w as usize, h as usize, factor as usize);
+    let mut out = vec![0u8; nw as usize * nh as usize * 4];
+    out.par_chunks_mut(nw as usize * 4)
+        .enumerate()
+        .for_each(|(oy, row)| {
+            let (y0, y1) = (oy * f, ((oy + 1) * f).min(hu));
+            for (ox, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let (x0, x1) = (ox * f, ((ox + 1) * f).min(wu));
+                let mut sum = [0u32; 4];
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        let i = (y * wu + x) * 4;
+                        for c in 0..4 {
+                            sum[c] += src[i + c] as u32;
+                        }
+                    }
+                }
+                let n = ((y1 - y0) * (x1 - x0)) as u32;
+                for c in 0..4 {
+                    px[c] = ((sum[c] + n / 2) / n) as u8;
+                }
+            }
+        });
+    RgbaImage::from_raw(nw, nh, out)
+}
+
 /// Pull an over-range colour toward neutral, keeping its luminance.
 #[inline]
 fn reconstruct(c: &mut [f32; 3]) {
