@@ -26,6 +26,14 @@ type SpotsKey = String;
 /// sigmas, so the blurs are rebuilt from the spotted image when the spots change.
 type DetailKey = (SpotsKey, Option<f64>, Option<f64>);
 
+/// What a develop pass draws: the photo as it was, or developed (from the spotted image when
+/// `spotted`).
+#[derive(Clone, Copy)]
+enum Mode {
+    Before,
+    Develop { spotted: bool },
+}
+
 /// The part of the output a draw shows, as fractions of the output (zoom and pan).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct View {
@@ -220,32 +228,9 @@ impl<'g> Renderer<'g> {
         let w = ((f64::from(ow) * k).round() as u32).max(1);
         let h = ((f64::from(oh) * k).round() as u32).max(1);
         self.cached("output", w, h, false)?;
-
-        let matrix = output_to_source(self.full_width, self.full_height, &geometry, &s.crop);
-        let (tw, th) = turned_size(self.full_width, self.full_height, s.rotate);
-        let frame = Frame {
-            matrix,
-            out: [s.crop.w * f64::from(tw), s.crop.h * f64::from(th)],
-            view: [0.0, 0.0, 1.0, 1.0],
-            develop: true,
-            flip: false,
-            img_size: [self.width, self.height],
-            scale: self.scale,
-            target: [w, h],
-        };
-        let sharp = self.targets.get("sharp");
-        let texture = self.targets.get("texture");
-        let uniforms = Uniforms::new(s, &frame, sharp.is_some(), texture.is_some());
-        let inputs = Inputs {
-            image: self.image(spotted),
-            blur_m: &self.blur_m,
-            blur_l: &self.blur_l,
-            blur_s: sharp.unwrap_or(&self.blur_m),
-            blur_t: texture.unwrap_or(&self.blur_m),
-            curve: &self.curve.target,
-        };
         let out = &self.targets["output"];
-        develop::run(self.gpu, &inputs, &uniforms, out);
+        let mode = Mode::Develop { spotted };
+        self.develop_into(s, &geometry, &s.crop, &View::default(), mode, out);
         read_back(self.gpu, out)
     }
 
@@ -275,38 +260,14 @@ impl<'g> Renderer<'g> {
         } else {
             (Geometry::from(s), opts.crop.unwrap_or(s.crop))
         };
-        let spotted = if opts.before {
-            false
+        let mode = if opts.before {
+            Mode::Before
         } else {
-            self.prepare_caches(s)?
+            Mode::Develop {
+                spotted: self.prepare_caches(s)?,
+            }
         };
-        let matrix = output_to_source(self.full_width, self.full_height, &geometry, &crop);
-        let (tw, th) = turned_size(self.full_width, self.full_height, geometry.rotate);
-        let frame = Frame {
-            matrix,
-            out: [crop.w * f64::from(tw), crop.h * f64::from(th)],
-            view: [opts.view.x, opts.view.y, opts.view.w, opts.view.h],
-            develop: !opts.before,
-            flip: false,
-            img_size: [self.width, self.height],
-            scale: self.scale,
-            target: [canvas.width, canvas.height],
-        };
-        let (sharp, texture) = if opts.before {
-            (None, None)
-        } else {
-            (self.targets.get("sharp"), self.targets.get("texture"))
-        };
-        let uniforms = Uniforms::new(s, &frame, sharp.is_some(), texture.is_some());
-        let inputs = Inputs {
-            image: self.image(spotted),
-            blur_m: &self.blur_m,
-            blur_l: &self.blur_l,
-            blur_s: sharp.unwrap_or(&self.blur_m),
-            blur_t: texture.unwrap_or(&self.blur_m),
-            curve: &self.curve.target,
-        };
-        develop::run(self.gpu, &inputs, &uniforms, canvas);
+        self.develop_into(s, &geometry, &crop, &opts.view, mode, canvas);
         Ok(())
     }
 
@@ -319,19 +280,43 @@ impl<'g> Renderer<'g> {
         let w = ((f64::from(ow) * k).round() as u32).max(1);
         let h = ((f64::from(oh) * k).round() as u32).max(1);
         self.cached("thumb", w, h, false)?;
-        let (tw, th) = turned_size(self.full_width, self.full_height, s.rotate);
+        let out = &self.targets["thumb"];
+        let mode = Mode::Develop { spotted };
+        self.develop_into(s, &geometry, &s.crop, &View::default(), mode, out);
+        read_back(self.gpu, out)
+    }
+
+    /// The develop pass for `s` into `target` (the caches already prepared): the output of
+    /// `geometry` cropped to `crop`, showing `view`. Shared by `render`, `draw` and `pixels`.
+    fn develop_into(
+        &self,
+        s: &EditSettings,
+        geometry: &Geometry,
+        crop: &Crop,
+        view: &View,
+        mode: Mode,
+        target: &Target,
+    ) {
+        let (spotted, develop) = match mode {
+            Mode::Before => (false, false),
+            Mode::Develop { spotted } => (spotted, true),
+        };
+        let (tw, th) = turned_size(self.full_width, self.full_height, geometry.rotate);
         let frame = Frame {
-            matrix: output_to_source(self.full_width, self.full_height, &geometry, &s.crop),
-            out: [s.crop.w * f64::from(tw), s.crop.h * f64::from(th)],
-            view: [0.0, 0.0, 1.0, 1.0],
-            develop: true,
+            matrix: output_to_source(self.full_width, self.full_height, geometry, crop),
+            out: [crop.w * f64::from(tw), crop.h * f64::from(th)],
+            view: [view.x, view.y, view.w, view.h],
+            develop,
             flip: false,
             img_size: [self.width, self.height],
             scale: self.scale,
-            target: [w, h],
+            target: [target.width, target.height],
         };
-        let sharp = self.targets.get("sharp");
-        let texture = self.targets.get("texture");
+        let (sharp, texture) = if develop {
+            (self.targets.get("sharp"), self.targets.get("texture"))
+        } else {
+            (None, None)
+        };
         let uniforms = Uniforms::new(s, &frame, sharp.is_some(), texture.is_some());
         let inputs = Inputs {
             image: self.image(spotted),
@@ -341,9 +326,7 @@ impl<'g> Renderer<'g> {
             blur_t: texture.unwrap_or(&self.blur_m),
             curve: &self.curve.target,
         };
-        let out = &self.targets["thumb"];
-        develop::run(self.gpu, &inputs, &uniforms, out);
-        read_back(self.gpu, out)
+        develop::run(self.gpu, &inputs, &uniforms, target);
     }
 
     /// Brightness histogram of the edited output, from a 200 px render.
