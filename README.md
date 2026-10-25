@@ -70,6 +70,11 @@ format, about 80 MB). Fetch them with `scripts/fetch-raw-samples.sh` (or
 `tests/raw-samples/files/`. Without them the corpus tests print a skip note
 and pass. See `tests/raw-samples/README.md`.
 
+`lf_raw::cache::FrameCache` keeps developed RAW frames on disk (one `.lff` file
+per file, quality and develop-settings key, LZ4-compressed, trimmed to a byte
+cap) so reopening a photo skips the demosaic. The caller picks the directory;
+`lf-render` does not use it.
+
 ## lf-render
 
 ```bash
