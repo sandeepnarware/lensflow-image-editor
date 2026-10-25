@@ -55,6 +55,20 @@ fn camera_space(img: &Rgb32FImage) -> Vec<f32> {
         .collect()
 }
 
+fn decode_with_blacks(
+    name: &str,
+    img: &Rgb32FImage,
+    pattern: [u8; 4],
+    blacks: [u16; 4],
+) -> RawFrame {
+    let path =
+        std::env::temp_dir().join(format!("lf-raw-demosaic-{}-{name}.dng", std::process::id()));
+    synthetic_dng::write_with_blacks(&path, img, pattern, blacks, WHITE, WB, IDENTITY);
+    let raw = decode_raw(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    raw
+}
+
 fn develop_with_blacks(
     name: &str,
     img: &Rgb32FImage,
@@ -62,11 +76,7 @@ fn develop_with_blacks(
     blacks: [u16; 4],
     q: Quality,
 ) -> LinearRgb {
-    let path =
-        std::env::temp_dir().join(format!("lf-raw-demosaic-{}-{name}.dng", std::process::id()));
-    synthetic_dng::write_with_blacks(&path, img, pattern, blacks, WHITE, WB, IDENTITY);
-    let raw = decode_raw(&path).unwrap();
-    let _ = std::fs::remove_file(&path);
+    let raw = decode_with_blacks(name, img, pattern, blacks);
     let out = demosaic::run(&raw, q);
     assert_eq!((out.width, out.height), img.dimensions());
     assert_eq!(out.data.len(), (out.width * out.height * 3) as usize);
@@ -105,16 +115,42 @@ fn other_bayer_phases_reconstruct_too() {
 
 #[test]
 fn black_is_subtracted_per_cfa_position() {
-    let img = smooth_rgb(64, 48);
-    let uniform = develop("black-uniform", &img, synthetic_dng::RGGB, Quality::Fast);
-    let mixed = develop_with_blacks(
-        "black-mixed",
-        &img,
-        synthetic_dng::RGGB,
-        [60, 64, 68, 72],
-        Quality::Fast,
-    );
-    assert!(psnr(&uniform.data, &mixed.data, 64, 48, 0) > 60.0);
+    let (w, h) = (64u32, 48u32);
+    let img = smooth_rgb(w, h);
+    let uniform = decode_with_blacks("black-uniform", &img, synthetic_dng::RGGB, [BLACK; 4]);
+    let spread = [0, 2000, 4000, 6000];
+    let mixed = decode_with_blacks("black-mixed", &img, synthetic_dng::RGGB, spread);
+    assert_eq!(mixed.black, [0.0, 2000.0, 4000.0, 6000.0]);
+    // Negative control: the same samples with one (mean) black for every position.
+    let mut wrong = mixed.clone();
+    wrong.black = [3000.0; 4];
+
+    // Full frame, then an odd crop origin so the CFA position parity runs through the crop.
+    let crops = [
+        Rect { x: 0, y: 0, w, h },
+        Rect {
+            x: 1,
+            y: 1,
+            w: w - 1,
+            h: h - 1,
+        },
+    ];
+    for crop in crops {
+        let run = |raw: &RawFrame| {
+            let mut raw = raw.clone();
+            raw.crop = crop;
+            demosaic::run(&raw, Quality::Fast)
+        };
+        let (cw, ch) = (crop.w as usize, crop.h as usize);
+        let reference = run(&uniform);
+        let right = psnr(&reference.data, &run(&mixed).data, cw, ch, 0);
+        let off = psnr(&reference.data, &run(&wrong).data, cw, ch, 0);
+        println!(
+            "black per position, crop {crop:?}: {right:.2} dB; one black for all: {off:.2} dB"
+        );
+        assert!(right > 70.0, "per-position black: {right} dB");
+        assert!(off < 70.0, "negative control should fail: {off} dB");
+    }
 }
 
 #[test]
