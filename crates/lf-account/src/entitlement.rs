@@ -17,12 +17,17 @@ pub enum Standing {
     ReadOnly,
     Paused,
     Suspended,
+    /// A standing this version does not know (a newer server): treated as read-only, so a
+    /// payload change never locks the app.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AiStatus {
     pub available: bool,
-    pub remaining: Option<u32>,
+    #[serde(default)]
+    pub remaining: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -104,8 +109,10 @@ impl Entitlement {
 pub fn check(client: &Client) -> Result<Entitlement, AccountError> {
     let reply = client.get_json("desktop/entitlement")?;
     let data = reply.get("data").cloned().unwrap_or(reply);
-    let mut e: Entitlement = serde_json::from_value(data)
-        .map_err(|e| AccountError::Server(200, format!("unexpected reply: {e}")))?;
+    let mut e: Entitlement = serde_json::from_value(data).map_err(|e| {
+        log::warn!("the entitlement reply could not be read: {e}");
+        AccountError::BadReply(format!("unexpected entitlement reply: {e}"))
+    })?;
     e.checked_at = SystemTime::now();
     Ok(e)
 }
@@ -188,7 +195,9 @@ impl Decision {
         self.active().is_some_and(|e| e.ai.available)
     }
 
-    pub fn export_allowed(&self) -> bool {
+    /// Export to a LensFlow gallery (false in `read_only` and unknown standings). Export to
+    /// disk is always allowed while the app is unlocked and needs no check.
+    pub fn gallery_export_allowed(&self) -> bool {
         self.active().is_some()
     }
 
@@ -283,7 +292,10 @@ impl Gate {
 fn is_transient(err: &AccountError) -> bool {
     matches!(
         err,
-        AccountError::Network(_) | AccountError::RateLimited | AccountError::Server(500..=599, _)
+        AccountError::Network(_)
+            | AccountError::RateLimited
+            | AccountError::BadReply(_)
+            | AccountError::Server(500..=599, _)
     )
 }
 

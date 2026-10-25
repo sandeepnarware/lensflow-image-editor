@@ -5,7 +5,7 @@ use serde_json::json;
 
 fn client(server: &MockServer) -> Client {
     let url = url::Url::parse(&server.url("/api")).unwrap();
-    Client::new(Instance::Custom(url), "1.0.0")
+    Client::new(Instance::custom(url).unwrap(), "1.0.0")
         .with_token("t")
         .with_studio("frames")
 }

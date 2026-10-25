@@ -23,7 +23,11 @@ The application crate `lf-app` has started (2c-ii Task 1: window and runtime).
   and the copy, gaussian, spots and develop passes) behind `Renderer`, which
   renders, draws a preview, and returns pixels and a histogram. It also holds
   `Renderer::new` (8-bit source) and `Renderer::from_texture` (half-float
-  source with headroom above 1.0).
+  source with headroom above 1.0). Each renderer call runs under its own
+  (per-thread) wgpu error scopes, so on a device shared with the UI or other
+  threads it reports only the errors it caused (`PipelineError::Gpu`,
+  `OutOfMemory`) and then drops its caches; errors raised outside any call are
+  logged and kept for `Gpu::take_error`.
 - `lf-raw`: opens any supported photo (`open::open`, kind sniffed from magic
   bytes, never the extension): decodes RAW with `rawler`, demosaics (bilinear
   or AHD; X-Trans is simple; or a binned `Preview` at half size for thumbnails),
@@ -50,8 +54,9 @@ The application crate `lf-app` has started (2c-ii Task 1: window and runtime).
 ## LensFlow account (lf-account)
 
 Base URLs: production `https://lensflow.in/api`, development
-`https://dev.lensflow.in/api` (`Instance::Prod` / `Dev`; `Custom(url)` for
-tests). Every request carries `Accept: application/json`,
+`https://dev.lensflow.in/api` (`Instance::Prod` / `Dev`; `Instance::custom(url)`
+for anything else, which refuses a URL that is not `https`, except `http` to
+`localhost` or `127.0.0.1` for local development and tests). Every request carries `Accept: application/json`,
 `X-LensFlow-Client: desktop` and `User-Agent: lensflow-ImageEditor/<version>
 (<os>)`; once signed in, `Authorization: Bearer <token>`; once a studio is
 chosen, `X-Studio: <slug>`. Timeouts: 20 s to connect, 30 s to read (120 s for
@@ -62,7 +67,9 @@ Endpoints used: `POST auth/login` (email, password, optional
 and call again), `GET auth/me`, `POST auth/logout`, `GET desktop/entitlement`,
 `GET desktop/download/{platform}`, `POST desktop/grade` (multipart: mode
 `extract` or `review`, a reference JPEG and a contact-sheet JPEG each under
-700 KB, up to 16 example looks, and for a review the current settings), and
+700 KB, up to 16 example looks, and for a review the current settings; the
+examples JSON must stay within 16,384 characters and the settings JSON within
+8,192, checked before sending), and
 `galleries/edit-presets` (list, create, PATCH, delete). Preset sync names a
 local preset `<name> (desktop)` (or `(desktop 2)`, ...) when the name is taken.
 
@@ -79,16 +86,21 @@ How a response becomes behaviour (`client.rs`, `entitlement.rs`):
 | 422 `plan_limit` | The AI allowance is used up |
 | other 422 | Field validation errors |
 | network error, 429, 5xx | Transient: lean on the cached entitlement (below) |
+| 200 the client cannot read | Transient (`BadReply`, logged): a payload change never locks the app |
 | any other 4xx | Refused: locked, with the server's message |
 
 Entitlement rules. The reply carries `enabled`, `standing`
-(`active`, `read_only`, `paused`, `suspended`), AI availability and remaining
-count, the studio, `min_version` and the latest release.
+(`active`, `read_only`, `paused`, `suspended`; a standing this version does not
+know is read as `Unknown` and treated as read-only), AI availability and
+remaining count (optional), the studio, `min_version` and the latest release.
+A studio from sign-in can use the desktop editor when its member has
+`galleries.manage` (`StudioSummary::can_use_desktop`).
 
 - Active and enabled: everything works. AI grading only while the AI
   allowance is available.
 - Read-only: edit locally, but no export to the gallery, no AI and no preset
-  sync (`export_allowed`, `ai_allowed` and `sync_allowed` are false).
+  sync (`gallery_export_allowed`, `ai_allowed` and `sync_allowed` are false).
+  Export to disk is always allowed while the app is unlocked.
 - Paused, suspended, or not enabled for the studio: locked.
 - Offline: after a network failure, 429 or 5xx, a cached entitlement is trusted
   for 7 days from its `checked_at` (`AllowStale`), unless it was itself a lock.
@@ -101,45 +113,70 @@ Where things live. The sign-in token goes in the OS keychain (service
 `lensflow-ImageEditor`, account = the API base URL). With no usable keychain it
 falls back to a file `token-<hash>` (0600 on Unix) in the `directories`
 project config dir (`ProjectDirs::from("in", "lensflow",
-"lensflow-ImageEditor")`), with a logged warning. The entitlement cache is
+"lensflow-ImageEditor")`), with a logged warning; on a system with no config
+dir, `<temp dir>/lensflow-ImageEditor` (never the current directory). The entitlement cache is
 `entitlement.json`, written atomically in a folder the app chooses
 (`entitlement::Cache::new(dir)`); the crate does not pick that folder.
 
 ## Catalogue (lf-catalog)
 
 `Catalog::open(root)` creates `<catalogue root>/.lensflow/catalog.sqlite` in
-WAL mode (bundled SQLite) and migrates it; the schema version is 3 (three migrations). Tables:
-folders, photos, edits, history and history_cursor, versions, thumbnails,
-presets, export_jobs and sidecar_meta. Each thumbnail worker opens its own
-connection.
+WAL mode (bundled SQLite) and migrates it under a write lock; the schema
+version is 4 (four migrations). A catalogue with a higher version was made by a
+newer app and is refused (`CatalogError::NewerSchema`, "This catalogue was made
+by a newer lensflow-ImageEditor."), never downgraded. Tables: folders, photos
+(with `error` and `missing`), edits, history and history_cursor, versions,
+thumbnails, presets, export_jobs and sidecar_meta. Each thumbnail worker opens
+its own connection.
 
 Sidecars. Edits are also written beside each photo as
 `<file>.lensflow.json`: `v` (format version, currently 2), `settings` (the
 edit settings), `versions[]` (`id`, `label`, `settings`, `created_at`) and
 `updated_at`. Keys this version does not know are kept and written back
-unchanged. Writes are atomic (temp file in the same folder, then rename).
-Conflict rule on reopen (`edits::reconcile`): the newer `updated_at` wins. A
-sidecar must be strictly newer to replace the catalogue, so ties go to the
-catalogue, and the sidecar is rewritten from it. Adopting a sidecar restarts
-the undo history from that state.
+unchanged. A version without an `id` or `created_at` is kept (a new id, the
+epoch date). Writes are atomic (temp file in the same folder, then rename), and
+an existing file that is not a valid sidecar is never replaced (`Corrupt`).
+Conflict rule on reopen and on import (`edits::reconcile`): the newer
+`updated_at` wins. A sidecar must be strictly newer to replace the catalogue;
+adopting it takes its settings and versions and restarts the undo history from
+that state, and a stamp in the future is adopted as now (the sidecar is then
+rewritten with it). Otherwise the catalogue wins, and the sidecar is rewritten
+only when the catalogue is strictly newer or the content (`v`, settings,
+versions) differs: an equal sidecar is left alone, so reopening does not touch
+every file.
 
 Import. `import::scan` lists supported files under a folder (RAW and
 JPEG/PNG/TIFF/WebP by extension; hidden entries, `.lensflow` and sidecars are
 skipped), and `import::run` records them in batches, one transaction each. It
 reads headers and EXIF only. A file already catalogued with the same size and
 mtime is skipped, so a rerun resumes. A file that cannot be read is still
-added, with kind `unreadable` and the reason in `photos.error`. The progress
-callback can stop the import after the batch it reports.
+added, with kind `unreadable` and the reason in `photos.error`; a decoder panic
+is caught and recorded as "the decoder crashed on this file". For every new or
+changed file the sidecar beside it is read and reconciled in the batch's
+transaction, so edits, versions and unknown keys made elsewhere are adopted
+before anything can overwrite them; a sidecar that cannot be read is reported
+in `photos.error` and left untouched. `import::mark_missing(catalog, folder,
+&scan)` flags rows whose file is gone (`photos.missing`); `run` clears the
+flag when the file is seen again. The progress callback can stop the import
+after the batch it reports.
 
 Thumbnails. `Thumbnailer` runs a small worker pool (default `min(2, cores)`)
 over a priority queue (`High` for what is on screen, `Normal` otherwise),
 renders 256 px thumbnails through the shared GPU, and stores JPEGs in the
-catalogue. `take_ready` returns finished ones; `take_failed` returns
-`(photo id, reason)` for those that could not be made (the reason is also
-stored in `photos.error` and logged). The demosaic `Quality` is a constructor
+catalogue. A stored thumbnail is served without decoding while it is fresh
+(`Catalog::fresh_thumbnail`): its key is the edit stamp (`edits.updated_at`, or
+none), the photo row's `updated_at`, size and mtime, so an edit or a changed
+file makes it stale. `take_ready` returns finished ones; `take_failed` returns
+`(photo id, reason)` for photos that could not be made (the reason is also
+stored in `photos.error` and logged; id 0 means a worker could not open the
+catalogue). A graphics device error is not the photo's fault: nothing is
+stored, `take_device_error` reports it once and the workers stop. A successful
+thumbnail clears `photos.error` (unless the sidecar is damaged).
+`cancel_pending` forgets queued requests; dropping the `Thumbnailer` cancels
+work in progress between stages. The demosaic `Quality` is a constructor
 parameter. Memory: each in-flight open of a 60 MP RAW can use about 1 GB at
-`Quality::Fast`, which is why the pool is small. `lf-raw` has only `Fast` and
-`Best` today; there is no cheaper `Preview` yet.
+`Quality::Fast` (a quarter of that at `Preview`), which is why the pool is
+small.
 
 Developed-frame cache. `lf_raw::cache::FrameCache` is a folder the app picks:
 one `<sha256>.lff` per file, quality, max edge, develop-settings and `DEVELOP_ALGO_VERSION` key. Format: `LFF1`
@@ -159,16 +196,23 @@ resolution through the GPU pipeline.
   and Copyright, `None` writes nothing.
 - Size: `Original`, `LongEdge`, `ShortEdge`, `Megapixels`, `Percent`. Only
   `Percent` can enlarge; the others never upscale.
+- Size: a `Percent` that would exceed the device's largest texture edge is
+  refused for that photo (`TooLarge`).
 - Rename pattern tokens: `{name}` (original stem), `{seq}` (1-based, padded to
   the count's width), `{date}` (`YYYY-MM-DD`, capture date else file date),
   `{camera}` (make and model with `-`, or `unknown`). Path-illegal characters
-  become `-`, and Windows reserved names get a `_`.
+  become `-`, and Windows reserved names get a `_` (checked on the whole file
+  name, so a pattern of just `CON` is safe too).
 - Collisions are refused before anything is rendered: two photos on one path
   (compared case-insensitively) is `NameCollision` (add `{seq}`). With
   `overwrite: false` an existing file is `Exists` and nothing is written; with
-  `overwrite: true` it is replaced.
-- The first failure stops the run (files already written stay) and is recorded
-  in `export_jobs`.
+  `overwrite: true` it is replaced through a temp file and a rename, so a
+  failure never leaves a truncated file.
+- One bad photo does not stop the run: `run` returns an `ExportReport`
+  (`exported`, `failed` with each photo's error, `cancelled`). The progress
+  callback returns `ControlFlow`; `Break` cancels after the current photo. The
+  job is recorded in `export_jobs` as `done`, `failed` (with how many failed)
+  or `cancelled`. A decoder panic fails only that photo.
 
 ## Supported files
 

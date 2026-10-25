@@ -19,7 +19,13 @@ rusqlite.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 
+[features]
+# Test hooks (enabled for this crate's own tests): a file named `lf-test-panic.*` makes the
+# decoder panic, `lf-test-gpu-fail.*` makes a thumbnail fail with a device error.
+test-hooks = []
+
 [dev-dependencies]
+lf-catalog = { path = ".", features = ["test-hooks"] }
 kamadak-exif.workspace = true
 lf-pipeline = { path = "../lf-pipeline", features = ["test-support"] }
 filetime = "0.2"

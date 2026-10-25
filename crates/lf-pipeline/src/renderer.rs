@@ -109,6 +109,9 @@ pub struct Renderer {
     detail_key: Option<DetailKey>,
     /// The develop pass's uniforms, rewritten each draw.
     develop_uniforms: UniformArena,
+    /// Test hook: provoke a validation error inside the next call's error scope.
+    #[cfg(feature = "test-support")]
+    inject_error: bool,
 }
 
 impl Renderer {
@@ -129,8 +132,11 @@ impl Renderer {
         if width == 0 || height == 0 || full_width == 0 || full_height == 0 {
             return Err(PipelineError::EmptyImage);
         }
-        let source = Source::upload(&gpu, image, true)?;
-        Renderer::with_source(gpu, source, full_width, full_height)
+        let scopes = Scopes::push(&gpu);
+        let made = Source::upload(&gpu, image, true)
+            .and_then(|source| Renderer::with_source(gpu.clone(), source, full_width, full_height));
+        scopes.pop(&gpu)?;
+        made
     }
 
     /// Takes `source` (the working copy of a `full_width`×`full_height` photo: an
@@ -151,7 +157,10 @@ impl Renderer {
                 got: format!("{:?} {}", source.format, mips(source.mips)),
             });
         }
-        Renderer::with_source(gpu, source, full_width, full_height)
+        let scopes = Scopes::push(&gpu);
+        let made = Renderer::with_source(gpu.clone(), source, full_width, full_height);
+        scopes.pop(&gpu)?;
+        made
     }
 
     /// `new` and `from_texture` past their checks: the intermediates take `source`'s format.
@@ -201,6 +210,8 @@ impl Renderer {
             spots_key: String::new(),
             detail_key: None,
             develop_uniforms,
+            #[cfg(feature = "test-support")]
+            inject_error: false,
         })
     }
 
@@ -307,10 +318,13 @@ impl Renderer {
 
     /// The edited photo as saving renders it (`renderJpeg` up to the JPEG step): the output
     /// size scaled to the working size, the whole output, row 0 = the top of the picture.
-    /// A lost device is [`PipelineError::DeviceLost`]; an error the device reported since the
-    /// last call is [`PipelineError::Gpu`] (as for `draw`, `pixels` and `histogram`).
+    /// A lost device is [`PipelineError::DeviceLost`]; an error the device reports during the
+    /// call is [`PipelineError::Gpu`] (as for `draw`, `pixels` and `histogram`).
     pub fn render(&mut self, s: &EditSettings) -> Result<RgbaImage, PipelineError> {
-        self.alive()?;
+        self.scoped(|r| r.render_inner(s))
+    }
+
+    fn render_inner(&mut self, s: &EditSettings) -> Result<RgbaImage, PipelineError> {
         let spotted = self.prepare_caches(s)?;
         let geometry = Geometry::from(s);
         let (ow, oh) = output_size(self.full_width, self.full_height, &geometry);
@@ -321,14 +335,17 @@ impl Renderer {
         let mode = Mode::Develop { spotted };
         let dest = Dest::Cached("output");
         self.develop_into(s, &geometry, &s.crop, &View::default(), mode, dest);
-        self.read_checked("output")
+        read_back(&self.gpu, &self.targets["output"])
     }
 
     /// [`Renderer::render`] into an `Rgba16Float` target and read back as half floats, for a
     /// 16-bit export: the develop shader's final clamp to 0..1 still applies, but the value is
     /// not quantised to 8 bits. Row 0 = the top of the picture.
     pub fn render_f16(&mut self, s: &EditSettings) -> Result<FloatFrame, PipelineError> {
-        self.alive()?;
+        self.scoped(|r| r.render_f16_inner(s))
+    }
+
+    fn render_f16_inner(&mut self, s: &EditSettings) -> Result<FloatFrame, PipelineError> {
         let spotted = self.prepare_caches(s)?;
         let geometry = Geometry::from(s);
         let (ow, oh) = output_size(self.full_width, self.full_height, &geometry);
@@ -339,25 +356,51 @@ impl Renderer {
         let mode = Mode::Develop { spotted };
         let dest = Dest::Cached("output_f16");
         self.develop_into(s, &geometry, &s.crop, &View::default(), mode, dest);
-        let frame = read_back_f16(&self.gpu, &self.targets["output_f16"]);
-        self.gpu.check()?;
-        frame
+        read_back_f16(&self.gpu, &self.targets["output_f16"])
     }
 
-    /// Fails fast when the device is lost.
-    fn alive(&self) -> Result<(), PipelineError> {
+    /// Runs `f` under this thread's own validation and out-of-memory error scopes, so the
+    /// call reports exactly the device errors it caused, even when other threads (or the UI)
+    /// share the device. A lost device is [`PipelineError::DeviceLost`]; a captured error is
+    /// [`PipelineError::Gpu`] or [`PipelineError::OutOfMemory`] (taking precedence over
+    /// `f`'s own result), logged, and every cache is dropped so the next call starts fresh.
+    fn scoped<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, PipelineError>,
+    ) -> Result<T, PipelineError> {
         if self.gpu.is_lost() {
             return Err(PipelineError::DeviceLost);
         }
-        Ok(())
+        let scopes = Scopes::push(&self.gpu);
+        let result = f(self);
+        #[cfg(feature = "test-support")]
+        if std::mem::take(&mut self.inject_error) {
+            crate::test_support::provoke_validation_error(&self.gpu);
+        }
+        match scopes.pop(&self.gpu) {
+            Ok(()) => result,
+            Err(e) => {
+                self.reset_caches();
+                Err(e)
+            }
+        }
     }
 
-    /// Reads back the cached target `name`, then reports any device error recorded since the
-    /// last check (which takes precedence over the readback's own result).
-    fn read_checked(&self, name: &str) -> Result<RgbaImage, PipelineError> {
-        let img = read_back(&self.gpu, &self.targets[name]);
-        self.gpu.check()?;
-        img
+    /// Forget every cache (after a device error nothing in them can be trusted).
+    fn reset_caches(&mut self) {
+        for (_, t) in self.targets.drain() {
+            t.texture.destroy();
+        }
+        self.spots_key.clear();
+        self.detail_key = None;
+        self.curve.invalidate();
+    }
+
+    /// Test hook: the next call provokes a validation error inside its own error scope.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn inject_validation_error(&mut self) {
+        self.inject_error = true;
     }
 
     /// Draws into `canvas` (sized by the caller, in any colour format the device renders to:
@@ -369,7 +412,15 @@ impl Renderer {
         opts: &DrawOptions,
         canvas: &Target,
     ) -> Result<(), PipelineError> {
-        self.alive()?;
+        self.scoped(|r| r.draw_inner(s, opts, canvas))
+    }
+
+    fn draw_inner(
+        &mut self,
+        s: &EditSettings,
+        opts: &DrawOptions,
+        canvas: &Target,
+    ) -> Result<(), PipelineError> {
         let (geometry, crop) = if opts.before {
             let whole = Crop {
                 x: 0.0,
@@ -396,12 +447,12 @@ impl Renderer {
             }
         };
         self.develop_into(s, &geometry, &crop, &opts.view, mode, Dest::Canvas(canvas));
-        self.gpu.check()
+        Ok(())
     }
 
     /// The whole output with `s` at `edge` long edge (the web's `pixels`), top row first.
     pub fn pixels(&mut self, s: &EditSettings, edge: u32) -> Result<RgbaImage, PipelineError> {
-        self.pixels_into("thumb", s, edge)
+        self.scoped(|r| r.pixels_into("thumb", s, edge))
     }
 
     /// `pixels` into the cached target `name`.
@@ -411,7 +462,6 @@ impl Renderer {
         s: &EditSettings,
         edge: u32,
     ) -> Result<RgbaImage, PipelineError> {
-        self.alive()?;
         let spotted = self.prepare_caches(s)?;
         let geometry = Geometry::from(s);
         let (ow, oh) = output_size(self.full_width, self.full_height, &geometry);
@@ -422,7 +472,7 @@ impl Renderer {
         let mode = Mode::Develop { spotted };
         let dest = Dest::Cached(name);
         self.develop_into(s, &geometry, &s.crop, &View::default(), mode, dest);
-        self.read_checked(name)
+        read_back(&self.gpu, &self.targets[name])
     }
 
     /// The develop pass for `s` into `target` (the caches already prepared): the output of
@@ -486,7 +536,7 @@ impl Renderer {
     /// Brightness histogram of the edited output, from a 200 px render (in its own target,
     /// so it does not evict `pixels`'s thumbnail).
     pub fn histogram(&mut self, s: &EditSettings) -> Result<Histogram, PipelineError> {
-        let img = self.pixels_into("hist", s, 200)?;
+        let img = self.scoped(|r| r.pixels_into("hist", s, 200))?;
         let mut h = Histogram {
             r: [0; 256],
             g: [0; 256],
@@ -523,5 +573,38 @@ impl Renderer {
                 .insert(name, Target::new_with(&self.gpu, w, h, mips, format)?);
         }
         Ok(&self.targets[name])
+    }
+}
+
+/// A validation and an out-of-memory error scope pushed on this thread (wgpu's error scopes
+/// are per thread), popped together.
+struct Scopes {
+    oom: wgpu::ErrorScopeGuard,
+    validation: wgpu::ErrorScopeGuard,
+}
+
+impl Scopes {
+    fn push(gpu: &Gpu) -> Scopes {
+        let oom = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let validation = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        Scopes { oom, validation }
+    }
+
+    /// Pops both (innermost first); a captured error is logged and returned.
+    fn pop(self, gpu: &Gpu) -> Result<(), PipelineError> {
+        let validation = pollster::block_on(self.validation.pop());
+        let oom = pollster::block_on(self.oom.pop());
+        if gpu.is_lost() {
+            return Err(PipelineError::DeviceLost);
+        }
+        if let Some(e) = validation {
+            log::error!("graphics device error during a render: {e}");
+            return Err(PipelineError::Gpu(e.to_string()));
+        }
+        if let Some(e) = oom {
+            log::error!("graphics device out of memory during a render: {e}");
+            return Err(PipelineError::OutOfMemory);
+        }
+        Ok(())
     }
 }
