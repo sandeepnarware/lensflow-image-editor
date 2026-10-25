@@ -2,6 +2,8 @@
 
 pub mod curve;
 pub mod geometry;
+pub mod groups;
+pub mod looks;
 mod normalise;
 mod settings;
 pub mod shader_values;
