@@ -45,7 +45,8 @@ pub fn init(data_dir: &Path) -> Result<PathBuf, String> {
 struct RotatingFile {
     path: PathBuf,
     max_bytes: u64,
-    /// `None` only while rotating (Windows will not rename an open file).
+    /// `None` after a rotation until the next write reopens `path` (Windows will not rename
+    /// an open file).
     file: Option<File>,
     written: u64,
     echo: bool,
@@ -70,13 +71,17 @@ impl RotatingFile {
         PathBuf::from(name)
     }
 
-    fn rotate(&mut self) -> io::Result<()> {
+    /// Shifts the files; the next write reopens `path`. If the shift fails (say, a viewer
+    /// holds `app.log.1` open), logging carries on in the current file and the next attempt
+    /// comes after another `max_bytes`.
+    fn rotate(&mut self) {
         self.file = None;
-        let shifted = self.shift();
-        let file = open_append(&self.path)?;
-        self.written = file.metadata()?.len();
-        self.file = Some(file);
-        shifted
+        if let Err(e) = self.shift()
+            && self.echo
+        {
+            eprintln!("could not rotate {}: {e}", self.path.display());
+        }
+        self.written = 0;
     }
 
     /// `path.N` becomes `path.N+1` (the oldest is replaced), then `path` becomes `path.1`.
@@ -101,12 +106,13 @@ impl Write for RotatingFile {
             let _ = io::stderr().write_all(buf);
         }
         if self.written >= self.max_bytes {
-            self.rotate()?;
+            self.rotate();
         }
-        match &mut self.file {
-            Some(file) => file.write_all(buf)?,
-            None => return Err(io::Error::other("the log file is closed")),
-        }
+        let file = match &mut self.file {
+            Some(file) => file,
+            None => self.file.insert(open_append(&self.path)?),
+        };
+        file.write_all(buf)?;
         self.written += buf.len() as u64;
         Ok(buf.len())
     }
@@ -123,50 +129,42 @@ impl Write for RotatingFile {
 mod tests {
     use super::*;
 
+    fn write_lines(log: &mut RotatingFile, count: usize) {
+        for n in 1..=count {
+            log.write_all(format!("line {n} ----\n").as_bytes())
+                .unwrap();
+        }
+        log.flush().unwrap();
+    }
+
     #[test]
     fn log_file_rotates_and_keeps_three_old_files() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("app.log");
-        let mut log = RotatingFile::open(path.clone(), 10, false).unwrap();
-        for line in [
-            "line 1 ----
-",
-            "line 2 ----
-",
-            "line 3 ----
-",
-            "line 4 ----
-",
-            "line 5 ----
-",
-        ] {
-            log.write_all(line.as_bytes()).unwrap();
-        }
-        log.flush().unwrap();
+        let mut log = RotatingFile::open(dir.path().join("app.log"), 10, false).unwrap();
+        write_lines(&mut log, 5);
         let read = |name: &str| std::fs::read_to_string(dir.path().join(name)).unwrap();
-        assert_eq!(
-            read("app.log"),
-            "line 5 ----
-"
-        );
-        assert_eq!(
-            read("app.log.1"),
-            "line 4 ----
-"
-        );
-        assert_eq!(
-            read("app.log.2"),
-            "line 3 ----
-"
-        );
-        assert_eq!(
-            read("app.log.3"),
-            "line 2 ----
-"
-        );
+        assert_eq!(read("app.log"), "line 5 ----\n");
+        assert_eq!(read("app.log.1"), "line 4 ----\n");
+        assert_eq!(read("app.log.2"), "line 3 ----\n");
+        assert_eq!(read("app.log.3"), "line 2 ----\n");
         assert!(
             !dir.path().join("app.log.4").exists(),
             "line 1's file is dropped"
         );
+    }
+
+    #[test]
+    fn a_failed_rotation_keeps_appending_to_the_current_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // Non-empty folders where the rotated files go: renaming onto them fails.
+        for n in 1..=KEEP {
+            let blocker = dir.path().join(format!("app.log.{n}"));
+            std::fs::create_dir(&blocker).unwrap();
+            std::fs::write(blocker.join("keep"), b"x").unwrap();
+        }
+        let mut log = RotatingFile::open(dir.path().join("app.log"), 10, false).unwrap();
+        write_lines(&mut log, 4);
+        let kept = std::fs::read_to_string(dir.path().join("app.log")).unwrap();
+        assert_eq!(kept, "line 1 ----\nline 2 ----\nline 3 ----\nline 4 ----\n");
     }
 }
