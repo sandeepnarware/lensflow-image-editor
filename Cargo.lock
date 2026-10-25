@@ -892,7 +892,11 @@ dependencies = [
 name = "lf-raw"
 version = "0.1.0"
 dependencies = [
+ "half",
  "image",
+ "lf-pipeline",
+ "lf-settings",
+ "log",
  "rawler",
  "rayon",
  "thiserror",

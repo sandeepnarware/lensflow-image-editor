@@ -329,3 +329,79 @@ fn whole_numbers_as_integers(v: &mut serde_json::Value) {
         _ => {}
     }
 }
+
+/// How a RAW file's sensor data is turned into a picture (desktop only).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Profile {
+    /// A gentle camera-like tone curve (toe and shoulder).
+    #[default]
+    Camera,
+    /// No tone curve: scene-linear values, gamma encoded.
+    Linear,
+}
+
+/// What happens to colours brighter than the sensor's range (desktop only).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Highlights {
+    /// Clamp each channel at 1.0.
+    Clip,
+    /// Pull over-range colours toward neutral, keeping their brightness.
+    #[default]
+    Reconstruct,
+}
+
+/// The RAW develop choices, kept in `desktop.develop` as lowercase strings:
+/// `{"profile": "camera" | "linear", "highlights": "clip" | "reconstruct"}`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DevelopSettings {
+    pub profile: Profile,
+    pub highlights: Highlights,
+}
+
+impl DevelopSettings {
+    /// Read `desktop.develop`; anything missing or unknown gives the default.
+    pub fn from_settings(s: &EditSettings) -> DevelopSettings {
+        let develop = s
+            .desktop
+            .as_ref()
+            .and_then(|d| d.get("develop"))
+            .and_then(|d| d.as_object());
+        let field = |key: &str| develop.and_then(|d| d.get(key)).and_then(|v| v.as_str());
+        DevelopSettings {
+            profile: match field("profile") {
+                Some("linear") => Profile::Linear,
+                _ => Profile::Camera,
+            },
+            highlights: match field("highlights") {
+                Some("clip") => Highlights::Clip,
+                _ => Highlights::Reconstruct,
+            },
+        }
+    }
+
+    /// Store into `desktop.develop`. Defaults are stored as no `develop` key, and an
+    /// emptied `desktop` is dropped, so a default export carries no `desktop` key.
+    pub fn write_into(&self, s: &mut EditSettings) {
+        if *self == DevelopSettings::default() {
+            if let Some(desktop) = s.desktop.as_mut() {
+                desktop.remove("develop");
+                if desktop.is_empty() {
+                    s.desktop = None;
+                }
+            }
+            return;
+        }
+        let profile = match self.profile {
+            Profile::Camera => "camera",
+            Profile::Linear => "linear",
+        };
+        let highlights = match self.highlights {
+            Highlights::Clip => "clip",
+            Highlights::Reconstruct => "reconstruct",
+        };
+        s.desktop.get_or_insert_with(Default::default).insert(
+            "develop".to_string(),
+            serde_json::json!({ "profile": profile, "highlights": highlights }),
+        );
+    }
+}

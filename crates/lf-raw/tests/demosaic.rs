@@ -152,6 +152,7 @@ fn frame(w: u32, h: u32, cfa: Cfa, data: Vec<u16>) -> RawFrame {
         white: 1100.0,
         wb: [1.0; 4],
         xyz_to_cam: None,
+        matrix_white: lf_raw::color::D65_WHITE,
         crop: Rect { x: 0, y: 0, w, h },
         orientation: Orientation::from_exif(1),
         make: String::new(),
