@@ -1,7 +1,9 @@
 //! Folder import: find candidates, then record them in the catalogue in resumable batches.
-//! Only headers and EXIF are read; a file whose headers lack a size is decoded small.
+//! Only headers and EXIF are read; a file whose headers lack a size is decoded small. Each
+//! new or changed file's sidecar is read and reconciled in the same transaction, so edits and
+//! versions made elsewhere are adopted before anything can overwrite them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -12,7 +14,9 @@ use lf_raw::open::{Kind, summary};
 use lf_settings::DevelopSettings;
 
 use crate::db::{Catalog, CatalogError};
+use crate::edits::reconcile_in;
 use crate::model::{now, ts};
+use crate::sidecar::{self, Sidecar};
 
 const EXTENSIONS: &[&str] = &[
     // RAW (the formats in tests/raw-samples/manifest.json, and the other common ones)
@@ -137,6 +141,10 @@ fn kind_name(k: Kind) -> &'static str {
 }
 
 fn read_meta(path: &Path) -> Result<Meta, RawError> {
+    #[cfg(feature = "test-hooks")]
+    if path.file_stem().is_some_and(|s| s == "lf-test-panic") {
+        panic!("test hook: the decoder panics on {}", path.display());
+    }
     let (kind, exif, size) = summary(path)?;
     let size = match size {
         Some(s) => Some(s),
@@ -162,7 +170,22 @@ fn read_meta(path: &Path) -> Result<Meta, RawError> {
     })
 }
 
-fn unreadable(e: &RawError) -> Meta {
+/// [`read_meta`], with any decoder panic caught: one bad file must not stop an import.
+fn read_meta_guarded(path: &Path) -> Meta {
+    match std::panic::catch_unwind(|| read_meta(path)) {
+        Ok(Ok(m)) => m,
+        Ok(Err(e)) => unreadable(e.to_string()),
+        Err(_) => {
+            log::error!("the decoder crashed reading {}", path.display());
+            unreadable(DECODER_CRASHED.to_string())
+        }
+    }
+}
+
+/// The reason stored for a file whose decoder panicked.
+pub(crate) const DECODER_CRASHED: &str = "the decoder crashed on this file";
+
+fn unreadable(error: String) -> Meta {
     Meta {
         kind: "unreadable".into(),
         width: None,
@@ -171,14 +194,47 @@ fn unreadable(e: &RawError) -> Meta {
         lens: None,
         captured_at: None,
         orientation: 1,
-        error: Some(e.to_string()),
+        error: Some(error),
     }
+}
+
+/// The sentence stored in `photos.error` when a photo's sidecar cannot be read.
+fn sidecar_error(path: &Path, e: &CatalogError) -> String {
+    let name = sidecar::path_for(path)
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let why = match e {
+        CatalogError::Corrupt(why) => why.clone(),
+        other => other.to_string(),
+    };
+    format!(
+        "The edit file beside this photo ({name}) could not be read ({why}); it was left \
+         untouched, so its edits are not loaded and new edits are not saved beside the photo \
+         until it is repaired or removed."
+    )
+}
+
+/// One file of a batch to record: the candidate, its row if catalogued, its facts and its
+/// sidecar as read.
+struct Work<'a> {
+    key: String,
+    candidate: &'a Candidate,
+    id: Option<i64>,
+    meta: Meta,
+    sidecar: Result<Option<Sidecar>, CatalogError>,
 }
 
 /// Import `candidates` into `folder_id`, `batch` files per transaction. After each batch has
 /// committed, and every 25 files within a batch, `progress` is called; an `Err` stops the import,
 /// keeping what was committed (an in-progress batch is dropped).
 /// Files already catalogued with the same size and mtime are skipped, so a rerun resumes.
+///
+/// For each new or changed file the sidecar beside it is read and reconciled
+/// ([`crate::edits::reconcile`]) in the batch's transaction: a sidecar's settings, versions and
+/// unknown keys are adopted, and a sidecar the catalogue supersedes is rewritten after the
+/// commit. A sidecar that cannot be read is reported in `photos.error` and left untouched. A
+/// decoder panic marks the file unreadable ("the decoder crashed on this file"). Every file
+/// seen has its `missing` flag cleared.
 pub fn run(
     catalog: &Catalog,
     folder_id: i64,
@@ -190,30 +246,37 @@ pub fn run(
     let mut summary = Summary::default();
     let mut done = 0;
     for chunk in candidates.chunks(batch.max(1)) {
-        let mut existing: HashMap<String, (i64, i64, i64)> = HashMap::new();
+        let mut existing: HashMap<String, (i64, i64, i64, bool)> = HashMap::new();
         {
             let mut st = catalog
                 .conn
-                .prepare("SELECT id, file_size, mtime FROM photos WHERE path = ?1")?;
+                .prepare("SELECT id, file_size, mtime, missing FROM photos WHERE path = ?1")?;
             for c in chunk {
                 let key = c.path.to_string_lossy().into_owned();
                 let mut rows = st.query([&key])?;
                 if let Some(r) = rows.next()? {
-                    existing.insert(key, (r.get(0)?, r.get(1)?, r.get(2)?));
+                    existing.insert(key, (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?));
                 }
             }
         }
         let mut work = Vec::new();
+        let mut seen_again = Vec::new();
         for (i, c) in chunk.iter().enumerate() {
             let key = c.path.to_string_lossy().into_owned();
             match existing.get(&key) {
-                Some(&(_, size, mtime)) if size == c.size as i64 && mtime == c.mtime => {
+                Some(&(id, size, mtime, missing)) if size == c.size as i64 && mtime == c.mtime => {
                     summary.skipped += 1;
+                    if missing {
+                        seen_again.push(id);
+                    }
                 }
-                found => {
-                    let meta = read_meta(&c.path).unwrap_or_else(|e| unreadable(&e));
-                    work.push((key, c, found.map(|f| f.0), meta));
-                }
+                found => work.push(Work {
+                    id: found.map(|f| f.0),
+                    meta: read_meta_guarded(&c.path),
+                    sidecar: sidecar::read(&sidecar::path_for(&c.path)),
+                    candidate: c,
+                    key,
+                }),
             }
             // Movement for the UI inside a big batch. Stopping here discards the batch in
             // progress (nothing of it is committed yet); the final call of a batch is made
@@ -230,15 +293,21 @@ pub fn run(
                 return Err(ImportError::Aborted);
             }
         }
-        if !work.is_empty() {
+        let mut to_write: Vec<(PathBuf, Sidecar)> = Vec::new();
+        if !work.is_empty() || !seen_again.is_empty() {
             let tx = catalog.write_tx()?;
             let t = ts(now());
-            for (key, c, id, m) in &work {
-                match id {
+            for id in &seen_again {
+                tx.execute("UPDATE photos SET missing = 0 WHERE id = ?1", [id])?;
+            }
+            for w in &work {
+                let (c, m) = (w.candidate, &w.meta);
+                let id = match w.id {
                     Some(id) => {
                         tx.execute(
                             "UPDATE photos SET file_size=?2, mtime=?3, width=?4, height=?5, camera=?6,
-                             lens=?7, captured_at=?8, kind=?9, orientation=?10, error=?11, updated_at=?12
+                             lens=?7, captured_at=?8, kind=?9, orientation=?10, error=?11, updated_at=?12,
+                             missing=0
                              WHERE id=?1",
                             rusqlite::params![
                                 id,
@@ -256,6 +325,7 @@ pub fn run(
                             ],
                         )?;
                         summary.updated += 1;
+                        id
                     }
                     None => {
                         tx.execute(
@@ -264,7 +334,7 @@ pub fn run(
                              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13)",
                             rusqlite::params![
                                 folder_id,
-                                key,
+                                w.key,
                                 c.size as i64,
                                 c.mtime,
                                 m.width,
@@ -279,10 +349,34 @@ pub fn run(
                             ],
                         )?;
                         summary.added += 1;
+                        tx.last_insert_rowid()
+                    }
+                };
+                match &w.sidecar {
+                    Ok(sc) => {
+                        let r = reconcile_in(&tx, id, sc.as_ref())?;
+                        if let Some(out) = r.sidecar_to_write {
+                            to_write.push((sidecar::path_for(&c.path), out));
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("the sidecar of {} could not be read: {e}", c.path.display());
+                        // A file that cannot be read keeps that (more basic) reason.
+                        if m.error.is_none() {
+                            tx.execute(
+                                "UPDATE photos SET error = ?2 WHERE id = ?1",
+                                rusqlite::params![id, sidecar_error(&c.path, e)],
+                            )?;
+                        }
                     }
                 }
             }
             tx.commit()?;
+        }
+        for (path, sc) in &to_write {
+            if let Err(e) = sidecar::write(path, sc) {
+                log::warn!("could not update the sidecar {}: {e}", path.display());
+            }
         }
         done += chunk.len();
         if progress(Progress { done, total }).is_err() {
@@ -290,4 +384,39 @@ pub fn run(
         }
     }
     Ok(summary)
+}
+
+/// Flag the photos catalogued under `folder_id` whose file is not among `scanned` (the folder's
+/// fresh [`scan`]) as missing (`photos.missing = 1`); [`run`] clears the flag when the file is
+/// seen again. Returns how many rows this call newly flagged.
+pub fn mark_missing(
+    catalog: &Catalog,
+    folder_id: i64,
+    scanned: &[Candidate],
+) -> Result<usize, CatalogError> {
+    let present: HashSet<String> = scanned
+        .iter()
+        .map(|c| c.path.to_string_lossy().into_owned())
+        .collect();
+    let tx = catalog.write_tx()?;
+    let gone: Vec<i64> = {
+        let mut st =
+            tx.prepare("SELECT id, path FROM photos WHERE folder_id = ?1 AND missing = 0")?;
+        let rows = st.query_map([folder_id], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut gone = Vec::new();
+        for row in rows {
+            let (id, path) = row?;
+            if !present.contains(&path) {
+                gone.push(id);
+            }
+        }
+        gone
+    };
+    for id in &gone {
+        tx.execute("UPDATE photos SET missing = 1 WHERE id = ?1", [id])?;
+    }
+    tx.commit()?;
+    Ok(gone.len())
 }

@@ -1915,6 +1915,7 @@ dependencies = [
  "half",
  "image",
  "kamadak-exif",
+ "lf-catalog",
  "lf-pipeline",
  "lf-raw",
  "lf-settings",

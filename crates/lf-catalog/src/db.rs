@@ -275,6 +275,15 @@ impl Catalog {
         )?)
     }
 
+    /// Whether the photo at `path` was flagged missing by [`crate::import::mark_missing`].
+    pub fn photo_missing(&self, path: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row("SELECT missing FROM photos WHERE path = ?1", [path], |r| {
+                r.get(0)
+            })?)
+    }
+
     /// `(width, height)` of the photo at `path`.
     pub fn photo_size(&self, path: &str) -> Result<(Option<u32>, Option<u32>)> {
         Ok(self.conn.query_row(
