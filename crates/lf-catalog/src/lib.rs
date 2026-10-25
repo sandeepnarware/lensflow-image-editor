@@ -3,6 +3,8 @@
 
 pub mod db;
 pub mod edits;
+pub mod exif_embed;
+pub mod export;
 pub mod import;
 pub mod model;
 pub mod sidecar;

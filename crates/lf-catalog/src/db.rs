@@ -17,6 +17,10 @@ pub enum CatalogError {
     NotFound(String),
     #[error("corrupt sidecar: {0}")]
     Corrupt(String),
+    #[error("export: {0}")]
+    Export(String),
+    #[error("already exists: {}", .0.display())]
+    Exists(std::path::PathBuf),
 }
 
 pub type Result<T> = std::result::Result<T, CatalogError>;

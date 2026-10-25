@@ -20,6 +20,10 @@ pub struct ExifSummary {
     pub captured_at: Option<String>,
     /// EXIF orientation 1..=8 (1 when absent or invalid).
     pub orientation: u8,
+    /// `Artist` (0x013B).
+    pub artist: Option<String>,
+    /// `Copyright` (0x8298).
+    pub copyright: Option<String>,
 }
 
 /// Read the summary from a JPEG, TIFF, PNG or WebP file's bytes (all empty, orientation
@@ -54,6 +58,8 @@ pub fn read_summary(bytes: &[u8]) -> ExifSummary {
     out.captured_at = text(Tag::DateTimeOriginal)
         .or_else(|| text(Tag::DateTime))
         .and_then(|s| iso_date(&s));
+    out.artist = text(Tag::Artist);
+    out.copyright = text(Tag::Copyright);
     out.orientation = get(Tag::Orientation)
         .and_then(|v| v.get_uint(0))
         .filter(|v| (1..=8).contains(v))
