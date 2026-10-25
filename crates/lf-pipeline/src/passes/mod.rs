@@ -187,6 +187,59 @@ impl FullscreenPass {
     }
 }
 
+/// Byte offsets of `count` uniform entries of `entry_size` bytes packed into one buffer,
+/// each slot rounded up to a multiple of `alignment` (`min_uniform_buffer_offset_alignment`).
+pub fn uniform_slots(entry_size: u64, alignment: u64, count: usize) -> Vec<u64> {
+    let slot = entry_size.max(1).div_ceil(alignment) * alignment;
+    (0..count as u64).map(|i| i * slot).collect()
+}
+
+/// One uniform buffer holding a value per draw, each at an aligned slot, for passes that
+/// bind their uniforms with a dynamic offset (see [`FullscreenPass::draw`]).
+pub struct UniformArena {
+    pub buffer: wgpu::Buffer,
+    /// Size of one entry, the binding size.
+    pub entry_size: u64,
+    /// The dynamic offset of each entry, in order.
+    pub offsets: Vec<u32>,
+}
+
+impl UniformArena {
+    pub fn new<T: bytemuck::Pod>(gpu: &Gpu, label: &str, entries: &[T]) -> UniformArena {
+        assert!(
+            !entries.is_empty(),
+            "a uniform arena needs at least one entry"
+        );
+        let entry_size = std::mem::size_of::<T>() as u64;
+        let alignment = gpu.limits.min_uniform_buffer_offset_alignment as u64;
+        let slots = uniform_slots(entry_size, alignment, entries.len());
+        let size = slots[slots.len() - 1] + entry_size;
+        let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: size.next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        for (entry, &offset) in entries.iter().zip(&slots) {
+            gpu.queue
+                .write_buffer(&buffer, offset, bytemuck::bytes_of(entry));
+        }
+        UniformArena {
+            buffer,
+            entry_size,
+            offsets: slots
+                .into_iter()
+                .map(|o| u32::try_from(o).expect("uniform offset fits in u32"))
+                .collect(),
+        }
+    }
+
+    /// The `(buffer, binding size)` pair [`FullscreenPass::bind`] takes.
+    pub fn binding(&self) -> (&wgpu::Buffer, u64) {
+        (&self.buffer, self.entry_size)
+    }
+}
+
 /// The pipelines, built once per device.
 pub(crate) struct Pipelines {
     pub copy: FullscreenPass,
@@ -201,5 +254,17 @@ impl Pipelines {
             mip: FullscreenPass::new(device, "mip", COPY, "fs_mip", false),
             gaussian: FullscreenPass::new(device, "gaussian", GAUSSIAN, "fs_gaussian", true),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::uniform_slots;
+
+    #[test]
+    fn uniform_slots_round_each_entry_up_to_the_alignment() {
+        assert_eq!(uniform_slots(16, 256, 2), vec![0, 256]);
+        assert_eq!(uniform_slots(1500, 256, 2), vec![0, 1536]);
+        assert_eq!(uniform_slots(256, 256, 3), vec![0, 256, 512]);
     }
 }

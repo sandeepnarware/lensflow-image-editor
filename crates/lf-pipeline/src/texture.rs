@@ -15,8 +15,8 @@ pub struct Samplers {
     /// WebGL `LINEAR_MIPMAP_LINEAR` / `LINEAR` / `CLAMP_TO_EDGE`: for textures with mips.
     pub linear_clamp: wgpu::Sampler,
     /// WebGL `LINEAR` min filter / `LINEAR` / `CLAMP_TO_EDGE`: bilinear within level 0, for
-    /// single-level targets. "Nearest" is its mipmap filter.
-    pub nearest: wgpu::Sampler,
+    /// single-level targets (mipmap filter nearest, lod clamped to 0; not point sampling).
+    pub linear_level0: wgpu::Sampler,
 }
 
 impl Samplers {
@@ -37,8 +37,8 @@ impl Samplers {
                 mipmap_filter: wgpu::MipmapFilterMode::Linear,
                 ..base.clone()
             }),
-            nearest: device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("linear_clamp_level0"),
+            linear_level0: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("linear_level0"),
                 mipmap_filter: wgpu::MipmapFilterMode::Nearest,
                 lod_max_clamp: 0.0,
                 ..base
@@ -51,7 +51,7 @@ impl Samplers {
         if t.mips {
             &self.linear_clamp
         } else {
-            &self.nearest
+            &self.linear_level0
         }
     }
 }

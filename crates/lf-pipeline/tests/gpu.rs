@@ -77,6 +77,34 @@ fn gaussian_matches_the_cpu_kernel() {
 }
 
 #[test]
+fn a_wide_gaussian_is_capped_at_64_taps_like_the_cpu_kernel() {
+    let gpu = Gpu::new().unwrap();
+    let img = noise(160, 96, 11);
+    let (src, to, tmp) = (
+        Source::upload(&gpu, &img, false).unwrap(),
+        Target::new(&gpu, 160, 96, false).unwrap(),
+        Target::new(&gpu, 160, 96, false).unwrap(),
+    );
+    gaussian::blur(&gpu, &src, &to, &tmp, 30.0); // ceil(3 * 30) = 90, capped to 64
+    let got = read_back(&gpu, &to).unwrap();
+    assert!(max_abs_diff(&got, &cpu_gaussian(&img, 30.0)) <= 1);
+}
+
+#[test]
+fn mip_level_one_of_an_odd_picture_samples_the_larger_level_at_its_texel_centres() {
+    let gpu = Gpu::new().unwrap();
+    let img = noise(7, 5, 3);
+    let src = Source::upload(&gpu, &img, true).unwrap();
+    let level1 = read_back_level(&gpu, &src, 1).unwrap();
+    assert_eq!(level1.dimensions(), (3, 2));
+    let want = RgbaImage::from_fn(3, 2, |x, y| {
+        bilinear(&img, (x as f32 + 0.5) / 3.0, (y as f32 + 0.5) / 2.0)
+    });
+    // Within 1: GPUs quantise bilinear weights (these are thirds, not exact in binary).
+    assert!(max_abs_diff(&level1, &want) <= 1);
+}
+
+#[test]
 fn every_wgsl_module_validates() {
     let gpu = Gpu::new().unwrap();
     for (name, source) in lf_pipeline::passes::SHADERS {
@@ -174,6 +202,26 @@ fn cpu_gaussian(img: &RgbaImage, sigma: f32) -> RgbaImage {
         })
     };
     run(&run(img, 1, 0), 0, 1)
+}
+
+/// A clamp-to-edge bilinear sample of `img` at normalised `(u, v)`, rounded to 8 bits.
+fn bilinear(img: &RgbaImage, u: f32, v: f32) -> Rgba<u8> {
+    let (w, h) = img.dimensions();
+    let (tx, ty) = (u * w as f32 - 0.5, v * h as f32 - 0.5);
+    let (x0, y0) = (tx.floor(), ty.floor());
+    let (fx, fy) = (tx - x0, ty - y0);
+    let at = |x: f32, y: f32, c: usize| {
+        let x = (x as i32).clamp(0, w as i32 - 1) as u32;
+        let y = (y as i32).clamp(0, h as i32 - 1) as u32;
+        img.get_pixel(x, y)[c] as f32
+    };
+    let mut out = [0u8; 4];
+    for (c, o) in out.iter_mut().enumerate() {
+        let top = at(x0, y0, c) * (1.0 - fx) + at(x0 + 1.0, y0, c) * fx;
+        let bottom = at(x0, y0 + 1.0, c) * (1.0 - fx) + at(x0 + 1.0, y0 + 1.0, c) * fx;
+        *o = (top * (1.0 - fy) + bottom * fy).round() as u8;
+    }
+    Rgba(out)
 }
 
 fn max_abs_diff(a: &RgbaImage, b: &RgbaImage) -> u8 {
