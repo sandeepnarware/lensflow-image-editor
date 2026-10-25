@@ -6,6 +6,8 @@ pub enum LockReason {
     Suspended,
     Paused,
     NotEnabled,
+    /// The server definitely said no (an unexpected refusal, not a hiccup).
+    Refused,
     /// No fresh check and no usable cached one.
     Offline,
 }
@@ -26,6 +28,8 @@ pub enum AccountError {
     RateLimited,
     #[error("server error {0}: {1}")]
     Server(u16, String),
+    #[error("the studio is not found")]
+    StudioNotFound,
     #[error("a two-factor code is required")]
     TwoFactorRequired,
     #[error("validation failed: {0:?}")]

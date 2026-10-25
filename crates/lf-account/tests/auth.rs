@@ -41,7 +41,10 @@ fn sign_in_sends_headers_and_body_and_parses_the_user() {
     assert_eq!(signed.token, "tok-1");
     assert_eq!(signed.user.name, "Asha");
     let s = &signed.user.studios[0];
-    assert_eq!((s.slug.as_str(), s.role.as_str()), ("frames", "owner"));
+    assert_eq!(
+        (s.slug.as_str(), s.role.as_deref().unwrap()),
+        ("frames", "owner")
+    );
     assert_eq!(s.plan_features, vec!["desktop_editor"]);
     assert!(!s.subscription_paused);
 }
@@ -190,4 +193,35 @@ fn unreachable_server_is_a_network_error() {
         auth::me(&dead).unwrap_err(),
         AccountError::Network(_)
     ));
+}
+
+#[test]
+fn debug_of_signed_in_does_not_print_the_token() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(POST).path("/api/auth/login");
+        then.status(200)
+            .json_body(json!({"token": "SUPER-SECRET-TOKEN", "user": user_json()}));
+    });
+    let signed = auth::sign_in(&client(&server), "a@b.in", "pw", None, "pc").unwrap();
+    let dbg = format!("{signed:?} {:#?}", signed);
+    assert!(!dbg.contains("SUPER-SECRET-TOKEN"), "{dbg}");
+    let c = client(&server).with_token("SUPER-SECRET-TOKEN");
+    assert!(!format!("{c:?}").contains("SUPER-SECRET-TOKEN"));
+}
+
+#[test]
+fn a_studio_with_a_null_role_still_parses() {
+    let server = MockServer::start();
+    let mut user = user_json();
+    user["studios"][0]["role"] = serde_json::Value::Null;
+    user.as_object_mut().unwrap().remove("is_platform_admin");
+    server.mock(|when, then| {
+        when.method(POST).path("/api/auth/login");
+        then.status(200)
+            .json_body(json!({"token": "t", "user": user}));
+    });
+    let signed = auth::sign_in(&client(&server), "a@b.in", "pw", None, "pc").unwrap();
+    assert_eq!(signed.user.studios[0].role, None);
+    assert!(!signed.user.is_platform_admin);
 }

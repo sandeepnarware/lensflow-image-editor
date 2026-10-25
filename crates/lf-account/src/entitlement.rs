@@ -6,6 +6,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// A cached entitlement is trusted for this long after `checked_at`.
 pub const GRACE: Duration = Duration::from_secs(7 * 86_400);
+/// A cache dated further ahead than this is treated as expired (a clock set back).
+const CLOCK_SKEW: Duration = Duration::from_secs(300);
 const OFFLINE_MESSAGE: &str = "Connect to the internet to keep using lensflow-ImageEditor.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,8 +58,8 @@ mod secs {
         Ok(UNIX_EPOCH + Duration::from_secs(u64::deserialize(d)?))
     }
 
-    pub fn now() -> SystemTime {
-        SystemTime::now()
+    pub fn epoch() -> SystemTime {
+        UNIX_EPOCH
     }
 }
 
@@ -71,7 +73,7 @@ pub struct Entitlement {
     pub min_version: Option<String>,
     #[serde(default)]
     pub latest: Option<Release>,
-    #[serde(with = "secs", default = "secs::now")]
+    #[serde(with = "secs", default = "secs::epoch")]
     pub checked_at: SystemTime,
 }
 
@@ -142,6 +144,10 @@ impl Cache {
         serde_json::from_slice(&std::fs::read(&self.path).ok()?).ok()
     }
 
+    pub fn clear(&self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+
     pub fn save(&self, e: &Entitlement) {
         let write = || -> std::io::Result<()> {
             if let Some(dir) = self.path.parent() {
@@ -164,6 +170,8 @@ pub enum Decision {
     AllowStale(Entitlement, Duration),
     Lock(LockReason, String),
     SignIn,
+    /// The remembered studio no longer exists: pick another.
+    ChooseStudio,
 }
 
 impl Decision {
@@ -206,8 +214,15 @@ impl Gate {
             },
             Err(AccountError::Unauthorized) => Decision::SignIn,
             Err(AccountError::Locked(reason, msg)) => Decision::Lock(reason, msg),
+            Err(AccountError::StudioNotFound) => Decision::ChooseStudio,
+            Err(err) if !is_transient(&err) => {
+                Decision::Lock(LockReason::Refused, refusal_message(&err))
+            }
             Err(_) => match cached {
                 Some(c) => {
+                    if c.checked_at > now + CLOCK_SKEW {
+                        return Self::offline();
+                    }
                     let age = now.duration_since(c.checked_at).unwrap_or(Duration::ZERO);
                     if age > GRACE {
                         return Self::offline();
@@ -249,10 +264,34 @@ impl Gate {
     /// Checks with the server, updates the cache on success, and decides.
     pub fn refresh(client: &Client, cache: &Cache, now: SystemTime) -> Decision {
         let fresh = check(client);
-        if let Ok(e) = &fresh {
-            cache.save(e);
+        match &fresh {
+            Ok(e) => cache.save(e),
+            // A definite answer: never replay an older active entitlement offline.
+            Err(
+                AccountError::Locked(..)
+                | AccountError::Unauthorized
+                | AccountError::StudioNotFound,
+            ) => cache.clear(),
+            Err(_) => {}
         }
         let cached = cache.load();
         Self::evaluate(now, cached.as_ref(), fresh)
+    }
+}
+
+/// Only a hiccup may lean on the cached entitlement.
+fn is_transient(err: &AccountError) -> bool {
+    matches!(
+        err,
+        AccountError::Network(_) | AccountError::RateLimited | AccountError::Server(500..=599, _)
+    )
+}
+
+fn refusal_message(err: &AccountError) -> String {
+    match err {
+        AccountError::Server(_, m) | AccountError::ReadOnly(m) | AccountError::PlanLimit(m) => {
+            m.clone()
+        }
+        other => other.to_string(),
     }
 }

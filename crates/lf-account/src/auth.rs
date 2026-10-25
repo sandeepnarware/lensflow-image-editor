@@ -8,7 +8,7 @@ pub struct StudioSummary {
     pub name: String,
     pub slug: String,
     #[serde(default)]
-    pub role: String,
+    pub role: Option<String>,
     #[serde(default)]
     pub permissions: Vec<String>,
     #[serde(default)]
@@ -28,7 +28,7 @@ pub struct User {
     pub studios: Vec<StudioSummary>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SignedIn {
     pub token: String,
     pub user: User,
@@ -73,4 +73,14 @@ pub fn me(client: &Client) -> Result<User, AccountError> {
 /// `POST auth/logout`; failures are ignored (the token is dropped locally either way).
 pub fn sign_out(client: &Client) {
     let _ = client.post_json("auth/logout", &json!({}));
+}
+
+impl std::fmt::Debug for SignedIn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The bearer token never prints.
+        f.debug_struct("SignedIn")
+            .field("token", &"<redacted>")
+            .field("user", &self.user)
+            .finish()
+    }
 }
