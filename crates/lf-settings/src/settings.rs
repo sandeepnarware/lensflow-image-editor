@@ -91,6 +91,17 @@ pub struct Curves {
     pub b: Vec<CurvePoint>,
 }
 
+impl Curves {
+    /// Four straight diagonals: the curves leave the image unchanged.
+    pub fn identity() -> Curves {
+        Curves {
+            rgb: identity_curve(),
+            r: identity_curve(),
+            g: identity_curve(),
+            b: identity_curve(),
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GradeWheel {
     /// 0..360
