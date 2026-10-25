@@ -9,7 +9,6 @@ repository.workspace = true
 lf-settings = { path = "../lf-settings" }
 lf-raw = { path = "../lf-raw" }
 lf-pipeline = { path = "../lf-pipeline" }
-log.workspace = true
 image = { workspace = true, features = ["jpeg", "png", "tiff"] }
 half.workspace = true
 log.workspace = true
