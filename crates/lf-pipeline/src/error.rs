@@ -16,6 +16,12 @@ pub enum PipelineError {
     TooLarge { width: u32, height: u32, limit: u32 },
     #[error("The photo has no pixels.")]
     EmptyImage,
+    #[error(
+        "The graphics device stopped working (it was reset or removed). Restart to keep editing."
+    )]
+    DeviceLost,
+    #[error("The graphics device reported an error: {0}")]
+    Gpu(String),
     #[error("Not enough graphics memory for this photo.")]
     OutOfMemory,
     #[error("Could not read the image back from the graphics device: {0}")]

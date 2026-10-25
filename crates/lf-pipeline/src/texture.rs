@@ -282,7 +282,7 @@ pub fn read_back_level(gpu: &Gpu, t: &Target, level: u32) -> Result<RgbaImage, P
             )));
         }
     };
-    let (width, height, mut pixels) = read_back_raw(gpu, t, level, 4)?;
+    let (width, height, mut pixels) = read_back_raw(gpu, t, level, 4, None)?;
     if bgra {
         for p in pixels.as_chunks_mut::<4>().0 {
             p.swap(0, 2);
@@ -301,7 +301,7 @@ pub fn read_back_f16(gpu: &Gpu, t: &Target) -> Result<FloatFrame, PipelineError>
             t.format
         )));
     }
-    let (width, height, bytes) = read_back_raw(gpu, t, 0, 8)?;
+    let (width, height, bytes) = read_back_raw(gpu, t, 0, 8, None)?;
     let data = bytes
         .as_chunks::<2>()
         .0
@@ -315,14 +315,50 @@ pub fn read_back_f16(gpu: &Gpu, t: &Target) -> Result<FloatFrame, PipelineError>
     })
 }
 
-/// The bytes of one mip level of `t` (`texel` bytes per texel), top row first. Copies through
-/// a buffer whose rows are padded to `COPY_BYTES_PER_ROW_ALIGNMENT` (256 bytes), then strips
-/// the padding.
+/// The largest staging buffer one readback band uses, whatever the device allows.
+pub const MAX_BAND_BYTES: u64 = 256 << 20;
+
+/// Bytes per texel of the formats readback takes.
+fn texel_size(format: wgpu::TextureFormat) -> Result<u32, PipelineError> {
+    match format {
+        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm => Ok(4),
+        FLOAT_FORMAT => Ok(8),
+        f => Err(PipelineError::Readback(format!("cannot read back {f:?}"))),
+    }
+}
+
+/// Rows per readback band for a level `padded` bytes per (aligned) row: as many as fit in
+/// `min(max_buffer_size, MAX_BAND_BYTES)`, at least one.
+fn band_rows(gpu: &Gpu, padded: u64, height: u32) -> u32 {
+    let cap = gpu.limits.max_buffer_size.min(MAX_BAND_BYTES);
+    let rows = (cap / padded).clamp(1, u64::from(height));
+    rows as u32
+}
+
+/// The raw bytes of one mip level of `t` (top row first, tightly packed), copied in bands of
+/// at most `band_rows` rows. Exposed so tests can force small bands; use [`read_back`] or
+/// [`read_back_f16`].
+#[doc(hidden)]
+pub fn read_back_with_band_rows(
+    gpu: &Gpu,
+    t: &Target,
+    level: u32,
+    band_rows: u32,
+) -> Result<(u32, u32, Vec<u8>), PipelineError> {
+    let texel = texel_size(t.format)?;
+    read_back_raw(gpu, t, level, texel, Some(band_rows))
+}
+
+/// The bytes of one mip level of `t` (`texel` bytes per texel), top row first. Copies in
+/// horizontal bands (`band_rows`, or as many rows as [`band_rows`] allows) through one
+/// staging buffer whose rows are padded to `COPY_BYTES_PER_ROW_ALIGNMENT` (256 bytes), so no
+/// buffer exceeds the device's `max_buffer_size`; strips the padding. Sizes are `u64`.
 fn read_back_raw(
     gpu: &Gpu,
     t: &Target,
     level: u32,
     texel: u32,
+    band: Option<u32>,
 ) -> Result<(u32, u32, Vec<u8>), PipelineError> {
     if level >= t.level_count() {
         return Err(PipelineError::Readback(format!(
@@ -332,15 +368,58 @@ fn read_back_raw(
     }
     let width = (t.width >> level).max(1);
     let height = (t.height >> level).max(1);
-    let row = texel * width;
-    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let row = u64::from(texel) * u64::from(width);
+    let align = u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let padded = row.div_ceil(align) * align;
+    let padded_u32 = u32::try_from(padded)
+        .map_err(|_| PipelineError::Readback(format!("a {width}-texel row is too wide")))?;
+    let rows = band
+        .unwrap_or_else(|| band_rows(gpu, padded, height))
+        .clamp(1, height);
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("read_back"),
-        size: padded as u64 * height as u64,
+        size: padded * u64::from(rows),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
+    let total = usize::try_from(row * u64::from(height))
+        .map_err(|_| PipelineError::Readback("the image does not fit in memory".into()))?;
+    let mut pixels = Vec::with_capacity(total);
+    let result = (|| {
+        let mut y = 0;
+        while y < height {
+            let h = rows.min(height - y);
+            copy_band(gpu, t, level, &buffer, padded_u32, y, width, h)?;
+            {
+                let len = padded * u64::from(h);
+                let data = buffer
+                    .get_mapped_range(..len)
+                    .map_err(|e| PipelineError::Readback(e.to_string()))?;
+                for r in data.chunks_exact(padded as usize) {
+                    pixels.extend_from_slice(&r[..row as usize]);
+                }
+            }
+            buffer.unmap();
+            y += h;
+        }
+        Ok(())
+    })();
+    buffer.destroy();
+    result.map(|()| (width, height, pixels))
+}
+
+/// Copies rows `y..y + h` of level `level` into the start of `buffer` and maps it.
+#[allow(clippy::too_many_arguments)]
+fn copy_band(
+    gpu: &Gpu,
+    t: &Target,
+    level: u32,
+    buffer: &wgpu::Buffer,
+    padded: u32,
+    y: u32,
+    width: u32,
+    h: u32,
+) -> Result<(), PipelineError> {
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -350,47 +429,38 @@ fn read_back_raw(
         wgpu::TexelCopyTextureInfo {
             texture: &t.texture,
             mip_level: level,
-            origin: wgpu::Origin3d::ZERO,
+            origin: wgpu::Origin3d { x: 0, y, z: 0 },
             aspect: wgpu::TextureAspect::All,
         },
         wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
+            buffer,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded),
-                rows_per_image: Some(height),
+                rows_per_image: Some(h),
             },
         },
         wgpu::Extent3d {
             width,
-            height,
+            height: h,
             depth_or_array_layers: 1,
         },
     );
     gpu.queue.submit([encoder.finish()]);
 
     let (sender, receiver) = std::sync::mpsc::channel();
-    buffer.map_async(wgpu::MapMode::Read, .., move |r| {
-        let _ = sender.send(r);
-    });
+    buffer.map_async(
+        wgpu::MapMode::Read,
+        ..u64::from(padded) * u64::from(h),
+        move |r| {
+            let _ = sender.send(r);
+        },
+    );
     gpu.device
         .poll(wgpu::PollType::wait_indefinitely())
         .map_err(|e| PipelineError::Readback(e.to_string()))?;
     receiver
         .recv()
         .map_err(|e| PipelineError::Readback(e.to_string()))?
-        .map_err(|e| PipelineError::Readback(e.to_string()))?;
-
-    let mut pixels = Vec::with_capacity((row * height) as usize);
-    {
-        let data = buffer
-            .get_mapped_range(..)
-            .map_err(|e| PipelineError::Readback(e.to_string()))?;
-        for r in data.chunks_exact(padded as usize) {
-            pixels.extend_from_slice(&r[..row as usize]);
-        }
-    }
-    buffer.unmap();
-    buffer.destroy();
-    Ok((width, height, pixels))
+        .map_err(|e| PipelineError::Readback(e.to_string()))
 }

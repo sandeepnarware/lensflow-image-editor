@@ -8,8 +8,9 @@ use image::RgbaImage;
 use lf_fixtures::{case_json, load_png, root};
 use lf_pipeline::error::PipelineError;
 use lf_pipeline::renderer::DrawOptions;
+use lf_pipeline::test_support::shared_gpu;
 use lf_pipeline::texture::{FLOAT_FORMAT, Source, Target, read_back, read_back_f16};
-use lf_pipeline::{FloatFrame, Gpu, Renderer};
+use lf_pipeline::{FloatFrame, Renderer};
 use lf_settings::normalise;
 use serde_json::json;
 
@@ -34,7 +35,7 @@ fn to_f16(img: &RgbaImage) -> FloatFrame {
 
 #[test]
 fn an_f16_source_above_one_survives_to_the_chain_input() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     // A 4x4 grey frame with one pixel at 2.0.
     let (hot_x, hot_y) = (2, 1);
     let mut data = vec![f16::from_f32(0.5); 4 * 16];
@@ -51,7 +52,7 @@ fn an_f16_source_above_one_survives_to_the_chain_input() {
     };
     let source = Source::upload_f16(&gpu, &frame, true).unwrap();
     assert_eq!(source.format, FLOAT_FORMAT);
-    let mut r = Renderer::from_texture(&gpu, source, 4, 4).unwrap();
+    let mut r = Renderer::from_texture(gpu.clone(), source, 4, 4).unwrap();
 
     // The chain's input (the source, or the spotted image) holds the value unclamped.
     let s = normalise(&json!({}));
@@ -90,18 +91,21 @@ fn an_f16_source_above_one_survives_to_the_chain_input() {
 /// half floats draw the identity case byte for byte alike.
 #[test]
 fn eight_bit_input_renders_identically_through_the_float_path() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let src = load_png(root().join("sources/portrait.png")).unwrap();
     let (w, h) = src.dimensions();
     let s = normalise(&case_json("identity").unwrap());
-    let via_new = Renderer::new(&gpu, &src, w, h).unwrap().render(&s).unwrap();
+    let via_new = Renderer::new(gpu.clone(), &src, w, h)
+        .unwrap()
+        .render(&s)
+        .unwrap();
     assert!(
         via_new == src,
         "identity through Renderer::new is not the source"
     );
 
     let source = Source::upload_f16(&gpu, &to_f16(&src), true).unwrap();
-    let via_float = Renderer::from_texture(&gpu, source, w, h)
+    let via_float = Renderer::from_texture(gpu.clone(), source, w, h)
         .unwrap()
         .render(&s)
         .unwrap();
@@ -112,14 +116,18 @@ fn eight_bit_input_renders_identically_through_the_float_path() {
 
     // from_texture refuses an 8-bit source, and a float one without mips.
     let eight = Source::upload(&gpu, &src, true).unwrap();
-    let err = Renderer::from_texture(&gpu, eight, w, h).err().unwrap();
+    let err = Renderer::from_texture(gpu.clone(), eight, w, h)
+        .err()
+        .unwrap();
     assert!(matches!(err, PipelineError::WrongFormat { .. }));
     assert_eq!(
         err.to_string(),
         "The image texture is Rgba8Unorm with mipmaps; the renderer needs Rgba16Float with mipmaps."
     );
     let flat = Source::upload_f16(&gpu, &to_f16(&src), false).unwrap();
-    let err = Renderer::from_texture(&gpu, flat, w, h).err().unwrap();
+    let err = Renderer::from_texture(gpu.clone(), flat, w, h)
+        .err()
+        .unwrap();
     assert_eq!(
         err.to_string(),
         "The image texture is Rgba16Float without mipmaps; the renderer needs Rgba16Float with mipmaps."
@@ -128,10 +136,10 @@ fn eight_bit_input_renders_identically_through_the_float_path() {
 
 #[test]
 fn draw_into_bgra_target_works() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let src = load_png(root().join("sources/portrait.png")).unwrap();
     let s = normalise(&case_json("look-golden").unwrap());
-    let mut r = Renderer::new(&gpu, &src, src.width(), src.height()).unwrap();
+    let mut r = Renderer::new(gpu.clone(), &src, src.width(), src.height()).unwrap();
     let (w, h) = (src.width() / 2, src.height() / 2);
     let draw = |r: &mut Renderer, format| {
         let canvas = Target::new_with(&gpu, w, h, false, format).unwrap();

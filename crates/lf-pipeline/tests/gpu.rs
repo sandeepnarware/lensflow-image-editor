@@ -5,14 +5,14 @@ use image::{Rgba, RgbaImage};
 use lf_pipeline::error::PipelineError;
 use lf_pipeline::gpu::{Gpu, GpuOptions};
 use lf_pipeline::passes::{copy, gaussian};
+use lf_pipeline::test_support::shared_gpu;
 use lf_pipeline::texture::{Source, Target, read_back};
 
 #[test]
 fn gpu_or_a_clear_error() {
-    match Gpu::new() {
-        Ok(g) => assert!(g.max_edge() >= 4096),
-        Err(e) => panic!("{e}"),
-    }
+    // The shared test device: opening it panics with the error's message.
+    let g = shared_gpu();
+    assert!(g.max_edge() >= 4096);
 }
 
 #[test]
@@ -30,7 +30,7 @@ fn forbidding_the_fallback_without_hardware_is_a_named_error() {
 
 #[test]
 fn a_photo_over_the_texture_limit_is_refused() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let limit = gpu.max_edge();
     let err = Source::upload_size_check(&gpu, limit + 1, 10).unwrap_err();
     assert!(matches!(err, PipelineError::TooLarge { .. }));
@@ -39,7 +39,7 @@ fn a_photo_over_the_texture_limit_is_refused() {
 
 #[test]
 fn an_empty_image_is_refused() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let err = Target::new(&gpu, 0, 5, false).err().unwrap();
     assert!(matches!(err, PipelineError::EmptyImage));
     assert_eq!(err.to_string(), "The photo has no pixels.");
@@ -49,17 +49,17 @@ fn an_empty_image_is_refused() {
     ));
 
     let empty = RgbaImage::new(0, 10);
-    let r = lf_pipeline::Renderer::new(&gpu, &empty, 0, 10);
+    let r = lf_pipeline::Renderer::new(gpu.clone(), &empty, 0, 10);
     assert!(matches!(r.err(), Some(PipelineError::EmptyImage)));
     // A real image with a zero full size would give an infinite scale.
     let one = RgbaImage::new(4, 4);
-    let r = lf_pipeline::Renderer::new(&gpu, &one, 0, 4);
+    let r = lf_pipeline::Renderer::new(gpu.clone(), &one, 0, 4);
     assert!(matches!(r.err(), Some(PipelineError::EmptyImage)));
 }
 
 #[test]
 fn copy_round_trips_a_picture() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let img = checker(37, 23);
     let src = Source::upload(&gpu, &img, false).unwrap();
     let dst = Target::new(&gpu, 37, 23, false).unwrap();
@@ -69,7 +69,7 @@ fn copy_round_trips_a_picture() {
 
 #[test]
 fn mip_level_one_is_the_box_average_of_an_even_picture() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let img = gradient(8, 4); // values chosen so every 2x2 average is exact in 8 bits
     let src = Source::upload(&gpu, &img, true).unwrap();
     let level1 = read_back_level(&gpu, &src, 1).unwrap();
@@ -83,7 +83,7 @@ fn mip_level_one_is_the_box_average_of_an_even_picture() {
 
 #[test]
 fn gaussian_matches_the_cpu_kernel() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let img = noise(64, 48, 7);
     let (src, to, tmp) = (
         Source::upload(&gpu, &img, false).unwrap(),
@@ -98,7 +98,7 @@ fn gaussian_matches_the_cpu_kernel() {
 
 #[test]
 fn a_wide_gaussian_is_capped_at_64_taps_like_the_cpu_kernel() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let img = noise(160, 96, 11);
     let (src, to, tmp) = (
         Source::upload(&gpu, &img, false).unwrap(),
@@ -112,7 +112,7 @@ fn a_wide_gaussian_is_capped_at_64_taps_like_the_cpu_kernel() {
 
 #[test]
 fn mip_level_one_of_an_odd_picture_samples_the_larger_level_at_its_texel_centres() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     let img = noise(7, 5, 3);
     let src = Source::upload(&gpu, &img, true).unwrap();
     let level1 = read_back_level(&gpu, &src, 1).unwrap();
@@ -126,7 +126,7 @@ fn mip_level_one_of_an_odd_picture_samples_the_larger_level_at_its_texel_centres
 
 #[test]
 fn every_wgsl_module_validates() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = shared_gpu();
     for (name, source) in lf_pipeline::passes::SHADERS {
         let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let _module = gpu
@@ -252,4 +252,35 @@ fn max_abs_diff(a: &RgbaImage, b: &RgbaImage) -> u8 {
         .map(|(x, y)| x.abs_diff(*y))
         .max()
         .unwrap_or(0)
+}
+
+#[test]
+fn banded_readback_matches_single_buffer() {
+    use lf_pipeline::texture::{FLOAT_FORMAT, read_back_f16, read_back_with_band_rows};
+    let gpu = shared_gpu();
+    // 1024 x 1024 with bands of 100 rows: ten full bands and a short last one.
+    let img = noise(1024, 1024, 5);
+    let t = Source::upload(&gpu, &img, false).unwrap();
+    let whole = read_back(&gpu, &t).unwrap();
+    assert_eq!(whole, img);
+    let (w, h, banded) = read_back_with_band_rows(&gpu, &t, 0, 100).unwrap();
+    assert_eq!((w, h), (1024, 1024));
+    assert!(banded == *whole.as_raw(), "8-bit bands differ");
+    // One row per band, on an odd width (padded rows).
+    let odd = noise(37, 23, 9);
+    let t = Source::upload(&gpu, &odd, false).unwrap();
+    let (_, _, rows) = read_back_with_band_rows(&gpu, &t, 0, 1).unwrap();
+    assert!(rows == *odd.as_raw(), "one-row bands differ");
+
+    // Half floats take the same path at 8 bytes a texel.
+    let f = Target::new_with(&gpu, 300, 210, false, FLOAT_FORMAT).unwrap();
+    copy::run(
+        &gpu,
+        &Source::upload(&gpu, &noise(300, 210, 2), false).unwrap(),
+        &f,
+    );
+    let frame = read_back_f16(&gpu, &f).unwrap();
+    let (_, _, bytes) = read_back_with_band_rows(&gpu, &f, 0, 64).unwrap();
+    let want: Vec<u8> = frame.data.iter().flat_map(|v| v.to_le_bytes()).collect();
+    assert!(bytes == want, "half-float bands differ");
 }

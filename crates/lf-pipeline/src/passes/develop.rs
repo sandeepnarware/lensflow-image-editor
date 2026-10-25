@@ -172,10 +172,23 @@ pub struct Inputs<'a> {
     pub curve: &'a Target,
 }
 
-/// Draws the develop pass into level 0 of `dst`.
-pub fn run(gpu: &Gpu, inputs: &Inputs, uniforms: &Uniforms, dst: &Target) {
+/// A one-entry arena for the develop uniforms, to pass to [`run`] draw after draw.
+pub fn arena(gpu: &Gpu) -> UniformArena {
+    let zero: Uniforms = bytemuck::Zeroable::zeroed();
+    UniformArena::new(gpu, "develop uniforms", &[zero])
+}
+
+/// Draws the develop pass into level 0 of `dst`, its uniforms written into `arena` (reused,
+/// see [`arena`]).
+pub fn run(
+    gpu: &Gpu,
+    inputs: &Inputs,
+    uniforms: &Uniforms,
+    arena: &mut UniformArena,
+    dst: &Target,
+) {
     let pass = &gpu.pipelines.develop;
-    let arena = UniformArena::new(gpu, "develop uniforms", std::slice::from_ref(uniforms));
+    arena.write(gpu, "develop uniforms", std::slice::from_ref(uniforms));
     let textures = [
         inputs.image,
         inputs.blur_m,
