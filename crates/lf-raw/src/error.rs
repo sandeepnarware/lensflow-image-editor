@@ -13,7 +13,7 @@ pub enum RawError {
     },
     #[error("{}: the file looks damaged and could not be decoded ({reason})", path.display())]
     Corrupt { path: PathBuf, reason: String },
-    #[error("{}: is not a RAW photo", path.display())]
+    #[error("{} is not a photo this app can open.", path.display())]
     NotAnImage { path: PathBuf },
     #[error("the photo has no pixels inside its crop")]
     Empty,

@@ -1,8 +1,18 @@
 //! Decoding of camera RAW files into sensor data (via rawler), and developing it
 //! into a picture ([`develop`]).
+//!
+//! ## Panics
+//!
+//! rawler can panic on malformed files. Every rawler call made here runs under
+//! `std::panic::catch_unwind` and a panic becomes [`RawError::Corrupt`] ("the
+//! decoder failed on this file"); rawler's own decode does the same internally.
+//! Both depend on unwinding, so **every profile that builds this crate must keep
+//! `panic = "unwind"`** (the default): with `panic = "abort"` a bad RAW file would
+//! end the process.
 
 pub mod cache;
 pub mod color;
+mod container;
 pub mod curve;
 pub mod decode;
 pub mod demosaic;

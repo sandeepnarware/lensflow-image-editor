@@ -279,7 +279,7 @@ fn orient_rgba8_matches_hand_computed_tables_and_develop_rgb8() {
     ];
     for (o, dims, reds) in expected {
         let orientation = Orientation::from_exif(o as u16);
-        let out = orient_rgba8(&img, orientation);
+        let out = orient_rgba8(img.clone(), orientation);
         assert_eq!(out.dimensions(), dims, "orientation {o}");
         let got: Vec<u8> = out.pixels().map(|p| p.0[0]).collect();
         assert_eq!(got, reds, "orientation {o}");
@@ -296,37 +296,75 @@ fn orient_rgba8_matches_hand_computed_tables_and_develop_rgb8() {
     }
 }
 
-/// A one-strip 4x4 greyscale TIFF whose IFD0 also carries `extra` entries
-/// (tag, type, count, value-or-offset), little-endian, values inline.
-fn hand_tiff(extra: &[(u16, u16, u32, [u8; 4])]) -> Vec<u8> {
-    let mut entries: Vec<(u16, u16, u32, [u8; 4])> = vec![
-        (0x0100, 3, 1, [4, 0, 0, 0]),
-        (0x0101, 3, 1, [4, 0, 0, 0]),
-        (0x0102, 3, 1, [8, 0, 0, 0]),
-        (0x0103, 3, 1, [1, 0, 0, 0]),
-        (0x0106, 3, 1, [1, 0, 0, 0]),
-        (0x0111, 4, 1, [0, 0, 0, 0]), // patched below
-        (0x0115, 3, 1, [1, 0, 0, 0]),
-        (0x0116, 3, 1, [4, 0, 0, 0]),
-        (0x0117, 4, 1, [16, 0, 0, 0]),
+/// One IFD entry for [`hand_tiff`]: tag, type, count and the value bytes (stored
+/// out of line when longer than 4).
+type Entry = (u16, u16, u32, Vec<u8>);
+
+fn ascii(tag: u16, s: &str) -> Entry {
+    let mut v = s.as_bytes().to_vec();
+    v.push(0);
+    (tag, 2, v.len() as u32, v)
+}
+
+fn short(tag: u16, vals: &[u16]) -> Entry {
+    let v = vals.iter().flat_map(|x| x.to_le_bytes()).collect();
+    (tag, 3, vals.len() as u32, v)
+}
+
+fn long(tag: u16, val: u32) -> Entry {
+    (tag, 4, 1, val.to_le_bytes().to_vec())
+}
+
+/// A one-strip 4x4 8-bit TIFF, little-endian: RGB when `rgb`, else greyscale. Entries
+/// in `extra` replace the base ones with the same tag.
+fn hand_tiff(rgb: bool, extra: &[Entry]) -> Vec<u8> {
+    let spp: u16 = if rgb { 3 } else { 1 };
+    let mut entries: Vec<Entry> = vec![
+        long(0x0100, 4),
+        long(0x0101, 4),
+        short(0x0102, &vec![8; spp as usize]),
+        short(0x0103, &[1]),
+        short(0x0106, &[if rgb { 2 } else { 1 }]),
+        long(0x0111, 0), // patched below
+        short(0x0115, &[spp]),
+        long(0x0116, 4),
+        long(0x0117, 16 * spp as u32),
     ];
+    entries.retain(|e| !extra.iter().any(|x| x.0 == e.0));
     entries.extend_from_slice(extra);
     entries.sort_by_key(|e| e.0);
-    let data_at = 8 + 2 + entries.len() as u32 * 12 + 4;
-    let mut out = b"II*\0".to_vec();
-    out.extend_from_slice(&8u32.to_le_bytes());
-    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
-    for (tag, ty, count, mut val) in entries {
-        if tag == 0x0111 {
-            val = data_at.to_le_bytes();
+    let ifd_len = 2 + entries.len() as u32 * 12 + 4;
+    let mut data_at = 8 + ifd_len;
+    let mut out_of_line = Vec::new();
+    let mut ifd = (entries.len() as u16).to_le_bytes().to_vec();
+    let mut strip_entry = 0;
+    for (tag, ty, count, val) in &entries {
+        ifd.extend_from_slice(&tag.to_le_bytes());
+        ifd.extend_from_slice(&ty.to_le_bytes());
+        ifd.extend_from_slice(&count.to_le_bytes());
+        if *tag == 0x0111 {
+            strip_entry = ifd.len();
         }
-        out.extend_from_slice(&tag.to_le_bytes());
-        out.extend_from_slice(&ty.to_le_bytes());
-        out.extend_from_slice(&count.to_le_bytes());
-        out.extend_from_slice(&val);
+        if val.len() <= 4 {
+            let mut v = val.clone();
+            v.resize(4, 0);
+            ifd.extend_from_slice(&v);
+        } else {
+            ifd.extend_from_slice(&data_at.to_le_bytes());
+            out_of_line.extend_from_slice(val);
+            if val.len() % 2 == 1 {
+                out_of_line.push(0);
+            }
+            data_at = 8 + ifd_len + out_of_line.len() as u32;
+        }
     }
-    out.extend_from_slice(&[0, 0, 0, 0]);
-    out.extend_from_slice(&[7u8; 16]);
+    ifd.extend_from_slice(&[0, 0, 0, 0]);
+    ifd[strip_entry..strip_entry + 4].copy_from_slice(&data_at.to_le_bytes());
+    let mut out = b"II* ".to_vec();
+    out.extend_from_slice(&8u32.to_le_bytes());
+    out.extend_from_slice(&ifd);
+    out.extend_from_slice(&out_of_line);
+    out.extend_from_slice(&vec![7u8; 16 * spp as usize]);
     out
 }
 
@@ -335,7 +373,8 @@ fn a_dng_tagged_tiff_is_never_opened_as_a_preview() {
     let path = tmp("fake.dng");
     // DNGVersion 1.4.0.0 on an otherwise bare 4x4 image (rawler takes it as a DNG and
     // then finds no CFA layout).
-    std::fs::write(&path, hand_tiff(&[(0xC612, 1, 4, [1, 4, 0, 0])])).unwrap();
+    std::fs::write(&path, hand_tiff(false, &[(0xC612, 1, 4, vec![1, 4, 0, 0])])).unwrap();
+    assert_eq!(sniff(&path).unwrap(), Kind::Raw);
     let r = open_default(&path);
     assert!(
         matches!(
@@ -348,18 +387,22 @@ fn a_dng_tagged_tiff_is_never_opened_as_a_preview() {
 }
 
 #[test]
-fn a_camera_tiff_rawler_rejects_is_unsupported_naming_the_camera() {
+fn a_cfa_tiff_rawler_rejects_is_unsupported_naming_the_camera() {
     let path = tmp("acme.nef");
-    // Make "Acm", Model "X1", and a SubIFDs tag, as camera RAW containers carry.
-    let tiff = hand_tiff(&[
-        (0x010F, 2, 4, *b"Acm "),
-        (0x0110, 2, 3, *b"X1  "),
-        (0x014A, 4, 1, [0, 0, 0, 0]),
-    ]);
+    // Make "Acme", Model "X1" and CFA sensor data: a RAW from a maker rawler lacks.
+    let tiff = hand_tiff(
+        false,
+        &[
+            ascii(0x010F, "Acme"),
+            ascii(0x0110, "X1"),
+            short(0x0106, &[32803]),
+        ],
+    );
     std::fs::write(&path, tiff).unwrap();
+    assert_eq!(sniff(&path).unwrap(), Kind::Raw);
     match open_default(&path) {
         Err(RawError::Unsupported { reason, .. }) => {
-            assert_eq!(reason, "Acm X1 RAW files aren’t supported yet.")
+            assert_eq!(reason, "Acme X1 RAW files aren’t supported yet.")
         }
         other => panic!("{other:?}"),
     }
@@ -367,12 +410,56 @@ fn a_camera_tiff_rawler_rejects_is_unsupported_naming_the_camera() {
 }
 
 #[test]
+fn camera_maker_tiff_exports_open_as_pictures() {
+    // Lightroom, Photoshop and DPP keep the camera's Make and Model in exported TIFFs;
+    // rawler would pick its CR2 (Canon) or 3FR (Hasselblad) decoder by Make alone.
+    for (make, model) in [
+        ("Canon", "Canon EOS R5"),
+        ("Canon", "Canon EOS 5D Mark IV"),
+        ("Hasselblad", "X2D 100C"),
+        ("NIKON CORPORATION", "NIKON Z 8"),
+        ("SONY", "ILCE-7RM5"),
+    ] {
+        let path = tmp(&format!("export-{}.tif", make.replace(' ', "_")));
+        let tiff = hand_tiff(
+            true,
+            &[
+                ascii(0x010F, make),
+                ascii(0x0110, model),
+                ascii(0x0131, "Adobe Photoshop Lightroom Classic 13.0 (Windows)"),
+                long(0x014A, 0),
+            ],
+        );
+        std::fs::write(&path, tiff).unwrap();
+        assert_eq!(sniff(&path).unwrap(), Kind::Tiff, "{make}");
+        let o = open_default(&path).unwrap_or_else(|e| panic!("{make}: {e}"));
+        assert_eq!(o.kind, Kind::Tiff);
+        assert_eq!(eight(&o).dimensions(), (4, 4));
+        assert_eq!(eight(&o).get_pixel(1, 1).0, [7, 7, 7, 255]);
+        assert_eq!(o.exif.make.as_deref(), Some(make));
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+#[test]
 fn a_bare_hand_built_tiff_still_opens_as_a_picture() {
     let path = tmp("bare.tif");
-    std::fs::write(&path, hand_tiff(&[])).unwrap();
+    std::fs::write(&path, hand_tiff(false, &[])).unwrap();
     let o = open_default(&path).unwrap();
     assert_eq!(o.kind, Kind::Tiff);
     assert_eq!(eight(&o).dimensions(), (4, 4));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn not_an_image_message_is_plain() {
+    let path = tmp("notes2.txt");
+    std::fs::write(&path, "hello").unwrap();
+    let e = open_default(&path).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        format!("{} is not a photo this app can open.", path.display())
+    );
     let _ = std::fs::remove_file(path);
 }
 
