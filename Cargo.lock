@@ -170,6 +170,11 @@ version = "0.1.0"
 [[package]]
 name = "lf-settings"
 version = "0.1.0"
+dependencies = [
+ "lf-fixtures",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "libc"
