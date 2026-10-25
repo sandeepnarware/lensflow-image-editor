@@ -9,6 +9,7 @@ use image::{Rgb, Rgb32FImage, Rgba, RgbaImage};
 use lf_pipeline::test_support::try_shared_gpu;
 use lf_pipeline::{Gpu, Renderer};
 use lf_raw::color::XYZ_D65_TO_LINEAR_SRGB;
+use lf_raw::decode::decode_raw;
 use lf_raw::demosaic::Quality;
 use lf_raw::open::{Picture, open};
 use lf_raw::render::renderer_for;
@@ -47,7 +48,10 @@ fn temp(name: &str) -> PathBuf {
 fn headroom_is_recoverable_by_the_chain() {
     let Some(gpu) = gpu() else { return };
 
-    // RAW: grey with a patch at linear 3.0.
+    // RAW: grey with a patch at linear 3.0. The DNG writer clips the patch at sensor
+    // white, so what reaches the chain is a reconstructed neutral at luma ~1.25 (WB
+    // [2, 1, 1.5] on a clipped (1, 1, 1)), about 1.065 after the camera curve and gamma:
+    // above display white, with headroom to pull back.
     let linear = Rgb32FImage::from_fn(48, 48, |x, y| {
         let v = if patch(x, y) { 3.0 } else { 0.18 };
         Rgb([v, v, v])
@@ -70,7 +74,10 @@ fn headroom_is_recoverable_by_the_chain() {
     let pulled = centre(&float.render(&settings(-100.0)).unwrap());
     println!("RAW patch: default {plain:?}, highlights -100 {pulled:?}");
     assert_eq!(plain, [255; 3]);
-    assert!(pulled.iter().all(|&v| v < 255), "{pulled:?}");
+    assert!(
+        pulled.iter().all(|&v| (180..=200).contains(&v)),
+        "{pulled:?}"
+    );
     let spread = pulled.iter().max().unwrap() - pulled.iter().min().unwrap();
     assert!(spread <= 2, "{pulled:?}");
 
@@ -92,21 +99,27 @@ fn headroom_is_recoverable_by_the_chain() {
     // patch at white pulls to about 0.7 * 255 = 178 and no further: it has no headroom to
     // recover. The RAW patch kept its brightness above white, so it lands higher.
     assert!(kept.iter().all(|&v| (170..=186).contains(&v)), "{kept:?}");
-    assert!(pulled[0] > kept[0], "{pulled:?} vs {kept:?}");
+    assert!(pulled[0] >= kept[0] + 8, "{pulled:?} vs {kept:?}");
     let _: &Renderer = &eight;
 }
 
 #[test]
 fn a_corpus_file_renders_through_the_float_path() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/raw-samples/files");
-    let smallest = std::fs::read_dir(&dir)
+    // The smallest Bayer file: the corpus also holds a Canon sRAW (already RGB) and an
+    // X-Trans file, which do not take the Bayer demosaic.
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
         .into_iter()
         .flatten()
         .flatten()
         .filter(|e| e.path().is_file())
-        .min_by_key(|e| e.metadata().map(|m| m.len()).unwrap_or(u64::MAX));
+        .collect();
+    files.sort_by_key(|e| e.metadata().map(|m| m.len()).unwrap_or(u64::MAX));
+    let smallest = files
+        .into_iter()
+        .find(|e| decode_raw(&e.path()).is_ok_and(|f| matches!(f.cfa, lf_raw::Cfa::Bayer { .. })));
     let Some(smallest) = smallest else {
-        println!("skipped: no RAW samples (run scripts/fetch-raw-samples.sh)");
+        println!("skipped: no Bayer RAW samples (run scripts/fetch-raw-samples.sh)");
         return;
     };
     let Some(gpu) = gpu() else { return };
@@ -123,7 +136,13 @@ fn a_corpus_file_renders_through_the_float_path() {
     let out = r.render(&s).unwrap();
     let (ow, oh) = r.output_size(&s);
     let (w, h) = out.dimensions();
-    let long = opened.full_width.max(opened.full_height).min(2048);
+    // The developed frame is box-reduced by an integer factor to at most 2048, and the
+    // render comes out at the output size scaled the same way.
+    let Picture::Float(dev) = &opened.picture else {
+        unreachable!()
+    };
+    let long = dev.frame.width.max(dev.frame.height);
+    assert!(long <= 2048, "developed long edge {long}");
     let scale = f64::from(long) / f64::from(opened.full_width.max(opened.full_height));
     assert_eq!(
         (w, h),
@@ -134,6 +153,7 @@ fn a_corpus_file_renders_through_the_float_path() {
         "{}",
         smallest.path().display()
     );
+    assert!(w.max(h) <= 2048, "{w}x{h}");
     let mean = out
         .pixels()
         .flat_map(|p| p.0[..3].iter().copied())

@@ -91,6 +91,7 @@ impl CacheKey {
             match quality {
                 Quality::Fast => "fast",
                 Quality::Best => "best",
+                Quality::Preview => "preview",
             }
             .as_bytes(),
         );

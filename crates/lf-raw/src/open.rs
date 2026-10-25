@@ -105,19 +105,23 @@ fn read_head(path: &Path) -> Result<Vec<u8>, RawError> {
     Ok(head)
 }
 
-/// Is this TIFF-magic file a RAW container (DNG, NEF, CR2, ARW, PEF...)? Decided by
-/// asking rawler whether it recognises the camera.
-fn rawler_recognises(path: &Path) -> bool {
-    rawler::rawsource::RawSource::new(path)
-        .ok()
-        .is_some_and(|src| rawler::get_decoder(&src).is_ok())
-}
-
-/// The kind of file at `path`, from its magic bytes.
+/// The kind of file at `path`, from its magic bytes. A TIFF-magic file is `Raw` only
+/// on RAW evidence in its structure ([`crate::container`]: DNGVersion, the CR2
+/// signature, or CFA / LinearRaw sensor data), never because of its `Make`.
 pub fn sniff(path: &Path) -> Result<Kind, RawError> {
     let head = read_head(path)?;
     Ok(match kind_of_head(&head) {
-        Kind::Tiff if rawler_recognises(path) => Kind::Raw,
+        Kind::Tiff => {
+            let src = rawler::rawsource::RawSource::new(path).map_err(|source| RawError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            let raw = crate::decode::guarded(path, || {
+                crate::decode::maybe_inject_panic();
+                Ok(crate::container::tiff_is_raw(src.buf()))
+            })?;
+            if raw { Kind::Raw } else { Kind::Tiff }
+        }
         k => k,
     })
 }
@@ -134,7 +138,7 @@ pub fn summary(path: &Path) -> Result<Summary, RawError> {
     let kind = sniff(path)?;
     match kind {
         Kind::Raw => {
-            let mut exif = raw_summary(path);
+            let mut exif = raw_summary(path)?;
             let size = raw_dimensions(path).map(|(w, h, o)| {
                 exif.orientation = o;
                 if o >= 5 { (h, w) } else { (w, h) }
@@ -185,7 +189,7 @@ pub fn open(
     match kind {
         Kind::Raw => {
             let frame = decode_raw(path)?;
-            let mut exif = raw_summary(path);
+            let mut exif = raw_summary(path)?;
             exif.orientation = frame.orientation.exif();
             if exif.make.is_none() && !frame.make.is_empty() {
                 exif.make = Some(frame.make.clone());
@@ -225,14 +229,6 @@ pub fn open(
                 path: path.to_path_buf(),
                 source,
             })?;
-            if kind == Kind::Tiff
-                && let Some(reason) = unsupported_raw_tiff(path, &bytes)
-            {
-                return Err(RawError::Unsupported {
-                    path: path.to_path_buf(),
-                    reason,
-                });
-            }
             let corrupt = |reason: String| RawError::Corrupt {
                 path: path.to_path_buf(),
                 reason,
@@ -246,11 +242,18 @@ pub fn open(
                 .map_err(|e| corrupt(e.to_string()))?
                 .to_rgba8();
             let exif = read_summary(&bytes);
-            let upright = orient_rgba8(&img, Orientation::from_exif(exif.orientation as u16));
-            let (full_width, full_height) = upright.dimensions();
-            let small = box_downscale_rgba8(&upright, max_edge);
+            let orientation = Orientation::from_exif(exif.orientation as u16);
+            let (w, h) = img.dimensions();
+            let (full_width, full_height) = if orientation.exif() >= 5 {
+                (h, w)
+            } else {
+                (w, h)
+            };
+            // Reduce first, then turn: orienting the smaller picture needs less memory
+            // (the box factor depends only on the long edge, which turning keeps).
+            let small = box_downscale_rgba8(&img, max_edge);
             let reduced = small.is_some();
-            let picture = Picture::EightBit(small.unwrap_or(upright));
+            let picture = Picture::EightBit(orient_rgba8(small.unwrap_or(img), orientation));
             let jpeg_exif_bytes = if kind == Kind::Jpeg {
                 extract_jpeg_exif(&bytes)
             } else {
@@ -269,55 +272,13 @@ pub fn open(
     }
 }
 
-/// A TIFF-magic file rawler did not recognise: is it nonetheless a RAW (so `image`
-/// would only open its tiny preview)? Returns the user-facing reason when so.
-/// (a) rawler named a camera: surface that. (b) otherwise IFD0 is inspected for
-/// DNGVersion, or a Make/Model with SubIFDs or CFAPattern; a plain TIFF has none.
-fn unsupported_raw_tiff(path: &Path, bytes: &[u8]) -> Option<String> {
-    use exif::{Context, In, Reader, Tag};
-    let named = |make: &str, model: &str| {
-        let name = format!("{} {}", make.trim(), model.trim())
-            .trim()
-            .to_string();
-        (!name.is_empty()).then_some(name)
-    };
-    let from_rawler = rawler::rawsource::RawSource::new(path)
-        .ok()
-        .and_then(|src| rawler::get_decoder(&src).err());
-    if let Some(rawler::RawlerError::Unsupported { make, model, .. }) = &from_rawler
-        && let Some(name) = named(make, model)
-    {
-        return Some(format!("{name} RAW files aren’t supported yet."));
-    }
-    let exif = Reader::new()
-        .read_from_container(&mut Cursor::new(bytes))
-        .ok()?;
-    let has = |n: u16| exif.get_field(Tag(Context::Tiff, n), In::PRIMARY).is_some();
-    let text = |tag| {
-        exif.get_field(tag, In::PRIMARY)
-            .map(|f| f.display_value().to_string().trim_matches('"').to_string())
-            .unwrap_or_default()
-    };
-    let (make, model) = (text(Tag::Make), text(Tag::Model));
-    let camera_like = !(make.is_empty() && model.is_empty());
-    if has(0xC612) || (camera_like && (has(0x014A) || has(0x828E))) {
-        Some(match named(&make, &model) {
-            Some(name) => format!("{name} RAW files aren’t supported yet."),
-            None => "This RAW format isn’t supported yet.".to_string(),
-        })
-    } else {
-        None
-    }
-}
-
 /// `(width, height, exif orientation)` of a RAW's usable area from rawler's dummy decode,
 /// which parses headers and allocates no pixel data. Panics inside rawler are caught.
 fn raw_dimensions(path: &Path) -> Option<(u32, u32, u8)> {
     use rawler::decoders::{Orientation as O, RawDecodeParams};
     let src = rawler::rawsource::RawSource::new(path).ok()?;
-    let decoder = rawler::get_decoder(&src).ok()?;
     let img = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        decoder.raw_image(&src, &RawDecodeParams::default(), true)
+        rawler::get_decoder(&src)?.raw_image(&src, &RawDecodeParams::default(), true)
     }))
     .ok()?
     .ok()?;
@@ -341,21 +302,26 @@ fn raw_dimensions(path: &Path) -> Option<(u32, u32, u8)> {
     Some((w, h, o))
 }
 
-/// EXIF facts for a RAW file from rawler's metadata (empty when unavailable).
-fn raw_summary(path: &Path) -> ExifSummary {
-    let mut out = ExifSummary {
+/// EXIF facts for a RAW file from rawler's metadata (empty when unavailable). Only a
+/// rawler panic is an error (`Corrupt`).
+fn raw_summary(path: &Path) -> Result<ExifSummary, RawError> {
+    let empty = ExifSummary {
         orientation: 1,
         ..Default::default()
     };
     let Ok(src) = rawler::rawsource::RawSource::new(path) else {
-        return out;
+        return Ok(empty);
     };
-    let Ok(decoder) = rawler::get_decoder(&src) else {
-        return out;
+    let meta = crate::decode::guarded(path, || {
+        crate::decode::maybe_inject_panic();
+        Ok(rawler::get_decoder(&src)
+            .ok()
+            .and_then(|d| d.raw_metadata(&src, &Default::default()).ok()))
+    })?;
+    let Some(meta) = meta else {
+        return Ok(empty);
     };
-    let Ok(meta) = decoder.raw_metadata(&src, &Default::default()) else {
-        return out;
-    };
+    let mut out = empty;
     let non_empty = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
     let x = &meta.exif;
     out.make = non_empty(&meta.make);
@@ -381,5 +347,5 @@ fn raw_summary(path: &Path) -> ExifSummary {
         .as_deref()
         .or(x.create_date.as_deref())
         .and_then(iso_date);
-    out
+    Ok(out)
 }

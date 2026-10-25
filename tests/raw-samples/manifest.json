@@ -5,7 +5,16 @@
       "url": "https://raw.pixls.us/data/Canon/EOS%2040D/_MG_0154.CR2",
       "sha256": "ba644e7dd2abe74eca260e67f0206ff113bf0f62e710f8130611e964d6be5bf1",
       "bytes": 5805950,
-      "camera": "Canon EOS 40D",
+      "camera": "Canon EOS 40D (sRAW)",
+      "licence": "CC0-1.0",
+      "source": "raw.pixls.us"
+    },
+    {
+      "name": "canon-eos-1d-mark-ii.cr2",
+      "url": "https://raw.pixls.us/data/Canon/EOS-1D%20Mark%20II/RAW_CANON_1DM2.CR2",
+      "sha256": "aa27b723cbf885acae845331a9b5816abe87d6c1158cf57442cbc0b1defb40b5",
+      "bytes": 6953301,
+      "camera": "Canon EOS-1D Mark II (full-resolution Bayer)",
       "licence": "CC0-1.0",
       "source": "raw.pixls.us"
     },

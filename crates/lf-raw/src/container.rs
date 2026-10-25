@@ -1,0 +1,325 @@
+//! Structural checks on RAW containers, made on the file's bytes before rawler sees
+//! them: is a TIFF-magic file a RAW at all ([`tiff_is_raw`]), and does the file hold
+//! all the sensor data its header points to ([`incomplete`])?
+//!
+//! Every read is bounds-checked and the walk is capped (IFD count and depth), so a
+//! hostile header cannot make it panic or loop.
+
+/// PhotometricInterpretation values that only RAW sensor data uses.
+const PHOTOMETRIC_CFA: u64 = 32803;
+const PHOTOMETRIC_LINEAR_RAW: u64 = 34892;
+
+const TAG_PHOTOMETRIC: u16 = 0x0106;
+const TAG_STRIP_OFFSETS: u16 = 0x0111;
+const TAG_STRIP_BYTE_COUNTS: u16 = 0x0117;
+const TAG_TILE_OFFSETS: u16 = 0x0144;
+const TAG_TILE_BYTE_COUNTS: u16 = 0x0145;
+const TAG_SUB_IFDS: u16 = 0x014A;
+/// Panasonic RW2's RawDataOffset.
+const TAG_RW2_RAW_DATA_OFFSET: u16 = 0x0118;
+const TAG_DNG_VERSION: u16 = 0xC612;
+
+/// Most IFDs visited in one file, and the deepest SubIFD nesting followed.
+const MAX_IFDS: usize = 64;
+const MAX_DEPTH: usize = 4;
+
+/// What the walk keeps of one IFD.
+#[derive(Debug, Default)]
+struct Ifd {
+    photometric: Option<u64>,
+    dng_version: bool,
+    /// (offset, byte count) of each strip or tile; byte count `None` when the IFD
+    /// has offsets but no counts.
+    chunks: Vec<(u64, Option<u64>)>,
+    /// RW2 only: where the sensor data starts.
+    rw2_raw_data: Option<u64>,
+}
+
+struct Tiff<'a> {
+    b: &'a [u8],
+    little: bool,
+}
+
+impl Tiff<'_> {
+    fn u16_at(&self, at: u64) -> Option<u16> {
+        let at = usize::try_from(at).ok()?;
+        let s: [u8; 2] = self.b.get(at..at.checked_add(2)?)?.try_into().ok()?;
+        Some(if self.little {
+            u16::from_le_bytes(s)
+        } else {
+            u16::from_be_bytes(s)
+        })
+    }
+
+    fn u32_at(&self, at: u64) -> Option<u32> {
+        let at = usize::try_from(at).ok()?;
+        let s: [u8; 4] = self.b.get(at..at.checked_add(4)?)?.try_into().ok()?;
+        Some(if self.little {
+            u32::from_le_bytes(s)
+        } else {
+            u32::from_be_bytes(s)
+        })
+    }
+
+    /// The SHORT / LONG / IFD values of the entry at `entry` (at most `cap` of them).
+    fn values(&self, entry: u64, cap: usize) -> Vec<u64> {
+        let (Some(kind), Some(count)) = (self.u16_at(entry + 2), self.u32_at(entry + 4)) else {
+            return Vec::new();
+        };
+        let size: u64 = match kind {
+            3 => 2,
+            4 | 13 => 4,
+            _ => return Vec::new(),
+        };
+        let count = u64::from(count).min(cap as u64);
+        let base = if size * count <= 4 {
+            entry + 8
+        } else {
+            match self.u32_at(entry + 8) {
+                Some(o) => u64::from(o),
+                None => return Vec::new(),
+            }
+        };
+        (0..count)
+            .map_while(|i| {
+                let at = base + i * size;
+                if size == 2 {
+                    self.u16_at(at).map(u64::from)
+                } else {
+                    self.u32_at(at).map(u64::from)
+                }
+            })
+            .collect()
+    }
+
+    /// Every IFD reachable from the header: the IFD0 chain and SubIFDs, recursively.
+    fn walk(&self, first: u64) -> Vec<Ifd> {
+        let mut out = Vec::new();
+        let mut seen = Vec::new();
+        let mut queue = vec![(first, 0usize)];
+        // IFD0's chain is followed through `next`, SubIFDs through the queue.
+        while let Some((start, depth)) = queue.pop() {
+            let mut at = start;
+            while at != 0 && out.len() < MAX_IFDS && !seen.contains(&at) {
+                seen.push(at);
+                let Some(n) = self.u16_at(at) else { break };
+                let mut ifd = Ifd::default();
+                let (mut offsets, mut counts) = (Vec::new(), Vec::new());
+                for i in 0..u64::from(n) {
+                    let e = at + 2 + i * 12;
+                    let Some(tag) = self.u16_at(e) else { break };
+                    match tag {
+                        TAG_PHOTOMETRIC => ifd.photometric = self.values(e, 1).first().copied(),
+                        TAG_DNG_VERSION => ifd.dng_version = true,
+                        TAG_RW2_RAW_DATA_OFFSET => {
+                            ifd.rw2_raw_data = self.values(e, 1).first().copied()
+                        }
+                        TAG_STRIP_OFFSETS | TAG_TILE_OFFSETS => offsets = self.values(e, 1 << 16),
+                        TAG_STRIP_BYTE_COUNTS | TAG_TILE_BYTE_COUNTS => {
+                            counts = self.values(e, 1 << 16)
+                        }
+                        TAG_SUB_IFDS if depth < MAX_DEPTH => {
+                            for sub in self.values(e, 16) {
+                                queue.push((sub, depth + 1));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                ifd.chunks = offsets
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &o)| (o, counts.get(i).copied()))
+                    .collect();
+                out.push(ifd);
+                at = self.u32_at(at + 2 + u64::from(n) * 12).map_or(0, u64::from);
+            }
+        }
+        out
+    }
+}
+
+/// The TIFF-family header at the start of `b` (TIFF, ORF's `IIRO`/`IIRS`/`MMOR`,
+/// RW2's `IIU\0`): the reader and IFD0's offset.
+fn tiff_header(b: &[u8]) -> Option<(Tiff<'_>, u64)> {
+    let little = match b.get(..4)? {
+        b"II*\0" | b"IIRO" | b"IIRS" | b"IIU\0" => true,
+        b"MM\0*" | b"MMOR" => false,
+        _ => return None,
+    };
+    let t = Tiff { b, little };
+    let first = u64::from(t.u32_at(4)?);
+    Some((t, first))
+}
+
+/// Does this TIFF-magic file carry RAW sensor data? Only on RAW evidence: a
+/// `DNGVersion` tag, the CR2 signature (`CR\x02\0` at bytes 8..12), or an IFD or
+/// SubIFD whose PhotometricInterpretation is CFA (32803) or LinearRaw (34892). A
+/// camera maker's name is not evidence: Lightroom, Photoshop and DPP write TIFFs
+/// with `Make=Canon`.
+pub(crate) fn tiff_is_raw(b: &[u8]) -> bool {
+    if b.get(8..12) == Some(b"CR\x02\0".as_slice()) {
+        return true;
+    }
+    let Some((t, first)) = tiff_header(b) else {
+        return false;
+    };
+    t.walk(first).iter().any(|ifd| {
+        ifd.dng_version
+            || matches!(
+                ifd.photometric,
+                Some(PHOTOMETRIC_CFA | PHOTOMETRIC_LINEAR_RAW)
+            )
+    })
+}
+
+/// None when the file holds all the sensor data its header points to; otherwise the
+/// user-facing reason ("the file is incomplete").
+///
+/// - TIFF family (DNG, CR2, NEF, ARW, PEF, ORF and the rest): the IFD with the most
+///   image data (the sensor data in every RAW layout) must have every strip or tile
+///   inside the file; where it lists offsets without byte counts, the offsets must be.
+/// - RW2: only that RawDataOffset lies inside the file. The compressed data's length
+///   is recorded nowhere, so a file cut inside the sensor data is not caught here
+///   (rawler's Panasonic decompressor then panics, which the panic guard turns into
+///   `Corrupt`).
+/// - RAF: the CFA block named in the header (offset and length at bytes 100..108).
+/// - CR3 (ISO BMFF): every top-level box must end inside the file.
+/// - Other containers (CRW, MRW, X3F, ...) are not checked; rawler reads past their
+///   end as an error or as zeros, depending on the decoder.
+pub(crate) fn incomplete(b: &[u8]) -> Option<&'static str> {
+    const REASON: &str = "the file is incomplete";
+    let len = b.len() as u64;
+    if let Some((t, first)) = tiff_header(b) {
+        let ifds = t.walk(first);
+        if b.starts_with(b"IIU\0") {
+            // RW2's StripOffsets / StripByteCounts are placeholders (an offset of
+            // 0xFFFFFFFF, the uncompressed size); only RawDataOffset is real, and the
+            // compressed data's length is not recorded.
+            let off = ifds.iter().find_map(|ifd| ifd.rw2_raw_data);
+            return off.is_some_and(|o| o >= len).then_some(REASON);
+        }
+        let size = |ifd: &Ifd| -> u64 { ifd.chunks.iter().filter_map(|c| c.1).sum() };
+        let raw = ifds.iter().max_by_key(|ifd| size(ifd))?;
+        let past_end = raw.chunks.iter().any(|&(off, count)| match count {
+            Some(n) => off.saturating_add(n) > len,
+            None => off >= len,
+        });
+        return past_end.then_some(REASON);
+    }
+    if b.starts_with(b"FUJIFILM") {
+        let be32 = |at: usize| {
+            b.get(at..at + 4)
+                .map(|s| u64::from(u32::from_be_bytes([s[0], s[1], s[2], s[3]])))
+        };
+        return match (be32(100), be32(104)) {
+            (Some(off), Some(n)) if off.saturating_add(n) <= len => None,
+            _ => Some(REASON),
+        };
+    }
+    if b.get(4..8) == Some(b"ftyp".as_slice()) {
+        let mut at = 0u64;
+        while at < len {
+            let start = at as usize;
+            let Some(head) = b.get(start..start + 8) else {
+                return Some(REASON);
+            };
+            let size = u64::from(u32::from_be_bytes([head[0], head[1], head[2], head[3]]));
+            let size = match size {
+                0 => len - at,
+                1 => match b.get(start + 8..start + 16) {
+                    Some(s) => u64::from_be_bytes(s.try_into().unwrap_or([0; 8])),
+                    None => return Some(REASON),
+                },
+                n => n,
+            };
+            if size < 8 || at.saturating_add(size) > len {
+                return Some(REASON);
+            }
+            at += size;
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A little-endian TIFF: IFD0 with `entries` (tag, type, count, inline value)
+    /// at offset 8, followed by `tail` bytes.
+    fn tiff(entries: &[(u16, u16, u32, u32)], tail: usize) -> Vec<u8> {
+        let mut b = b"II*\0".to_vec();
+        b.extend_from_slice(&8u32.to_le_bytes());
+        b.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for &(tag, kind, count, v) in entries {
+            b.extend_from_slice(&tag.to_le_bytes());
+            b.extend_from_slice(&kind.to_le_bytes());
+            b.extend_from_slice(&count.to_le_bytes());
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.resize(b.len() + tail, 0);
+        b
+    }
+
+    #[test]
+    fn photometric_cfa_and_linear_raw_are_raw_evidence() {
+        assert!(tiff_is_raw(&tiff(&[(0x0106, 3, 1, 32803)], 0)));
+        assert!(tiff_is_raw(&tiff(&[(0x0106, 3, 1, 34892)], 0)));
+        assert!(!tiff_is_raw(&tiff(&[(0x0106, 3, 1, 2)], 0)));
+        assert!(tiff_is_raw(&tiff(&[(0xC612, 1, 4, 0x0104)], 0)));
+    }
+
+    #[test]
+    fn a_cfa_sub_ifd_is_found() {
+        // IFD0 (RGB preview) -> SubIFD at 100 with photometric CFA.
+        let mut b = tiff(&[(0x0106, 3, 1, 2), (0x014A, 4, 1, 100)], 200);
+        let sub = [
+            1u8, 0, 0x06, 0x01, 3, 0, 1, 0, 0, 0, 0x23, 0x80, 0, 0, 0, 0, 0, 0,
+        ];
+        b[100..100 + sub.len()].copy_from_slice(&sub);
+        assert!(tiff_is_raw(&b));
+    }
+
+    #[test]
+    fn hostile_headers_do_not_panic_or_loop() {
+        // IFD0 pointing at itself, SubIFD pointing at IFD0, counts far past the end.
+        let b = tiff(
+            &[(0x014A, 4, 1, 8), (0x0111, 4, 0xFFFF_FFFF, 0xFFFF_FFF0)],
+            0,
+        );
+        let mut looped = b.clone();
+        let n = looped.len();
+        looped[n - 4..].copy_from_slice(&8u32.to_le_bytes());
+        for f in [&b, &looped] {
+            assert!(!tiff_is_raw(f));
+            let _ = incomplete(f);
+        }
+        for cut in 0..b.len() {
+            let _ = tiff_is_raw(&b[..cut]);
+            let _ = incomplete(&b[..cut]);
+        }
+    }
+
+    #[test]
+    fn a_strip_past_the_end_is_incomplete() {
+        let ok = tiff(&[(0x0111, 4, 1, 100), (0x0117, 4, 1, 50)], 150);
+        assert_eq!(incomplete(&ok), None);
+        assert_eq!(incomplete(&ok[..149]), Some("the file is incomplete"));
+    }
+
+    #[test]
+    fn a_short_bmff_box_is_incomplete() {
+        let mut b = vec![0, 0, 0, 16];
+        b.extend_from_slice(b"ftypcrx \0\0\0\x01");
+        b.extend_from_slice(&[0, 0, 0, 12]);
+        b.extend_from_slice(b"mdat");
+        b.extend_from_slice(&[0; 4]);
+        assert_eq!(incomplete(&b), None);
+        assert_eq!(
+            incomplete(&b[..b.len() - 1]),
+            Some("the file is incomplete")
+        );
+    }
+}

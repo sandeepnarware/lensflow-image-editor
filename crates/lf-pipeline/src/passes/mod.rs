@@ -347,12 +347,13 @@ impl Pipelines {
             spots: FullscreenPass::new(device, "spots", SPOTS, "fs_spots", true),
             develop: develop::pipeline(device, DEVELOP),
         };
-        // The pipelines every photo needs, built up front as before: the chain in float, the
-        // 8-bit mips (uploads) and the develop pass into the 8-bit output.
+        // The pipelines every photo needs, built up front: the chain passes (and mips) in
+        // both formats, since 8-bit files run the chain in RGBA8 as the web editor does and
+        // RAW runs it in half float, plus the develop pass into the 8-bit output.
         for pass in [&p.copy, &p.mip, &p.gaussian, &p.spots] {
+            pass.pipeline(FORMAT);
             pass.pipeline(FLOAT_FORMAT);
         }
-        p.mip.pipeline(FORMAT);
         p.develop.pipeline(FORMAT);
         p
     }
