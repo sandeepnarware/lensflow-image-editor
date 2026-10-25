@@ -7,6 +7,9 @@ repository.workspace = true
 
 [dependencies]
 lf-settings = { path = "../lf-settings" }
+lf-raw = { path = "../lf-raw" }
+lf-pipeline = { path = "../lf-pipeline" }
+image = { workspace = true, features = ["jpeg"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -15,5 +18,7 @@ chrono.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+lf-pipeline = { path = "../lf-pipeline", features = ["test-support"] }
+filetime = "0.2"
 tempfile = "3"
 chrono.workspace = true

@@ -122,6 +122,47 @@ pub fn sniff(path: &Path) -> Result<Kind, RawError> {
     })
 }
 
+/// What [`summary`] returns: kind, EXIF facts and the size when the headers give it.
+pub type Summary = (Kind, ExifSummary, Option<(u32, u32)>);
+
+/// Kind, EXIF facts and (when the headers give them, after orientation) the size of a file,
+/// without decoding any pixels. RAW sizes are `None`: they need a decode.
+pub fn summary(path: &Path) -> Result<Summary, RawError> {
+    let kind = sniff(path)?;
+    match kind {
+        Kind::Raw => Ok((kind, raw_summary(path), None)),
+        Kind::Heic => Err(RawError::Unsupported {
+            path: path.to_path_buf(),
+            reason: "HEIC files aren’t supported yet.".to_string(),
+        }),
+        Kind::Unknown => Err(RawError::NotAnImage {
+            path: path.to_path_buf(),
+        }),
+        Kind::Jpeg | Kind::Png | Kind::Tiff | Kind::WebP => {
+            let bytes = std::fs::read(path).map_err(|source| RawError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            let corrupt = |reason: String| RawError::Corrupt {
+                path: path.to_path_buf(),
+                reason,
+            };
+            let (w, h) = ImageReader::new(Cursor::new(&bytes))
+                .with_guessed_format()
+                .map_err(|e| corrupt(e.to_string()))?
+                .into_dimensions()
+                .map_err(|e| corrupt(e.to_string()))?;
+            let exif = read_summary(&bytes);
+            let size = if exif.orientation >= 5 {
+                (h, w)
+            } else {
+                (w, h)
+            };
+            Ok((kind, exif, Some(size)))
+        }
+    }
+}
+
 /// Open and develop any supported file, to at most `max_edge` on the long side
 /// (8-bit files by an integer box filter).
 pub fn open(

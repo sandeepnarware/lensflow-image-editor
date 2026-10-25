@@ -31,7 +31,7 @@ fn open_creates_the_schema() {
         assert!(names.iter().any(|n| n == t), "missing table {t}");
     }
     assert!(names.iter().all(|n| n.len() < 64));
-    assert_eq!(c.schema_version().unwrap(), 2);
+    assert_eq!(c.schema_version().unwrap(), 3);
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn reopening_keeps_data_and_does_not_remigrate() {
         c.add_photo(f, &photo("D:/shoot/a.nef")).unwrap()
     };
     let c = Catalog::open(dir.path()).unwrap();
-    assert_eq!(c.schema_version().unwrap(), 2);
+    assert_eq!(c.schema_version().unwrap(), 3);
     let f = c.add_folder("D:/shoot").unwrap();
     assert!(
         c.add_photo(f, &photo("D:/shoot/a.nef")).is_err(),
