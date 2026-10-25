@@ -12,8 +12,8 @@ use crate::passes::develop::{self, Frame, Inputs, Uniforms};
 use crate::passes::{copy, gaussian, spots};
 use crate::texture::{Source, Target, read_back};
 use image::RgbaImage;
-use lf_settings::EditSettings;
 use lf_settings::geometry::{Geometry, output_size, output_to_source, turned_size};
+use lf_settings::{Crop, EditSettings, Rotate};
 
 /// Long edge of the small copy used for the wide blurs (fixed, so the preview and the export
 /// blur alike).
@@ -25,6 +25,45 @@ type SpotsKey = String;
 /// What the detail blurs were last made from (the web's `detailKey`): the spots' key and the
 /// sigmas, so the blurs are rebuilt from the spotted image when the spots change.
 type DetailKey = (SpotsKey, Option<f64>, Option<f64>);
+
+/// The part of the output a draw shows, as fractions of the output (zoom and pan).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct View {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+impl Default for View {
+    fn default() -> View {
+        View {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+        }
+    }
+}
+
+/// The web's `DrawOptions`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DrawOptions {
+    /// The photo as it was: no geometry, no development.
+    pub before: bool,
+    /// Draws this crop instead of the settings' (e.g. the whole turned frame while cropping).
+    pub crop: Option<Crop>,
+    pub view: View,
+}
+
+/// 256 bins per channel of the edited output, luma `round(0.2126 R + 0.7152 G + 0.0722 B)`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Histogram {
+    pub r: [u32; 256],
+    pub g: [u32; 256],
+    pub b: [u32; 256],
+    pub l: [u32; 256],
+}
 
 pub struct Renderer<'g> {
     gpu: &'g Gpu,
@@ -204,6 +243,123 @@ impl<'g> Renderer<'g> {
         let out = &self.targets["output"];
         develop::run(self.gpu, &inputs, &uniforms, out);
         read_back(self.gpu, out)
+    }
+
+    /// Draws into `canvas` (sized by the caller): the photo with `s`, or as it was (`before`),
+    /// or with the crop override, showing `opts.view`. Targets are top-down, so no Y flip.
+    pub fn draw(
+        &mut self,
+        s: &EditSettings,
+        opts: &DrawOptions,
+        canvas: &Target,
+    ) -> Result<(), PipelineError> {
+        let (geometry, crop) = if opts.before {
+            let whole = Crop {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+            };
+            let g = Geometry {
+                rotate: Rotate::R0,
+                flip_h: false,
+                flip_v: false,
+                angle: 0.0,
+                crop: whole,
+            };
+            (g, whole)
+        } else {
+            (Geometry::from(s), opts.crop.unwrap_or(s.crop))
+        };
+        let spotted = if opts.before {
+            false
+        } else {
+            self.prepare_caches(s)?
+        };
+        let matrix = output_to_source(self.full_width, self.full_height, &geometry, &crop);
+        let (tw, th) = turned_size(self.full_width, self.full_height, geometry.rotate);
+        let frame = Frame {
+            matrix,
+            out: [crop.w * f64::from(tw), crop.h * f64::from(th)],
+            view: [opts.view.x, opts.view.y, opts.view.w, opts.view.h],
+            develop: !opts.before,
+            flip: false,
+            img_size: [self.width, self.height],
+            scale: self.scale,
+            target: [canvas.width, canvas.height],
+        };
+        let (sharp, texture) = if opts.before {
+            (None, None)
+        } else {
+            (self.targets.get("sharp"), self.targets.get("texture"))
+        };
+        let uniforms = Uniforms::new(s, &frame, sharp.is_some(), texture.is_some());
+        let inputs = Inputs {
+            image: self.image(spotted),
+            blur_m: &self.blur_m,
+            blur_l: &self.blur_l,
+            blur_s: sharp.unwrap_or(&self.blur_m),
+            blur_t: texture.unwrap_or(&self.blur_m),
+            curve: &self.curve.target,
+        };
+        develop::run(self.gpu, &inputs, &uniforms, canvas);
+        Ok(())
+    }
+
+    /// The whole output with `s` at `edge` long edge (the web's `pixels`), top row first.
+    pub fn pixels(&mut self, s: &EditSettings, edge: u32) -> Result<RgbaImage, PipelineError> {
+        let spotted = self.prepare_caches(s)?;
+        let geometry = Geometry::from(s);
+        let (ow, oh) = output_size(self.full_width, self.full_height, &geometry);
+        let k = f64::from(edge) / f64::from(ow.max(oh));
+        let w = ((f64::from(ow) * k).round() as u32).max(1);
+        let h = ((f64::from(oh) * k).round() as u32).max(1);
+        self.cached("thumb", w, h, false)?;
+        let (tw, th) = turned_size(self.full_width, self.full_height, s.rotate);
+        let frame = Frame {
+            matrix: output_to_source(self.full_width, self.full_height, &geometry, &s.crop),
+            out: [s.crop.w * f64::from(tw), s.crop.h * f64::from(th)],
+            view: [0.0, 0.0, 1.0, 1.0],
+            develop: true,
+            flip: false,
+            img_size: [self.width, self.height],
+            scale: self.scale,
+            target: [w, h],
+        };
+        let sharp = self.targets.get("sharp");
+        let texture = self.targets.get("texture");
+        let uniforms = Uniforms::new(s, &frame, sharp.is_some(), texture.is_some());
+        let inputs = Inputs {
+            image: self.image(spotted),
+            blur_m: &self.blur_m,
+            blur_l: &self.blur_l,
+            blur_s: sharp.unwrap_or(&self.blur_m),
+            blur_t: texture.unwrap_or(&self.blur_m),
+            curve: &self.curve.target,
+        };
+        let out = &self.targets["thumb"];
+        develop::run(self.gpu, &inputs, &uniforms, out);
+        read_back(self.gpu, out)
+    }
+
+    /// Brightness histogram of the edited output, from a 200 px render.
+    pub fn histogram(&mut self, s: &EditSettings) -> Result<Histogram, PipelineError> {
+        let img = self.pixels(s, 200)?;
+        let mut h = Histogram {
+            r: [0; 256],
+            g: [0; 256],
+            b: [0; 256],
+            l: [0; 256],
+        };
+        for p in img.pixels() {
+            let [r, g, b, _] = p.0;
+            h.r[r as usize] += 1;
+            h.g[g as usize] += 1;
+            h.b[b as usize] += 1;
+            let l = (0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b)).round();
+            h.l[l as usize] += 1;
+        }
+        Ok(h)
     }
 
     /// The web's `cached()`: the target named `name`, remade when its size changes.
