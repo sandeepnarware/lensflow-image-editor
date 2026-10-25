@@ -113,7 +113,9 @@ fn a_known_srgb_picture_round_trips_through_a_synthetic_dng() {
 }
 
 /// A mid-grey frame with an overexposed (linear 3.0, sensor-clipped) square in the middle.
-fn overexposed() -> RawFrame {
+/// Each test passes its own `name`: two tests writing one temp file race on Windows,
+/// where a file mapped by the decoder cannot be rewritten.
+fn overexposed(name: &str) -> RawFrame {
     let img = Rgb32FImage::from_fn(48, 48, |x, y| {
         let v = if (16..32).contains(&x) && (16..32).contains(&y) {
             3.0
@@ -122,12 +124,12 @@ fn overexposed() -> RawFrame {
         };
         Rgb([v, v, v])
     });
-    dng("overexposed", &img)
+    dng(name, &img)
 }
 
 #[test]
 fn an_overexposed_patch_stays_above_one() {
-    let raw = overexposed();
+    let raw = overexposed("overexposed-reconstruct");
     for profile in [Profile::Camera, Profile::Linear] {
         let s = DevelopSettings {
             profile,
@@ -143,7 +145,7 @@ fn an_overexposed_patch_stays_above_one() {
 
 #[test]
 fn clip_mode_clamps_each_channel() {
-    let raw = overexposed();
+    let raw = overexposed("overexposed-clip");
     for profile in [Profile::Camera, Profile::Linear] {
         let s = DevelopSettings {
             profile,
