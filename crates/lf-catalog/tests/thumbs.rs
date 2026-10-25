@@ -48,6 +48,32 @@ fn makes_a_256px_jpeg_for_a_png() {
 }
 
 #[test]
+fn an_unreadable_photo_fails_visibly_and_makes_no_thumbnail() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let (d, ids) = setup(1);
+    // Replace the picture with something that is not an image.
+    std::fs::write(d.path().join("p0.png"), b"definitely not a png").unwrap();
+    let t = Thumbnailer::new(gpu, d.path(), 1, Quality::Fast).unwrap();
+    t.request(ids[0], Priority::High);
+    let end = Instant::now() + Duration::from_secs(60);
+    let mut failed = Vec::new();
+    while failed.is_empty() && Instant::now() < end {
+        failed.extend(t.take_failed());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].0, ids[0]);
+    assert!(t.take_ready().is_empty());
+    let c = Catalog::open(d.path()).unwrap();
+    assert!(c.thumbnail(ids[0]).unwrap().is_none());
+    let (kind, err) = c
+        .photo_kind_error(&d.path().join("p0.png").to_string_lossy())
+        .unwrap();
+    assert_eq!(kind, "png");
+    assert!(err.is_some());
+}
+
+#[test]
 fn high_priority_jumps_the_queue() {
     let Some(gpu) = try_shared_gpu() else { return };
     let (d, ids) = setup(4);

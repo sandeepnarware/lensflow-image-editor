@@ -125,12 +125,22 @@ pub fn sniff(path: &Path) -> Result<Kind, RawError> {
 /// What [`summary`] returns: kind, EXIF facts and the size when the headers give it.
 pub type Summary = (Kind, ExifSummary, Option<(u32, u32)>);
 
-/// Kind, EXIF facts and (when the headers give them, after orientation) the size of a file,
-/// without decoding any pixels. RAW sizes are `None`: they need a decode.
+/// Kind, EXIF facts and (when known, after orientation) the size of a file, without decoding
+/// any pixels. A RAW's size comes from rawler's dummy decode (headers only, cropped to the
+/// usable area); it is `None` only when that fails.
+///
+/// The size is that of the developed picture's long and short sides before any reduction.
 pub fn summary(path: &Path) -> Result<Summary, RawError> {
     let kind = sniff(path)?;
     match kind {
-        Kind::Raw => Ok((kind, raw_summary(path), None)),
+        Kind::Raw => {
+            let mut exif = raw_summary(path);
+            let size = raw_dimensions(path).map(|(w, h, o)| {
+                exif.orientation = o;
+                if o >= 5 { (h, w) } else { (w, h) }
+            });
+            Ok((kind, exif, size))
+        }
         Kind::Heic => Err(RawError::Unsupported {
             path: path.to_path_buf(),
             reason: "HEIC files aren’t supported yet.".to_string(),
@@ -298,6 +308,37 @@ fn unsupported_raw_tiff(path: &Path, bytes: &[u8]) -> Option<String> {
     } else {
         None
     }
+}
+
+/// `(width, height, exif orientation)` of a RAW's usable area from rawler's dummy decode,
+/// which parses headers and allocates no pixel data. Panics inside rawler are caught.
+fn raw_dimensions(path: &Path) -> Option<(u32, u32, u8)> {
+    use rawler::decoders::{Orientation as O, RawDecodeParams};
+    let src = rawler::rawsource::RawSource::new(path).ok()?;
+    let decoder = rawler::get_decoder(&src).ok()?;
+    let img = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        decoder.raw_image(&src, &RawDecodeParams::default(), true)
+    }))
+    .ok()?
+    .ok()?;
+    let (w, h) = match img.crop_area.or(img.active_area) {
+        Some(r) => (r.d.w as u32, r.d.h as u32),
+        None => (img.width as u32, img.height as u32),
+    };
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let o = match img.orientation {
+        O::Normal | O::Unknown => 1,
+        O::HorizontalFlip => 2,
+        O::Rotate180 => 3,
+        O::VerticalFlip => 4,
+        O::Transpose => 5,
+        O::Rotate90 => 6,
+        O::Transverse => 7,
+        O::Rotate270 => 8,
+    };
+    Some((w, h, o))
 }
 
 /// EXIF facts for a RAW file from rawler's metadata (empty when unavailable).

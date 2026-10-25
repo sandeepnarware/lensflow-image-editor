@@ -67,14 +67,16 @@ fn fault_after_batch_two_leaves_400_then_rerun_completes() {
     let mut seen = Vec::new();
     let r = import::run(&c, folder, &cands, 200, &mut |p: Progress| {
         seen.push(p.done);
-        if p.done == 400 {
+        if p.done >= 400 {
             Err(ImportAbort)
         } else {
             Ok(())
         }
     });
     assert!(r.is_err());
-    assert_eq!(seen, [200, 400]);
+    assert_eq!(seen.last(), Some(&400));
+    assert!(seen.len() > 2, "progress inside batches: {seen:?}");
+    assert!(seen.windows(2).all(|w| w[1] - w[0] <= 25), "{seen:?}");
     assert_eq!(count(&c), 400);
 
     let s = import::run(&c, folder, &cands, 200, &mut |_| Ok(())).unwrap();

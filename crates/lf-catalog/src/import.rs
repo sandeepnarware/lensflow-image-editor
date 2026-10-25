@@ -21,6 +21,9 @@ const EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "tif", "tiff", "webp",
 ];
 
+/// `progress` is called at least this often (in files) while a batch is read.
+const PROGRESS_EVERY: usize = 25;
+
 #[derive(Clone, Debug)]
 pub struct Candidate {
     pub path: PathBuf,
@@ -75,7 +78,12 @@ fn supported(path: &Path) -> bool {
 pub fn scan(root: &Path) -> Vec<Candidate> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
+    let mut visited = std::collections::HashSet::new();
     while let Some(dir) = stack.pop() {
+        // Symlinks are followed, so remember real directories to avoid loops.
+        if !fs::canonicalize(&dir).is_ok_and(|c| visited.insert(c)) {
+            continue;
+        }
         let Ok(rd) = fs::read_dir(&dir) else { continue };
         for entry in rd.flatten() {
             if entry.file_name().to_string_lossy().starts_with('.') {
@@ -168,7 +176,8 @@ fn unreadable(e: &RawError) -> Meta {
 }
 
 /// Import `candidates` into `folder_id`, `batch` files per transaction. After each batch has
-/// committed, `progress` is called; an `Err` stops the import, keeping what was committed.
+/// committed, and every 25 files within a batch, `progress` is called; an `Err` stops the import,
+/// keeping what was committed (an in-progress batch is dropped).
 /// Files already catalogued with the same size and mtime are skipped, so a rerun resumes.
 pub fn run(
     catalog: &Catalog,
@@ -195,7 +204,7 @@ pub fn run(
             }
         }
         let mut work = Vec::new();
-        for c in chunk {
+        for (i, c) in chunk.iter().enumerate() {
             let key = c.path.to_string_lossy().into_owned();
             match existing.get(&key) {
                 Some(&(_, size, mtime)) if size == c.size as i64 && mtime == c.mtime => {
@@ -205,6 +214,20 @@ pub fn run(
                     let meta = read_meta(&c.path).unwrap_or_else(|e| unreadable(&e));
                     work.push((key, c, found.map(|f| f.0), meta));
                 }
+            }
+            // Movement for the UI inside a big batch. Stopping here discards the batch in
+            // progress (nothing of it is committed yet); the final call of a batch is made
+            // after its commit.
+            let n = i + 1;
+            if n % PROGRESS_EVERY == 0
+                && n < chunk.len()
+                && progress(Progress {
+                    done: done + n,
+                    total,
+                })
+                .is_err()
+            {
+                return Err(ImportError::Aborted);
             }
         }
         if !work.is_empty() {

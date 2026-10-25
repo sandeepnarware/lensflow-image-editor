@@ -59,6 +59,7 @@ struct Shared {
     state: Mutex<State>,
     wake: Condvar,
     ready: Mutex<Vec<(i64, RgbaImage)>>,
+    failed: Mutex<Vec<(i64, String)>>,
 }
 
 pub struct Thumbnailer {
@@ -101,6 +102,7 @@ impl Thumbnailer {
                 state: Mutex::new(State::default()),
                 wake: Condvar::new(),
                 ready: Mutex::new(Vec::new()),
+                failed: Mutex::new(Vec::new()),
             }),
             config: Mutex::new(Some((gpu, catalog_path.to_path_buf(), workers.max(1)))),
             handles: Mutex::new(Vec::new()),
@@ -109,11 +111,16 @@ impl Thumbnailer {
     }
 
     pub fn start(&self) {
-        let Some((gpu, path, n)) = self.config.lock().unwrap().take() else {
+        let Some((gpu, path, n)) = self.config.lock().unwrap_or_else(|e| e.into_inner()).take()
+        else {
             return;
         };
-        self.shared.state.lock().unwrap().started = true;
-        let mut handles = self.handles.lock().unwrap();
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .started = true;
+        let mut handles = self.handles.lock().unwrap_or_else(|e| e.into_inner());
         for _ in 0..n {
             let (shared, gpu, path, q) =
                 (self.shared.clone(), gpu.clone(), path.clone(), self.quality);
@@ -125,7 +132,7 @@ impl Thumbnailer {
     /// Queue a thumbnail. A photo already queued is not queued twice, but a higher priority
     /// moves it up.
     pub fn request(&self, photo_id: i64, priority: Priority) {
-        let mut st = self.shared.state.lock().unwrap();
+        let mut st = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         if st.pending.get(&photo_id).is_some_and(|p| *p >= priority) {
             return;
         }
@@ -140,24 +147,40 @@ impl Thumbnailer {
         self.shared.wake.notify_one();
     }
 
+    /// The photos whose thumbnail could not be made since the last call, with the reason.
+    /// The reason is also stored in `photos.error` and logged; the grid should show a broken
+    /// thumbnail and not request the photo again.
+    pub fn take_failed(&self) -> Vec<(i64, String)> {
+        std::mem::take(&mut *self.shared.failed.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
     /// The thumbnails finished since the last call, in completion order.
     pub fn take_ready(&self) -> Vec<(i64, RgbaImage)> {
-        std::mem::take(&mut *self.shared.ready.lock().unwrap())
+        std::mem::take(&mut *self.shared.ready.lock().unwrap_or_else(|e| e.into_inner()))
     }
 }
 
 impl Drop for Thumbnailer {
     fn drop(&mut self) {
-        self.shared.state.lock().unwrap().stop = true;
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .stop = true;
         self.shared.wake.notify_all();
-        for h in self.handles.lock().unwrap().drain(..) {
+        for h in self
+            .handles
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain(..)
+        {
             let _ = h.join();
         }
     }
 }
 
 fn next_job(shared: &Shared) -> Option<i64> {
-    let mut st = shared.state.lock().unwrap();
+    let mut st = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     loop {
         if st.stop {
             return None;
@@ -170,7 +193,7 @@ fn next_job(shared: &Shared) -> Option<i64> {
                 }
             }
         }
-        st = shared.wake.wait(st).unwrap();
+        st = shared.wake.wait(st).unwrap_or_else(|e| e.into_inner());
     }
 }
 
@@ -179,8 +202,40 @@ fn worker(shared: Arc<Shared>, gpu: Arc<Gpu>, path: PathBuf, quality: Quality) {
         return;
     };
     while let Some(id) = next_job(&shared) {
-        if let Ok(Some(img)) = make(&catalog, &gpu, id, quality) {
-            shared.ready.lock().unwrap().push((id, img));
+        // A decoder panic must not kill the worker (and strand the queue).
+        let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            make(&catalog, &gpu, id, quality)
+        }))
+        .unwrap_or_else(|_| Err("the decoder crashed on this file".to_string()));
+        match made {
+            Ok(Some(img)) => shared
+                .ready
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((id, img)),
+            Ok(None) => {}
+            Err(msg) => {
+                let file: Option<String> = catalog
+                    .conn
+                    .query_row("SELECT path FROM photos WHERE id = ?1", [id], |r| r.get(0))
+                    .ok();
+                log::warn!(
+                    "thumbnail for photo {id} ({}) failed: {msg}",
+                    file.as_deref().unwrap_or("?")
+                );
+                if let Ok(tx) = catalog.write_tx() {
+                    let _ = tx.execute(
+                        "UPDATE photos SET error = ?2 WHERE id = ?1",
+                        rusqlite::params![id, msg],
+                    );
+                    let _ = tx.commit();
+                }
+                shared
+                    .failed
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push((id, msg));
+            }
         }
     }
 }

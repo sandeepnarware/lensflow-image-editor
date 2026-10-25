@@ -43,6 +43,31 @@ fn real_camera_samples_open() {
     );
 }
 
+#[test]
+fn summary_gives_raw_dimensions_without_decoding() {
+    let manifest = std::fs::read_to_string(corpus_dir().join("manifest.json")).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    let mut checked = 0;
+    for s in manifest["samples"].as_array().unwrap() {
+        let name = s["name"].as_str().unwrap();
+        let path = corpus_dir().join("files").join(name);
+        if !path.exists() {
+            println!("skipped: no sample for {name}");
+            continue;
+        }
+        let t = Instant::now();
+        let (kind, _exif, size) = lf_raw::open::summary(&path).unwrap();
+        let took = t.elapsed();
+        println!("summary {name}: {size:?} in {took:.2?}");
+        assert_eq!(kind, Kind::Raw);
+        assert!(took.as_secs() < 2, "{name}: summary took {took:?}");
+        let o = open(&path, Quality::Fast, &DevelopSettings::default(), 512).unwrap();
+        assert_eq!(size, Some((o.full_width, o.full_height)), "{name}");
+        checked += 1;
+    }
+    println!("{checked} samples checked");
+}
+
 fn check(name: &str, camera: &str, path: &std::path::Path) -> Result<(), String> {
     let settings = DevelopSettings::default();
     let t = Instant::now();
