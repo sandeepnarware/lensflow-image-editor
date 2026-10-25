@@ -172,6 +172,11 @@ impl<'de> Deserialize<'de> for Rotate {
     }
 }
 
+/// One photo's develop settings, as the web editor holds them.
+///
+/// Read JSON with [`crate::normalise`] or [`EditSettings::from_json_str`]. The derived
+/// `Deserialize` is strict (missing fields, `90.0` for `rotate`, out-of-range values are not
+/// fixed up) and is for already-normal JSON only; never use it on web or untrusted input.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditSettings {
@@ -225,6 +230,14 @@ pub fn identity_curve() -> Vec<CurvePoint> {
 }
 
 impl EditSettings {
+    /// Settings from JSON text of any origin: parsed, then [`crate::normalise`]d. Text that is
+    /// not JSON gives the defaults.
+    pub fn from_json_str(s: &str) -> EditSettings {
+        serde_json::from_str(s)
+            .map(|v| crate::normalise(&v))
+            .unwrap_or_else(|_| EditSettings::default_settings())
+    }
+
     pub fn default_settings() -> EditSettings {
         let wheel = |hue| GradeWheel { hue, sat: 0.0 };
         EditSettings {

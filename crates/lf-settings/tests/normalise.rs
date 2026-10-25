@@ -11,6 +11,22 @@ fn every_fixture_case_is_already_normal_and_round_trips_unchanged() {
 }
 
 #[test]
+fn from_json_str_normalises_and_falls_back_to_the_defaults() {
+    // Web JSON the strict Deserialize refuses (missing fields, a float rotate) is normalised.
+    let text = r#"{ "exposure": 12, "rotate": 90.0 }"#;
+    assert!(serde_json::from_str::<EditSettings>(text).is_err());
+    let s = EditSettings::from_json_str(text);
+    assert_eq!(s.exposure, 5.0);
+    assert_eq!(s.rotate, Rotate::R90);
+    assert_eq!(s, normalise(&serde_json::from_str(text).unwrap()));
+    // Not JSON at all: the defaults.
+    assert_eq!(
+        EditSettings::from_json_str("{ not json"),
+        EditSettings::default_settings()
+    );
+}
+
+#[test]
 fn identity_case_equals_the_defaults() {
     assert_eq!(
         normalise(&case_json("identity").unwrap()),
