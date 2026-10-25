@@ -73,17 +73,54 @@ pub(crate) fn load_versions(tx: &Transaction, photo_id: i64) -> Result<Vec<Versi
     Ok(out)
 }
 
-/// The sidecar the database implies, keeping `existing`'s version number and unknown keys.
-fn build_sidecar(tx: &Transaction, photo_id: i64, existing: Option<&Sidecar>) -> Result<Sidecar> {
+/// The sidecar the database implies; `v` and unknown keys come from the remembered sidecar.
+pub(crate) fn build_sidecar(tx: &Transaction, photo_id: i64) -> Result<Sidecar> {
     let (settings, updated_at) = load_edits(tx, photo_id)?
         .unwrap_or_else(|| (EditSettings::default_settings(), DateTime::UNIX_EPOCH));
+    let meta: Option<(i64, String)> = tx
+        .query_row(
+            "SELECT v, extra FROM sidecar_meta WHERE photo_id = ?1",
+            [photo_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let (v, extra) = match meta {
+        Some((v, extra)) => (
+            (v.max(0) as u32).max(SIDECAR_VERSION),
+            serde_json::from_str::<Map<String, serde_json::Value>>(&extra).unwrap_or_default(),
+        ),
+        None => (SIDECAR_VERSION, Map::new()),
+    };
     Ok(Sidecar {
-        v: existing.map_or(SIDECAR_VERSION, |s| s.v.max(SIDECAR_VERSION)),
+        v,
         settings,
         versions: load_versions(tx, photo_id)?,
         updated_at,
-        extra: existing.map_or_else(Map::new, |s| s.extra.clone()),
+        extra,
     })
+}
+
+fn put_meta(tx: &Transaction, photo_id: i64, sc: &Sidecar) -> Result<()> {
+    tx.execute(
+        "INSERT INTO sidecar_meta (photo_id, v, extra) VALUES (?1, ?2, ?3)
+         ON CONFLICT(photo_id) DO UPDATE SET v = excluded.v, extra = excluded.extra",
+        (
+            photo_id,
+            sc.v as i64,
+            serde_json::Value::Object(sc.extra.clone()).to_string(),
+        ),
+    )?;
+    Ok(())
+}
+
+/// Remember a sidecar's version number and unknown keys so every sidecar built for this photo
+/// carries them (for callers that read a sidecar outside [`reconcile`]).
+pub fn remember_sidecar(catalog: &Catalog, photo_id: i64, sc: &Sidecar) -> Result<()> {
+    let tx = catalog.write_tx()?;
+    check_photo(&tx, photo_id)?;
+    put_meta(&tx, photo_id, sc)?;
+    tx.commit()?;
+    Ok(())
 }
 
 /// Write `edits` (stamped `at`) without touching history.
@@ -136,10 +173,20 @@ fn push_history(
 
 /// Make `s` the photo's current settings, record it in history and return the sidecar to write.
 pub fn set_settings(catalog: &Catalog, photo_id: i64, s: &EditSettings) -> Result<Sidecar> {
-    let tx = catalog.conn.unchecked_transaction()?;
-    check_photo(&tx, photo_id)?;
+    let tx = catalog.write_tx()?;
+    let sidecar = set_settings_in(&tx, photo_id, s)?;
+    tx.commit()?;
+    Ok(sidecar)
+}
+
+pub(crate) fn set_settings_in(
+    tx: &Transaction,
+    photo_id: i64,
+    s: &EditSettings,
+) -> Result<Sidecar> {
+    check_photo(tx, photo_id)?;
     let at = now();
-    match cursor_of(&tx, photo_id)? {
+    match cursor_of(tx, photo_id)? {
         // Editing after an undo drops the redo branch.
         Some(c) => {
             tx.execute(
@@ -149,22 +196,20 @@ pub fn set_settings(catalog: &Catalog, photo_id: i64, s: &EditSettings) -> Resul
         }
         // First edit: seed history with the state before it so it can be undone.
         None => {
-            let before = load_edits(&tx, photo_id)?
+            let before = load_edits(tx, photo_id)?
                 .map(|e| e.0)
                 .unwrap_or_else(EditSettings::default_settings);
-            push_history(&tx, photo_id, &before, at)?;
+            push_history(tx, photo_id, &before, at)?;
         }
     }
-    push_history(&tx, photo_id, s, at)?;
+    push_history(tx, photo_id, s, at)?;
     tx.execute(
         "DELETE FROM history WHERE photo_id = ?1 AND id NOT IN
          (SELECT id FROM history WHERE photo_id = ?1 ORDER BY id DESC LIMIT ?2)",
         (photo_id, HISTORY_CAP as i64),
     )?;
-    put_edits(&tx, photo_id, s, at)?;
-    let sidecar = build_sidecar(&tx, photo_id, None)?;
-    tx.commit()?;
-    Ok(sidecar)
+    put_edits(tx, photo_id, s, at)?;
+    build_sidecar(tx, photo_id)
 }
 
 /// Current settings, if the photo has been edited.
@@ -177,7 +222,7 @@ pub fn get_settings(catalog: &Catalog, photo_id: i64) -> Result<Option<EditSetti
 pub fn sidecar_for(catalog: &Catalog, photo_id: i64) -> Result<Sidecar> {
     let tx = catalog.conn.unchecked_transaction()?;
     check_photo(&tx, photo_id)?;
-    build_sidecar(&tx, photo_id, None)
+    build_sidecar(&tx, photo_id)
 }
 
 pub fn history_len(catalog: &Catalog, photo_id: i64) -> Result<i64> {
@@ -189,7 +234,7 @@ pub fn history_len(catalog: &Catalog, photo_id: i64) -> Result<i64> {
 }
 
 fn step(catalog: &Catalog, photo_id: i64, back: bool) -> Result<Option<Sidecar>> {
-    let tx = catalog.conn.unchecked_transaction()?;
+    let tx = catalog.write_tx()?;
     check_photo(&tx, photo_id)?;
     let Some(cursor) = cursor_of(&tx, photo_id)? else {
         return Ok(None);
@@ -210,7 +255,7 @@ fn step(catalog: &Catalog, photo_id: i64, back: bool) -> Result<Option<Sidecar>>
         (photo_id, id),
     )?;
     put_edits(&tx, photo_id, &EditSettings::from_json_str(&text), now())?;
-    let sidecar = build_sidecar(&tx, photo_id, None)?;
+    let sidecar = build_sidecar(&tx, photo_id)?;
     tx.commit()?;
     Ok(Some(sidecar))
 }
@@ -233,43 +278,62 @@ pub fn reconcile(
     photo_id: i64,
     sidecar: Option<&Sidecar>,
 ) -> Result<Reconciled> {
-    let tx = catalog.conn.unchecked_transaction()?;
+    let tx = catalog.write_tx()?;
     check_photo(&tx, photo_id)?;
     let db = load_edits(&tx, photo_id)?;
-    let result =
-        match (db, sidecar) {
-            (None, None) => Reconciled {
-                source: Source::Db,
-                sidecar_to_write: None,
-            },
-            (Some(_), None) => Reconciled {
-                source: Source::Db,
-                sidecar_to_write: Some(build_sidecar(&tx, photo_id, None)?),
-            },
-            (db, Some(sc)) if db.as_ref().is_none_or(|(_, t)| sc.updated_at > *t) => {
-                put_edits(&tx, photo_id, &sc.settings, sc.updated_at)?;
-                tx.execute("DELETE FROM versions WHERE photo_id = ?1", [photo_id])?;
-                for v in &sc.versions {
-                    tx.execute(
-                    "INSERT OR REPLACE INTO versions (id, photo_id, label, settings, created_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    (&v.id, photo_id, &v.label, settings_text(&v.settings), ts(v.created_at)),
+    if let Some(sc) = sidecar {
+        put_meta(&tx, photo_id, sc)?;
+    }
+    let result = match (db, sidecar) {
+        (None, None) => Reconciled {
+            source: Source::Db,
+            sidecar_to_write: None,
+        },
+        (Some(_), None) => Reconciled {
+            source: Source::Db,
+            sidecar_to_write: Some(build_sidecar(&tx, photo_id)?),
+        },
+        (db, Some(sc)) if db.as_ref().is_none_or(|(_, t)| sc.updated_at > *t) => {
+            put_edits(&tx, photo_id, &sc.settings, sc.updated_at)?;
+            tx.execute("DELETE FROM versions WHERE photo_id = ?1", [photo_id])?;
+            for v in &sc.versions {
+                // A sidecar copied from another photo may carry ids that photo owns.
+                let taken: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM versions WHERE id = ?1",
+                    [&v.id],
+                    |r| r.get(0),
                 )?;
-                }
-                // History restarts from the adopted state.
-                tx.execute("DELETE FROM history WHERE photo_id = ?1", [photo_id])?;
-                tx.execute("DELETE FROM history_cursor WHERE photo_id = ?1", [photo_id])?;
-                push_history(&tx, photo_id, &sc.settings, sc.updated_at)?;
-                Reconciled {
-                    source: Source::Sidecar,
-                    sidecar_to_write: None,
-                }
+                let id = if taken > 0 {
+                    uuid::Uuid::new_v4().to_string()
+                } else {
+                    v.id.clone()
+                };
+                tx.execute(
+                    "INSERT INTO versions (id, photo_id, label, settings, created_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                    (
+                        id,
+                        photo_id,
+                        &v.label,
+                        settings_text(&v.settings),
+                        ts(v.created_at),
+                    ),
+                )?;
             }
-            (_, Some(sc)) => Reconciled {
-                source: Source::Db,
-                sidecar_to_write: Some(build_sidecar(&tx, photo_id, Some(sc))?),
-            },
-        };
+            // History restarts from the adopted state.
+            tx.execute("DELETE FROM history WHERE photo_id = ?1", [photo_id])?;
+            tx.execute("DELETE FROM history_cursor WHERE photo_id = ?1", [photo_id])?;
+            push_history(&tx, photo_id, &sc.settings, sc.updated_at)?;
+            Reconciled {
+                source: Source::Sidecar,
+                sidecar_to_write: None,
+            }
+        }
+        (_, Some(_)) => Reconciled {
+            source: Source::Db,
+            sidecar_to_write: Some(build_sidecar(&tx, photo_id)?),
+        },
+    };
     tx.commit()?;
     Ok(result)
 }

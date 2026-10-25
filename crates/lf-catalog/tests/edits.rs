@@ -171,3 +171,90 @@ fn newer_or_equal_db_wins_and_rewrites_the_sidecar() {
             .is_none()
     );
 }
+
+fn v3_sidecar_file(dir: &std::path::Path) -> std::path::PathBuf {
+    let p = dir.join("a.nef.lensflow.json");
+    let text = serde_json::json!({
+        "v": 3, "settings": EditSettings::default_settings().to_value(), "versions": [],
+        "updated_at": "2099-01-01T00:00:00.000Z", "newer": {"k": 1}
+    });
+    std::fs::write(&p, text.to_string()).unwrap();
+    p
+}
+
+fn assert_kept(sc: &lf_catalog::Sidecar, dir: &std::path::Path) {
+    let p = dir.join("out.lensflow.json");
+    lf_catalog::sidecar::write(&p, sc).unwrap();
+    let back = lf_catalog::sidecar::read(&p).unwrap().unwrap();
+    assert_eq!(back.v, 3);
+    assert_eq!(back.extra["newer"], serde_json::json!({"k": 1}));
+}
+
+#[test]
+fn unknown_keys_survive_edits_undo_and_versions_after_reconcile() {
+    let (d, c, id) = setup();
+    let sc = lf_catalog::sidecar::read(&v3_sidecar_file(d.path()))
+        .unwrap()
+        .unwrap();
+    edits::reconcile(&c, id, Some(&sc)).unwrap();
+    assert_kept(
+        &edits::set_settings(&c, id, &with_exposure(0.3)).unwrap(),
+        d.path(),
+    );
+    edits::set_settings(&c, id, &with_exposure(0.4)).unwrap();
+    assert_kept(&edits::undo(&c, id).unwrap().unwrap(), d.path());
+    assert_kept(&edits::redo(&c, id).unwrap().unwrap(), d.path());
+    versions::add(&c, id, "v", &with_exposure(0.9)).unwrap();
+    assert_kept(&edits::sidecar_for(&c, id).unwrap(), d.path());
+    // Survives a reopen too.
+    drop(c);
+    let c = Catalog::open(d.path()).unwrap();
+    assert_kept(&edits::sidecar_for(&c, id).unwrap(), d.path());
+}
+
+#[test]
+fn remember_sidecar_keeps_keys_without_reconcile() {
+    let (d, c, id) = setup();
+    let sc = lf_catalog::sidecar::read(&v3_sidecar_file(d.path()))
+        .unwrap()
+        .unwrap();
+    edits::remember_sidecar(&c, id, &sc).unwrap();
+    assert_kept(
+        &edits::set_settings(&c, id, &with_exposure(0.3)).unwrap(),
+        d.path(),
+    );
+}
+
+#[test]
+fn copied_sidecar_does_not_steal_another_photos_version() {
+    let (_d, c, a) = setup();
+    let f = c.add_folder("shoot").unwrap();
+    let b = c
+        .add_photo(
+            f,
+            &NewPhoto {
+                path: "shoot/b.nef".into(),
+                kind: "raw".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let v = versions::add(&c, a, "mine", &with_exposure(0.5)).unwrap();
+    let mut copy = edits::sidecar_for(&c, a).unwrap();
+    copy.updated_at += Duration::seconds(60);
+    assert_eq!(
+        edits::reconcile(&c, b, Some(&copy)).unwrap().source,
+        Source::Sidecar
+    );
+    assert_eq!(versions::list(&c, a).unwrap().len(), 1);
+    assert_eq!(versions::list(&c, a).unwrap()[0].id, v.id);
+    let bl = versions::list(&c, b).unwrap();
+    assert_eq!(bl.len(), 1);
+    assert_ne!(bl[0].id, v.id);
+}
+
+#[test]
+fn use_version_of_an_unknown_id_is_not_found() {
+    let (_d, c, id) = setup();
+    assert!(versions::use_version(&c, id, "nope").is_err());
+}
