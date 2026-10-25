@@ -333,6 +333,8 @@ fn raw_summary(path: &Path) -> ExifSummary {
     out.exposure_time = x.exposure_time.and_then(f);
     out.f_number = x.fnumber.and_then(f);
     out.focal_length = x.focal_length.and_then(f);
+    out.artist = x.artist.as_deref().and_then(non_empty);
+    out.copyright = x.copyright.as_deref().and_then(non_empty);
     out.captured_at = x
         .date_time_original
         .as_deref()

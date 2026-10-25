@@ -11,7 +11,7 @@ use crate::error::PipelineError;
 use crate::gpu::Gpu;
 use crate::passes::develop::{self, Frame, Inputs, Uniforms};
 use crate::passes::{UniformArena, copy, gaussian, spots};
-use crate::texture::{FLOAT_FORMAT, FORMAT, Source, Target, read_back};
+use crate::texture::{FLOAT_FORMAT, FORMAT, FloatFrame, Source, Target, read_back, read_back_f16};
 use image::RgbaImage;
 use lf_settings::geometry::{Geometry, output_size, output_to_source, turned_size};
 use lf_settings::{Crop, EditSettings, Rotate};
@@ -73,7 +73,7 @@ enum Dest<'a> {
 }
 
 /// The cached targets [`Renderer::trim`] drops: outputs, remade on the next call.
-const TRIMMED: [&str; 3] = ["output", "thumb", "hist"];
+const TRIMMED: [&str; 4] = ["output", "output_f16", "thumb", "hist"];
 
 /// 256 bins per channel of the edited output, luma `round(0.2126 R + 0.7152 G + 0.0722 B)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -322,6 +322,26 @@ impl Renderer {
         let dest = Dest::Cached("output");
         self.develop_into(s, &geometry, &s.crop, &View::default(), mode, dest);
         self.read_checked("output")
+    }
+
+    /// [`Renderer::render`] into an `Rgba16Float` target and read back as half floats, for a
+    /// 16-bit export: the develop shader's final clamp to 0..1 still applies, but the value is
+    /// not quantised to 8 bits. Row 0 = the top of the picture.
+    pub fn render_f16(&mut self, s: &EditSettings) -> Result<FloatFrame, PipelineError> {
+        self.alive()?;
+        let spotted = self.prepare_caches(s)?;
+        let geometry = Geometry::from(s);
+        let (ow, oh) = output_size(self.full_width, self.full_height, &geometry);
+        let k = f64::from(self.width) / f64::from(self.full_width);
+        let w = ((f64::from(ow) * k).round() as u32).max(1);
+        let h = ((f64::from(oh) * k).round() as u32).max(1);
+        self.cached("output_f16", w, h, false, FLOAT_FORMAT)?;
+        let mode = Mode::Develop { spotted };
+        let dest = Dest::Cached("output_f16");
+        self.develop_into(s, &geometry, &s.crop, &View::default(), mode, dest);
+        let frame = read_back_f16(&self.gpu, &self.targets["output_f16"]);
+        self.gpu.check()?;
+        frame
     }
 
     /// Fails fast when the device is lost.

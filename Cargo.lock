@@ -1912,7 +1912,9 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "filetime",
+ "half",
  "image",
+ "kamadak-exif",
  "lf-pipeline",
  "lf-raw",
  "lf-settings",
