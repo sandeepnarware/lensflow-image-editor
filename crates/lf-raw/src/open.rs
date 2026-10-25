@@ -78,6 +78,7 @@ fn kind_of_head(h: &[u8]) -> Kind {
             Kind::Unknown
         }
     } else if h.starts_with(b"IIRO")
+        || h.starts_with(b"MMOR")
         || h.starts_with(b"IIRS")
         || h.starts_with(b"FUJIFILM")
         || h.starts_with(b"IIU\0")

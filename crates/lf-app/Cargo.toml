@@ -1,0 +1,25 @@
+[package]
+name = "lf-app"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "lensflow-image-editor"
+path = "src/main.rs"
+
+[dependencies]
+lf-pipeline = { path = "../lf-pipeline" }
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "accesskit", "persistence", "x11", "wayland"] }
+directories = "6"
+semver = "1"
+env_logger = "0.11"
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+image.workspace = true
+
+[dev-dependencies]
+egui_kittest = "0.37"
+tempfile = "3"

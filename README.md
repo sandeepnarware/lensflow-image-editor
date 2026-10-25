@@ -12,6 +12,7 @@ that reproduces the web editor's output), Part 2b (RAW decoding and
 development, so `lf-render` opens camera files) and Part 2c-i (the grade,
 account and catalogue libraries) are built. The app itself (2c-ii) and
 packaging (2d) follow. 2c-i is libraries only: there is no UI yet.
+The application crate `lf-app` has started (2c-ii Task 1: window and runtime).
 
 ## Crates
 
@@ -263,7 +264,7 @@ editor's 8-bit blur rounding about four times. That is why 8-bit files keep the
 ## RAW sample corpus
 
 `tests/raw-samples/` pins ten small CC0 files from raw.pixls.us (one per
-format, plus a full-resolution CR2 next to the Canon sRAW one; about 87 MB). Fetch them with `scripts/fetch-raw-samples.sh` (or
+format, plus a full-resolution CR2 next to the Canon sRAW one; about 88 MB). Fetch them with `scripts/fetch-raw-samples.sh` (or
 `scripts/fetch-raw-samples.ps1`); they land in the git-ignored
 `tests/raw-samples/files/`. Without them the corpus tests print a skip note
 and pass. See `tests/raw-samples/README.md`.

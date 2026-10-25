@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/lf-settings", "crates/lf-pipeline", "crates/lf-fixtures", "crates/lf-raw", "crates/lf-grade", "crates/lf-account", "crates/lf-catalog"]
+members = ["crates/lf-settings", "crates/lf-pipeline", "crates/lf-fixtures", "crates/lf-raw", "crates/lf-grade", "crates/lf-account", "crates/lf-catalog", "crates/lf-app"]
 
 [workspace.package]
 edition = "2024"
@@ -29,3 +29,9 @@ uuid = { version = "1", features = ["v4"] }
 debug-assertions = false
 [profile.test.package.rawler]
 debug-assertions = false
+
+# `panic` stays `unwind`: lf-catalog's workers catch panics.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true

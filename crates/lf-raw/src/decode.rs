@@ -137,6 +137,9 @@ pub fn decode_raw(path: &Path) -> Result<RawFrame, RawError> {
             .raw_image(&src, &RawDecodeParams::default(), false)
             .map_err(|e| from_rawler(path, e))
     })?;
+    // The CR2 signature (`CR\x02\0` at bytes 8..12); the black-level rule below is
+    // CR2-only, so a DNG from a Canon (or a Canon-made converter) is left alone.
+    let is_cr2 = src.buf().get(8..12) == Some(b"CR\x02\0".as_slice());
     drop(src);
     let unsupported = |reason: &str| RawError::Unsupported {
         path: path.to_path_buf(),
@@ -165,9 +168,10 @@ pub fn decode_raw(path: &Path) -> Result<RawFrame, RawError> {
             *slot = levels[i.min(levels.len() - 1)];
         }
     }
-    // Canon sRAW / mRAW: rawler's YUV to RGB conversion has already removed the
-    // black offset, so the levels it reports would be subtracted twice.
-    if cfa == Cfa::Rgb && raw.clean_make.eq_ignore_ascii_case("canon") {
+    // Canon sRAW / mRAW (CR2 only; a DNG with Make Canon and an RGB layout keeps its
+    // own levels): rawler's YUV to RGB conversion has already removed the black offset,
+    // so the levels it reports would be subtracted twice.
+    if cfa == Cfa::Rgb && is_cr2 && raw.clean_make.eq_ignore_ascii_case("canon") {
         black = [0.0; 4];
     }
     let white = raw.whitelevel.as_vec().into_iter().fold(0.0f32, f32::max);
