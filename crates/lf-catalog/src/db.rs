@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use rusqlite::{Connection, Transaction, TransactionBehavior};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 use crate::model::{NewPhoto, now, ts};
 
@@ -106,6 +106,7 @@ CREATE TABLE sidecar_meta (
     extra TEXT NOT NULL
 );
 "#,
+    "ALTER TABLE photos ADD COLUMN error TEXT;",
 ];
 
 pub struct Catalog {
@@ -122,6 +123,7 @@ impl Catalog {
 
     fn from_connection(mut conn: Connection) -> Result<Catalog> {
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.busy_timeout(std::time::Duration::from_secs(10))?;
         conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
         conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")?;
         let current: i64 = conn.query_row(
@@ -201,6 +203,48 @@ impl Catalog {
         let id = tx.last_insert_rowid();
         tx.commit()?;
         Ok(id)
+    }
+
+    pub fn photo_count(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM photos", [], |r| r.get(0))?)
+    }
+
+    pub fn photo_ids(&self) -> Result<Vec<i64>> {
+        let mut st = self.conn.prepare("SELECT id FROM photos ORDER BY id")?;
+        let rows = st.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// `(kind, error)` of the photo at `path`.
+    pub fn photo_kind_error(&self, path: &str) -> Result<(String, Option<String>)> {
+        Ok(self.conn.query_row(
+            "SELECT kind, error FROM photos WHERE path = ?1",
+            [path],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
+    }
+
+    /// `(width, height)` of the photo at `path`.
+    pub fn photo_size(&self, path: &str) -> Result<(Option<u32>, Option<u32>)> {
+        Ok(self.conn.query_row(
+            "SELECT width, height FROM photos WHERE path = ?1",
+            [path],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
+    }
+
+    /// The stored thumbnail `(edge, jpeg)`.
+    pub fn thumbnail(&self, photo_id: i64) -> Result<Option<(u32, Vec<u8>)>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT edge, jpeg FROM thumbnails WHERE photo_id = ?1",
+                [photo_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
     }
 
     pub fn table_names(&self) -> Result<Vec<String>> {

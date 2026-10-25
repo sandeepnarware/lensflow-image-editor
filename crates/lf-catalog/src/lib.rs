@@ -3,8 +3,10 @@
 
 pub mod db;
 pub mod edits;
+pub mod import;
 pub mod model;
 pub mod sidecar;
+pub mod thumbs;
 pub mod versions;
 
 pub use db::{Catalog, CatalogError};

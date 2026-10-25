@@ -1911,6 +1911,10 @@ name = "lf-catalog"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "filetime",
+ "image",
+ "lf-pipeline",
+ "lf-raw",
  "lf-settings",
  "rusqlite",
  "serde",
