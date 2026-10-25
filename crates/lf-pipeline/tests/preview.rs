@@ -81,3 +81,31 @@ fn pixels_scales_to_the_long_edge() {
     let mut r = Renderer::new(&gpu, &src, src.width(), src.height()).unwrap();
     assert_eq!(r.pixels(&s, 100).unwrap().dimensions(), (100, 67));
 }
+
+/// A minified draw (preview, thumbnail, histogram) goes through the mip chain in every
+/// `texture()` of the develop pass, the noise loop's included. This checks the cheap part of
+/// that invariant: a half-size draw of every case (one source) succeeds, fills the canvas at
+/// the size asked for and draws the photo there (not the background), on drivers whose
+/// helper lanes past the edge are garbage (WARP) as well.
+#[test]
+fn minified_draw_succeeds_for_every_case() {
+    let gpu = Gpu::new().unwrap();
+    let src = source("landscape");
+    let m = lf_fixtures::Manifest::load().unwrap();
+    let mut r = Renderer::new(&gpu, &src, src.width(), src.height()).unwrap();
+    for id in &m.cases {
+        let s = normalise(&case_json(id).unwrap());
+        let (ow, oh) = r.output_size(&s);
+        let (w, h) = ((ow / 2).max(1), (oh / 2).max(1));
+        let canvas = Target::new(&gpu, w, h, false).unwrap();
+        r.draw(&s, &DrawOptions::default(), &canvas).unwrap();
+        let got = read_back(&gpu, &canvas).unwrap();
+        assert_eq!(got.dimensions(), (w, h), "{id}");
+        let centre = got.get_pixel(w / 2, h / 2).0;
+        assert_ne!(
+            centre,
+            [31, 31, 33, 255],
+            "{id}: the centre is the background"
+        );
+    }
+}

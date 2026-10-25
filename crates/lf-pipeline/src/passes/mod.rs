@@ -297,7 +297,7 @@ pub(crate) struct Pipelines {
 impl Pipelines {
     pub fn new(device: &wgpu::Device) -> Pipelines {
         Pipelines {
-            copy: FullscreenPass::new(device, "copy", COPY, "fs_copy", false),
+            copy: FullscreenPass::new(device, "copy", COPY, "fs_copy", true),
             mip: FullscreenPass::new(device, "mip", COPY, "fs_mip", false),
             gaussian: FullscreenPass::new(device, "gaussian", GAUSSIAN, "fs_gaussian", true),
             spots: FullscreenPass::new(device, "spots", SPOTS, "fs_spots", true),

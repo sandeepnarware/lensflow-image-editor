@@ -2,13 +2,17 @@
 // The web's DEVELOP (shaders.ts), line for line: every adjustment, geometry and effects,
 // straight to the output.
 //
-// Deliberate differences from the GLSL (see also develop() below): `texture()` (implicit derivatives) becomes
-// `textureSampleGrad` with the derivatives of `uv` worked out from the uniforms (`pixel`, the
-// size of one output pixel in canvas UV, is the only uniform DEVELOP does not have). The
-// value is the one a quad's differences give for this affine `uv`, so the mip level is the
-// GLSL's; but it does not depend on helper lanes past the target's last row or column, which
-// some drivers (WARP) fill with garbage, and it allows the early return for pixels outside
-// the frame. As the brief asks, the 5×5 noise loop and the curve lookups sample level 0.
+// Deliberate differences from the GLSL (see also develop() below): `texture()` (implicit
+// derivatives) becomes `textureSampleGrad` with the derivatives of `uv` worked out from the
+// uniforms (`pixel`, the size of one output pixel in canvas UV, is the only uniform DEVELOP
+// does not have). The value is the one a quad's differences give for this affine `uv`, so the
+// mip level is the GLSL's; but it does not depend on helper lanes past the target's last row
+// or column, which some drivers (WARP) fill with garbage, and it allows the early return for
+// pixels outside the frame. This holds for every `texture()` call, the 5×5 noise loop's
+// included (its offsets are constant, so its derivatives are the centre's): a minified draw
+// (preview, thumbnail, histogram) samples the mip chain there as the web does. The curve
+// lookups use `textureSampleLevel(.., 0.0)`: the curve texture has one level, so it is the
+// same value.
 //
 // Clarity's midtone weight squares `t = clamp(2*y2 - 1, -1, 1)` as `t * t` where the GLSL
 // writes `pow(t, 2.0)`: `pow` of a negative base is undefined on real GPUs (it is computed
@@ -134,7 +138,7 @@ fn develop(photo: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
         var w_c = 0.0;
         for (var y = -2; y <= 2; y++) {
             for (var x = -2; x <= 2; x++) {
-                let s = textureSampleLevel(u_img, s_img, uv + vec2<f32>(f32(x), f32(y)) * px, 0.0).rgb;
+                let s = sample_2d(u_img, s_img, uv + vec2<f32>(f32(x), f32(y)) * px).rgb;
                 let ws = exp(-f32(x * x + y * y) / 4.5);
                 let dy = luma(s) - yc;
                 let w = ws * exp(-dy * dy / (2.0 * sigma_r * sigma_r));
