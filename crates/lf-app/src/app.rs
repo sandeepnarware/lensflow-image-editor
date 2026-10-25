@@ -586,6 +586,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        self.jobs.shutdown(Duration::from_secs(10));
         self.save_prefs();
     }
 
