@@ -1,0 +1,85 @@
+{
+  "samples": [
+    {
+      "name": "canon-eos-40d.cr2",
+      "url": "https://raw.pixls.us/data/Canon/EOS%2040D/_MG_0154.CR2",
+      "sha256": "ba644e7dd2abe74eca260e67f0206ff113bf0f62e710f8130611e964d6be5bf1",
+      "bytes": 5805950,
+      "camera": "Canon EOS 40D",
+      "licence": "CC0-1.0",
+      "source": "raw.pixls.us"
+    },
+    {
+      "name": "canon-eos-rp.cr3",
+      "url": "https://raw.pixls.us/data/Canon/EOS%20RP/Canon_EOS_RP_CRAW_ISO_100_crop_nodual.CR3",
+      "sha256": "4a859ab137f792aedaf3416b0aad1497ebaab02052a49453902e226699154aa7",
+      "bytes": 7395184,
+      "camera": "Canon EOS RP",
+      "licence": "CC0-1.0",
+      "source": "raw.pixls.us"
+    },
+    {
+      "name": "nikon-d40.nef",
+      "url": "https://raw.pixls.us/data/Nikon/D40/DSC_1842.NEF",
+      "sha256": "44e88bc77b7a531b22647bcd07b9393c4568062e8f0906d3bbdecb42fbe29e03",
+      "bytes": 5844273,
+      "camera": "Nikon D40",
+      "licence": "CC0-1.0",
+      "source": "raw.pixls.us"
+    },
+    {
+      "name": "sony-ilce-7s.arw",
+      "url": "https://raw.pixls.us/data/Sony/ILCE-7S/DSC04126.ARW",
+      "sha256": "a35ebb2fbec929daa5beb20d1ce5c15a8aac7b1a7a231455387f3df8a7442e07",
+      "bytes": 6160384,
+      "camera": "Sony ILCE-7S (A7S)",
+      "licence": "CC0-1.0",
+      "source": "raw.pixls.us"
+    },
+    {
+      "name": "fujifilm-x20.raf",
+      "url": "https://raw.pixls.us/data/Fujifilm/X20/DSCF7451.RAF",
+      "sha256": "ccb4fad836f1561b52859c3ee01db0fef7db770980d4a84e95595da1eda72b2a",
+      "bytes": 19453440,
+      "camera": "Fujifilm X20 (X-Trans II)",
+      "licence": "CC0-1.0",
+      "source": "raw.pixls.us"
+    },
+    {
+      "name": "olympus-e-420.orf",
+      "url": "https://raw.pixls.us/data/Olympus/E-420/P4232993.ORF",
+      "sha256": "4b981b6e82357514b00183f3c676202625a61684373cc32decb361639ed2eec4",
+      "bytes": 10095047,
+      "camera": "Olympus E-420",
+      "licence": "CC0-1.0",
+      "source": "raw.pixls.us"
+    },
+    {
+      "name": "panasonic-dmc-lx3.rw2",
+      "url": "https://raw.pixls.us/data/Panasonic/DMC-LX3/P1020593.RW2",
+      "sha256": "6663d5b6539de15640ded2b0f422c8affb8cf1bec93e27b3548e970226c063a5",
+      "bytes": 9693184,
+      "camera": "Panasonic DMC-LX3",
+      "licence": "CC0-1.0",
+      "source": "raw.pixls.us"
+    },
+    {
+      "name": "pentax-k10d.pef",
+      "url": "https://raw.pixls.us/data/Pentax/K10D/_IGP7284.PEF",
+      "sha256": "e35ae4154a468be3154f5f462e884ba5941f010d3e8f23d347fbec14809f44d3",
+      "bytes": 9561139,
+      "camera": "Pentax K10D",
+      "licence": "CC0-1.0",
+      "source": "raw.pixls.us"
+    },
+    {
+      "name": "nikon-d80.dng",
+      "url": "https://raw.pixls.us/data/Nikon/D80/DSC_0143.dng",
+      "sha256": "5095ca264e763624cd3aa62940286dd1bcff4504eefa1ce61cbb72f50f8426bb",
+      "bytes": 8283990,
+      "camera": "Nikon D80 (DNG)",
+      "licence": "CC0-1.0",
+      "source": "raw.pixls.us"
+    }
+  ]
+}

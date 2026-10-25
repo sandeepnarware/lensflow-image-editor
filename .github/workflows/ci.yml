@@ -24,5 +24,14 @@ jobs:
           sudo apt-get install -y mesa-vulkan-drivers libvulkan1
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Cache RAW sample corpus
+        uses: actions/cache@v4
+        with:
+          path: tests/raw-samples/files
+          key: raw-samples-${{ hashFiles('tests/raw-samples/manifest.json') }}
+      # A raw.pixls.us outage must not fail the build: the sample tests skip absent files.
+      - name: Fetch RAW sample corpus
+        continue-on-error: true
+        run: bash scripts/fetch-raw-samples.sh
       # --nocapture so the parity tests print their worst figures on success (nothing else prints).
       - run: cargo test --workspace -- --nocapture

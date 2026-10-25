@@ -1922,6 +1922,7 @@ dependencies = [
  "log",
  "rawler",
  "rayon",
+ "serde_json",
  "thiserror",
 ]
 
