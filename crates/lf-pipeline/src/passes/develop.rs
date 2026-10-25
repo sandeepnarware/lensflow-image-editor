@@ -60,7 +60,17 @@ pub struct Uniforms {
     pub band_width: [[f32; 4]; 8],
 }
 
-const _: () = assert!(std::mem::size_of::<Uniforms>() == 624);
+// The WGSL layout, checked where it is easiest to get wrong: the first vec3, the WGSL-only
+// `pixel` and the three 16-byte-stride arrays.
+const _: () = {
+    use std::mem::{offset_of, size_of};
+    assert!(size_of::<Uniforms>() == 624);
+    assert!(offset_of!(Uniforms, wb) == 128);
+    assert!(offset_of!(Uniforms, pixel) == 232);
+    assert!(offset_of!(Uniforms, hsl) == 240);
+    assert!(offset_of!(Uniforms, band_hue) == 240 + 8 * 16);
+    assert!(offset_of!(Uniforms, band_width) == 240 + 2 * 8 * 16);
+};
 
 /// Where the develop pass draws from and how (the arguments of `developPass` that are not
 /// settings).
