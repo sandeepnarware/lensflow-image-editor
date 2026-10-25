@@ -118,13 +118,63 @@ fn versions_add_use_delete() {
 #[test]
 fn newer_sidecar_wins_and_updates_the_db() {
     let (_d, c, id) = setup();
+    edits::set_settings(&c, id, &with_exposure(0.05)).unwrap();
+    versions::add(&c, id, "old", &with_exposure(0.2)).unwrap();
     let mut sc = edits::set_settings(&c, id, &with_exposure(0.1)).unwrap();
+    assert!(edits::history_len(&c, id).unwrap() > 1);
     sc.settings = with_exposure(0.8);
-    sc.updated_at += Duration::seconds(60);
+    // Newer than the catalogue but not in the future (a future stamp is clamped and rewritten).
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    sc.updated_at += Duration::milliseconds(10);
+    sc.versions = vec![lf_catalog::Version {
+        id: "from-the-sidecar".into(),
+        label: "theirs".into(),
+        settings: with_exposure(-0.4),
+        created_at: lf_catalog::model::now(),
+    }];
     let r = edits::reconcile(&c, id, Some(&sc)).unwrap();
     assert_eq!(r.source, Source::Sidecar);
     assert!(r.sidecar_to_write.is_none());
     assert_eq!(exposure(&c, id), 0.8);
+    // The sidecar's versions replace the catalogue's.
+    let list = versions::list(&c, id).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(
+        (list[0].id.as_str(), list[0].label.as_str()),
+        ("from-the-sidecar", "theirs")
+    );
+    // History restarts at the adopted state: nothing to undo.
+    assert_eq!(edits::history_len(&c, id).unwrap(), 1);
+    assert!(edits::undo(&c, id).unwrap().is_none());
+}
+
+#[test]
+fn equal_stamps_with_different_content_rewrite_the_sidecar() {
+    let (_d, c, id) = setup();
+    let mut sc = edits::set_settings(&c, id, &with_exposure(0.1)).unwrap();
+    sc.settings = with_exposure(0.6);
+    let r = edits::reconcile(&c, id, Some(&sc)).unwrap();
+    assert_eq!(r.source, Source::Db);
+    assert_eq!(r.sidecar_to_write.unwrap().settings.exposure, 0.1);
+}
+
+#[test]
+fn a_sidecar_dated_in_the_future_is_adopted_at_now_and_rewritten() {
+    let (_d, c, id) = setup();
+    let mut sc = edits::set_settings(&c, id, &with_exposure(0.1)).unwrap();
+    sc.settings = with_exposure(0.7);
+    sc.updated_at = lf_catalog::model::now() + Duration::days(365);
+    let r = edits::reconcile(&c, id, Some(&sc)).unwrap();
+    assert_eq!(r.source, Source::Sidecar);
+    assert_eq!(exposure(&c, id), 0.7);
+    let out = r
+        .sidecar_to_write
+        .expect("rewritten with the clamped stamp");
+    assert!(out.updated_at <= lf_catalog::model::now());
+    // Next reopen: the rewritten sidecar matches, nothing to do.
+    let again = edits::reconcile(&c, id, Some(&out)).unwrap();
+    assert_eq!(again.source, Source::Db);
+    assert!(again.sidecar_to_write.is_none());
 }
 
 #[test]
@@ -143,9 +193,13 @@ fn newer_or_equal_db_wins_and_rewrites_the_sidecar() {
     assert_eq!(out.v, 3);
     assert_eq!(out.extra["keep"], serde_json::json!(1));
     assert_eq!(exposure(&c, id), 0.1);
-    // Equal stamps: DB wins.
+    // Equal stamps and the same content: DB wins and nothing is rewritten.
     let r = edits::reconcile(&c, id, Some(&sc)).unwrap();
     assert_eq!(r.source, Source::Db);
+    assert!(
+        r.sidecar_to_write.is_none(),
+        "an equal sidecar is not rewritten"
+    );
     // No sidecar: DB wins and writes one; no edits and no sidecar: nothing to do.
     assert!(
         edits::reconcile(&c, id, None)

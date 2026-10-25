@@ -90,3 +90,42 @@ fn atomic_write_leaves_no_temp_file_and_replaces_the_target() {
         .collect();
     assert_eq!(names, vec!["a.nef.lensflow.json".to_string()]);
 }
+
+#[test]
+fn versions_without_an_id_or_date_are_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("a.lensflow.json");
+    let text = json!({
+        "v": 2, "settings": {}, "updated_at": "2030-01-01T00:00:00.000Z",
+        "versions": [
+            {"label": "no id", "settings": {"exposure": 0.5}, "created_at": "2029-01-01T00:00:00.000Z"},
+            {"id": "x1", "label": "no date", "settings": {}},
+            {"id": "x2", "label": "bad date", "settings": {}, "created_at": "yesterday"}
+        ]
+    });
+    std::fs::write(&p, text.to_string()).unwrap();
+    let s = sidecar::read(&p).unwrap().unwrap();
+    assert_eq!(s.versions.len(), 3);
+    assert_eq!(s.versions[0].label, "no id");
+    assert!(uuid_like(&s.versions[0].id), "{}", s.versions[0].id);
+    assert_eq!(s.versions[0].settings.exposure, 0.5);
+    assert_eq!(s.versions[1].id, "x1");
+    assert_eq!(s.versions[1].created_at, chrono::DateTime::UNIX_EPOCH);
+    assert_eq!(s.versions[2].created_at, chrono::DateTime::UNIX_EPOCH);
+}
+
+fn uuid_like(s: &str) -> bool {
+    s.len() == 36 && s.chars().filter(|c| *c == '-').count() == 4
+}
+
+#[test]
+fn a_corrupt_sidecar_is_never_overwritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("a.nef.lensflow.json");
+    std::fs::write(&p, "{ half a file").unwrap();
+    assert!(matches!(
+        sidecar::write(&p, &sample()),
+        Err(CatalogError::Corrupt(_))
+    ));
+    assert_eq!(std::fs::read_to_string(&p).unwrap(), "{ half a file");
+}

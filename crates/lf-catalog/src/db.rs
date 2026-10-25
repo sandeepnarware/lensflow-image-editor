@@ -29,6 +29,11 @@ pub enum CatalogError {
         path: std::path::PathBuf,
         photos: (i64, i64),
     },
+    #[error(
+        "This catalogue was made by a newer lensflow-ImageEditor. Update the app to open it \
+         (catalogue schema {found}, this version understands up to {supported})."
+    )]
+    NewerSchema { found: i64, supported: i64 },
 }
 
 pub type Result<T> = std::result::Result<T, CatalogError>;
@@ -119,6 +124,9 @@ CREATE TABLE sidecar_meta (
 );
 "#,
     "ALTER TABLE photos ADD COLUMN error TEXT;",
+    // Set by `import::mark_missing` when a file is gone from its folder; cleared when
+    // `import::run` sees the file again.
+    "ALTER TABLE photos ADD COLUMN missing INTEGER NOT NULL DEFAULT 0;",
 ];
 
 pub struct Catalog {
@@ -137,14 +145,43 @@ impl Catalog {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
         conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
-        conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")?;
-        let current: i64 = conn.query_row(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
-            [],
-            |r| r.get(0),
-        )?;
-        if current < MIGRATIONS.len() as i64 {
-            let tx = conn.transaction()?;
+        let supported = MIGRATIONS.len() as i64;
+        let read_version = |c: &Connection| -> Result<i64> {
+            let exists: bool = c.query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )?;
+            if !exists {
+                return Ok(0);
+            }
+            Ok(c.query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+                [],
+                |r| r.get(0),
+            )?)
+        };
+        // A quick look first, so an up-to-date catalogue opens without the write lock.
+        let seen = read_version(&conn)?;
+        if seen > supported {
+            return Err(CatalogError::NewerSchema {
+                found: seen,
+                supported,
+            });
+        }
+        if seen < supported {
+            // Re-read under the write lock: another process may have migrated meanwhile.
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)",
+            )?;
+            let current = read_version(&tx)?;
+            if current > supported {
+                return Err(CatalogError::NewerSchema {
+                    found: current,
+                    supported,
+                });
+            }
             for (i, sql) in MIGRATIONS.iter().enumerate().skip(current as usize) {
                 tx.execute_batch(sql)?;
                 tx.execute(
