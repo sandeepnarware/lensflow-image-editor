@@ -125,3 +125,41 @@ fn both_changed_keeps_remote_and_renames_the_local_copy() {
     assert_eq!(plan.push[0].name, "A (desktop)");
     assert_eq!(plan.pull[0].name, "A");
 }
+
+#[test]
+fn numbers_compare_regardless_of_int_or_float_spelling() {
+    use presets::settings_equal;
+    assert!(settings_equal(
+        &json!({"exposure": 1, "c": [0, {"a": 2}]}),
+        &json!({"exposure": 1.0, "c": [0.0, {"a": 2.0}]})
+    ));
+    assert!(!settings_equal(
+        &json!({"exposure": 1}),
+        &json!({"exposure": 1.5})
+    ));
+    let l = local("A", 1, "2026-10-12T00:00:00Z", Some(9), Some(SYNCED));
+    let mut r = remote("A", 1, "2026-10-13T00:00:00Z");
+    r.settings = json!({"v": 1.0});
+    assert_eq!(Sync::merge(&[l], &[r]), Default::default());
+}
+
+#[test]
+fn conflict_copy_name_avoids_existing_names() {
+    let l = local("A", 1, "2026-10-12T00:00:00Z", Some(9), Some(SYNCED));
+    let r = vec![
+        remote("A", 2, "2026-10-13T00:00:00Z"),
+        remote("A (desktop)", 3, "2026-10-01T00:00:00Z"),
+    ];
+    let plan = Sync::merge(&[l], &r);
+    assert_eq!(plan.conflicts[0].0.name, "A (desktop 2)");
+}
+
+#[test]
+fn unreadable_timestamps_are_a_conflict() {
+    let l = local("A", 1, "garbage", Some(9), Some(SYNCED));
+    let plan = Sync::merge(&[l], &[remote("A", 2, "2026-10-09T00:00:00Z")]);
+    assert_eq!(plan.conflicts.len(), 1);
+    let l = local("A", 1, "2026-10-12T00:00:00Z", Some(9), Some(SYNCED));
+    let plan = Sync::merge(&[l], &[remote("A", 2, "")]);
+    assert_eq!(plan.conflicts.len(), 1);
+}

@@ -4,6 +4,13 @@ use lf_account::{AccountError, Client, Instance, LockReason};
 use lf_settings::looks::LOOKS;
 use serde_json::json;
 
+const JPEG_REF: &[u8] = &[
+    0xFF, 0xD8, 0xFF, b'R', b'E', b'F', b'B', b'Y', b'T', b'E', b'S',
+];
+const JPEG_SHEET: &[u8] = &[
+    0xFF, 0xD8, 0xFF, b'S', b'H', b'E', b'E', b'T', b'B', b'Y', b'T', b'E', b'S',
+];
+
 fn client(server: &MockServer) -> Client {
     let url = url::Url::parse(&server.url("/api")).unwrap();
     Client::new(Instance::Custom(url), "1.0.0")
@@ -35,8 +42,8 @@ fn extract_sends_the_multipart_parts_and_parses_the_proposal() {
     let p = grade::extract(
         &client(&server),
         Mode::Extract,
-        b"REFBYTES",
-        b"SHEETBYTES",
+        JPEG_REF,
+        JPEG_SHEET,
         &looks,
         None,
     )
@@ -63,7 +70,15 @@ fn examples_field_is_a_json_list_of_id_name_settings() {
     });
     let looks: Vec<&_> = LOOKS.iter().take(1).collect();
     let s = lf_settings::EditSettings::default_settings();
-    let p = grade::extract(&client(&server), Mode::Review, b"a", b"b", &looks, Some(&s)).unwrap();
+    let p = grade::extract(
+        &client(&server),
+        Mode::Review,
+        JPEG_REF,
+        JPEG_SHEET,
+        &looks,
+        Some(&s),
+    )
+    .unwrap();
     m.assert();
     assert_eq!(p.requests_used, 1);
 }
@@ -76,7 +91,14 @@ fn plan_limit_and_paused_are_typed() {
         then.status(422)
             .json_body(json!({"code": "plan_limit", "message": "No AI requests left."}));
     });
-    let r = grade::extract(&client(&server), Mode::Extract, b"a", b"b", &[], None);
+    let r = grade::extract(
+        &client(&server),
+        Mode::Extract,
+        JPEG_REF,
+        JPEG_SHEET,
+        &[],
+        None,
+    );
     assert!(matches!(r, Err(AccountError::PlanLimit(ref s)) if s == "No AI requests left."));
     m.delete();
     server.mock(|when, then| {
@@ -84,9 +106,50 @@ fn plan_limit_and_paused_are_typed() {
         then.status(402)
             .json_body(json!({"code": "subscription_paused", "message": "Paused."}));
     });
-    let r = grade::extract(&client(&server), Mode::Extract, b"a", b"b", &[], None);
+    let r = grade::extract(
+        &client(&server),
+        Mode::Extract,
+        JPEG_REF,
+        JPEG_SHEET,
+        &[],
+        None,
+    );
     assert!(matches!(
         r,
         Err(AccountError::Locked(LockReason::Paused, _))
     ));
+}
+
+fn guard(mode: Mode, reference: &[u8], sheet: &[u8], examples: usize, settings: bool, field: &str) {
+    let server = MockServer::start();
+    let m = server.mock(|when, then| {
+        when.any_request();
+        then.status(200).json_body(json!({"data": {}}));
+    });
+    let looks: Vec<&_> = LOOKS.iter().cycle().take(examples).collect();
+    let s = lf_settings::EditSettings::default_settings();
+    let r = grade::extract(
+        &client(&server),
+        mode,
+        reference,
+        sheet,
+        &looks,
+        settings.then_some(&s),
+    );
+    match r {
+        Err(AccountError::Validation(map)) => assert!(map.contains_key(field), "{map:?}"),
+        other => panic!("{other:?}"),
+    }
+    m.assert_calls(0);
+}
+
+#[test]
+fn guards_reject_bad_input_without_a_request() {
+    let big = [vec![0xFF, 0xD8, 0xFF], vec![0; 700 * 1024]].concat();
+    guard(Mode::Extract, &big, JPEG_SHEET, 0, false, "reference");
+    guard(Mode::Extract, b"GIF89a", JPEG_SHEET, 0, false, "reference");
+    guard(Mode::Extract, JPEG_REF, &big, 0, false, "sheet");
+    guard(Mode::Extract, JPEG_REF, b"", 0, false, "sheet");
+    guard(Mode::Extract, JPEG_REF, JPEG_SHEET, 17, false, "examples");
+    guard(Mode::Review, JPEG_REF, JPEG_SHEET, 0, false, "settings");
 }

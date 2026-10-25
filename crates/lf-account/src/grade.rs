@@ -19,6 +19,22 @@ impl Mode {
     }
 }
 
+const MAX_BYTES: usize = 700 * 1024;
+const MAX_EXAMPLES: usize = 16;
+
+fn invalid<T>(field: &str, message: &str) -> Result<T, AccountError> {
+    Err(AccountError::Validation(
+        [(field.to_string(), message.to_string())].into(),
+    ))
+}
+
+fn check_jpeg(bytes: &[u8], field: &str, what: &str) -> Result<(), AccountError> {
+    if bytes.len() > MAX_BYTES || !bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return invalid(field, &format!("The {what} must be a JPEG under 700 KB."));
+    }
+    Ok(())
+}
+
 /// The server's grade proposal.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Proposal {
@@ -40,6 +56,14 @@ pub fn extract(
     examples: &[&Look],
     settings: Option<&EditSettings>,
 ) -> Result<Proposal, AccountError> {
+    check_jpeg(reference_jpeg, "reference", "reference picture")?;
+    check_jpeg(sheet_jpeg, "sheet", "contact sheet")?;
+    if examples.len() > MAX_EXAMPLES {
+        return invalid("examples", "Use at most 16 example looks.");
+    }
+    if mode == Mode::Review && settings.is_none() {
+        return invalid("settings", "A review needs the current edit settings.");
+    }
     let jpeg = |bytes: &[u8], name: &'static str| {
         Part::bytes(bytes.to_vec())
             .file_name(name)
