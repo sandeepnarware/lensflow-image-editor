@@ -10,11 +10,11 @@
       "source": "raw.pixls.us"
     },
     {
-      "name": "canon-eos-1d-mark-ii.cr2",
-      "url": "https://raw.pixls.us/data/Canon/EOS-1D%20Mark%20II/RAW_CANON_1DM2.CR2",
-      "sha256": "aa27b723cbf885acae845331a9b5816abe87d6c1158cf57442cbc0b1defb40b5",
-      "bytes": 6953301,
-      "camera": "Canon EOS-1D Mark II (full-resolution Bayer)",
+      "name": "canon-eos-20d.cr2",
+      "url": "https://raw.pixls.us/data/Canon/EOS%2020D/IMG_3893.CR2",
+      "sha256": "db78660d48589130d99e0bc621424851eb0f84df052634fb5bc89c7a02fe7033",
+      "bytes": 7489116,
+      "camera": "Canon EOS 20D (full-resolution Bayer)",
       "licence": "CC0-1.0",
       "source": "raw.pixls.us"
     },

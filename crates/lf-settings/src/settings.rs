@@ -343,9 +343,11 @@ pub enum Profile {
 /// What happens to colours brighter than the sensor's range (desktop only).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Highlights {
-    /// Clamp each channel at 1.0.
+    /// Clamp white-balanced camera RGB at 1.0 per channel before the colour matrix, so
+    /// clipped whites stay neutral.
     Clip,
-    /// Pull over-range colours toward neutral, keeping their brightness.
+    /// Blend clipped pixels towards their luma, driven by sensor clipping measured before
+    /// white balance, so unclipped colours are untouched.
     #[default]
     Reconstruct,
 }
