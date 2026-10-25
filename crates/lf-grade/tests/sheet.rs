@@ -114,3 +114,10 @@ fn encodes_a_jpeg_within_700_kb() {
     let bytes = sheet::jpeg(&smooth, 256, 0.85).unwrap();
     assert!(bytes.len() < 700 * 1024);
 }
+
+#[test]
+fn zero_columns_is_one_column_not_a_panic() {
+    let l = tile_layout(3, 10, 0);
+    assert_eq!((l.w, l.h, l.rows), (10, 30, 3));
+    assert_eq!(l.rects.len(), 3);
+}

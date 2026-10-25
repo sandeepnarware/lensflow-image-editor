@@ -64,8 +64,9 @@ pub struct Layout {
     pub rects: Vec<(u32, u32)>,
 }
 
-/// Square tiles in rows of `columns`, at most `SHEET_ROWS` rows.
+/// Square tiles in rows of `columns` (at least 1), at most `SHEET_ROWS` rows.
 pub fn tile_layout(count: usize, tile_edge: u32, columns: u32) -> Layout {
+    let columns = columns.max(1);
     let n = count.min((columns * SHEET_ROWS) as usize) as u32;
     let rows = n.div_ceil(columns).max(1);
     Layout {
