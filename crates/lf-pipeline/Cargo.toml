@@ -11,3 +11,7 @@ pollster = "1.0.1"
 wgpu = "30.0.1"
 image.workspace = true
 thiserror.workspace = true
+lf-settings = { path = "../lf-settings" }
+
+[dev-dependencies]
+lf-fixtures = { path = "../lf-fixtures" }

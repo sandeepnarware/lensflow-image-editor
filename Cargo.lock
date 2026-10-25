@@ -474,6 +474,8 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "image",
+ "lf-fixtures",
+ "lf-settings",
  "pollster",
  "thiserror",
  "wgpu",

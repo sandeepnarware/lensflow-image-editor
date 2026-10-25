@@ -1,6 +1,7 @@
 //! Fullscreen passes ported from the web editor's shaders.
 
 pub mod copy;
+pub mod develop;
 pub mod gaussian;
 
 use crate::gpu::Gpu;
@@ -15,6 +16,10 @@ const GAUSSIAN: &str = concat!(
     include_str!("../shaders/fullscreen.wgsl"),
     include_str!("../shaders/gaussian.wgsl")
 );
+const DEVELOP: &str = concat!(
+    include_str!("../shaders/fullscreen.wgsl"),
+    include_str!("../shaders/develop.wgsl")
+);
 
 /// Every WGSL module the pipeline builds (each fragment file is prefixed with
 /// `fullscreen.wgsl`), by name.
@@ -22,11 +27,13 @@ pub const SHADERS: &[(&str, &str)] = &[
     ("fullscreen.wgsl", FULLSCREEN),
     ("copy.wgsl", COPY),
     ("gaussian.wgsl", GAUSSIAN),
+    ("develop.wgsl", DEVELOP),
 ];
 
 /// One pipeline drawing the fullscreen triangle `[-1,-1, 3,-1, -1,3]` into an `RGBA8`
-/// target, with a texture (binding 0), a sampler (binding 1) and optional uniforms
-/// (binding 2, a slice of a shared buffer chosen by a dynamic offset).
+/// target. [`FullscreenPass::new`] binds a texture (binding 0), a sampler (binding 1) and
+/// optional uniforms (binding 2, a slice of a shared buffer chosen by a dynamic offset);
+/// [`FullscreenPass::with_entries`] takes any layout (the develop pass).
 pub struct FullscreenPass {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
@@ -41,43 +48,32 @@ impl FullscreenPass {
         entry: &str,
         uniforms: bool,
     ) -> Self {
+        let mut entries = vec![texture_entry(0), sampler_entry(1)];
+        if uniforms {
+            entries.push(uniform_entry(2));
+        }
+        Self::with_entries(device, label, source, entry, &entries)
+    }
+
+    /// A pass with its own bind group layout. A uniform buffer entry, if any, must use a
+    /// dynamic offset (see [`FullscreenPass::draw`]).
+    pub fn with_entries(
+        device: &wgpu::Device,
+        label: &str,
+        source: &str,
+        entry: &str,
+        entries: &[wgpu::BindGroupLayoutEntry],
+    ) -> Self {
+        let uniforms = entries
+            .iter()
+            .any(|e| matches!(e.ty, wgpu::BindingType::Buffer { .. }));
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(label),
             source: wgpu::ShaderSource::Wgsl(source.into()),
         });
-        let mut entries = vec![
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ];
-        if uniforms {
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: None,
-                },
-                count: None,
-            });
-        }
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some(label),
-            entries: &entries,
+            entries,
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(label),
@@ -114,6 +110,11 @@ impl FullscreenPass {
             layout,
             uniforms,
         }
+    }
+
+    /// The bind group layout, for passes built [`FullscreenPass::with_entries`].
+    pub fn layout(&self) -> &wgpu::BindGroupLayout {
+        &self.layout
     }
 
     /// The bind group for one draw.
@@ -187,6 +188,44 @@ impl FullscreenPass {
     }
 }
 
+/// A filterable 2D float texture visible to the fragment stage.
+pub fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+/// A filtering sampler visible to the fragment stage.
+pub fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    }
+}
+
+/// A uniform buffer bound with a dynamic offset (a [`UniformArena`] slot).
+pub fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: true,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
 /// Byte offsets of `count` uniform entries of `entry_size` bytes packed into one buffer,
 /// each slot rounded up to a multiple of `alignment` (`min_uniform_buffer_offset_alignment`).
 pub fn uniform_slots(entry_size: u64, alignment: u64, count: usize) -> Vec<u64> {
@@ -245,6 +284,7 @@ pub(crate) struct Pipelines {
     pub copy: FullscreenPass,
     pub mip: FullscreenPass,
     pub gaussian: FullscreenPass,
+    pub develop: FullscreenPass,
 }
 
 impl Pipelines {
@@ -253,6 +293,7 @@ impl Pipelines {
             copy: FullscreenPass::new(device, "copy", COPY, "fs_copy", false),
             mip: FullscreenPass::new(device, "mip", COPY, "fs_mip", false),
             gaussian: FullscreenPass::new(device, "gaussian", GAUSSIAN, "fs_gaussian", true),
+            develop: develop::pipeline(device, DEVELOP),
         }
     }
 }
