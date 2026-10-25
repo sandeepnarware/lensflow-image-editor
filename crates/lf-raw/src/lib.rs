@@ -1,6 +1,7 @@
 //! Decoding of camera RAW files into sensor data (via rawler), and developing it
 //! into a picture ([`develop`]).
 
+pub mod cache;
 pub mod color;
 pub mod curve;
 pub mod decode;
