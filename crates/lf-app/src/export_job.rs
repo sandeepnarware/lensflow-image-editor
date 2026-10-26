@@ -1,4 +1,4 @@
-//! Export to disk, on the `Io` lane: the worker side of the export dialog.
+//! Export to disk, on the `Long` lane: the worker side of the export dialog.
 //!
 //! The job opens its own `Catalog` and calls [`lf_catalog::export::run`]. It holds no account
 //! client and no session, so a token revoked while it runs (Review Focus 2) cannot stop it:
@@ -92,7 +92,11 @@ pub fn run(
             ControlFlow::Continue(())
         }
     })
-    .map_err(|e| error_text(&catalog, &e))?;
+    .map_err(|e| error_text(&catalog, &e));
+    // A photo whose write was cut short (a replace goes through a hidden temp file) leaves
+    // nothing behind.
+    remove_unfinished(folder);
+    let report = report?;
     let device_lost = report.device_lost || lost_between;
     let failed = report
         .failed
@@ -116,6 +120,37 @@ pub fn run(
         cancelled: report.cancelled && !device_lost,
         device_lost,
     })
+}
+
+/// Removes the hidden temp files this process left in `folder` (`.<name>.<pid>-<n>.tmp`,
+/// made while replacing an existing file): an export that was stopped or cut short leaves
+/// none behind. Other processes' files are left alone.
+pub fn remove_unfinished(folder: &Path) {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
+    let mine = format!(".{}-", std::process::id());
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if is_unfinished(&name, &mine) {
+            match std::fs::remove_file(entry.path()) {
+                Ok(()) => log::info!("removed the unfinished export file {name}"),
+                Err(e) => log::warn!("could not remove the unfinished export file {name}: {e}"),
+            }
+        }
+    }
+}
+
+/// `.<name>.<pid>-<n>.tmp` for this process (`mine` is `.<pid>-`).
+fn is_unfinished(name: &str, mine: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".tmp") else {
+        return false;
+    };
+    name.starts_with('.')
+        && stem.rfind(mine).is_some_and(|at| {
+            let counter = &stem[at + mine.len()..];
+            !counter.is_empty() && counter.bytes().all(|b| b.is_ascii_digit())
+        })
 }
 
 fn file_name(path: &Path) -> String {
@@ -542,5 +577,24 @@ mod tests {
             check_writable(&dir.path().join("nope")),
             Err(crate::catalog_ext::FOLDER_MISSING.to_owned())
         );
+    }
+
+    #[test]
+    fn an_interrupted_export_leaves_no_temp_file_of_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid = std::process::id();
+        let ours = format!(".p0.jpg.{pid}-3.tmp");
+        let theirs = format!(".p0.jpg.{}-3.tmp", pid.wrapping_add(1));
+        for name in [ours.as_str(), theirs.as_str(), "p0.jpg", "notes.tmp"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        remove_unfinished(dir.path());
+        let mut left = files_in(dir.path());
+        left.sort();
+        let mut expected = vec![theirs, "notes.tmp".to_owned(), "p0.jpg".to_owned()];
+        expected.sort();
+        assert_eq!(left, expected);
+        // A folder that is gone is no trouble.
+        remove_unfinished(&dir.path().join("gone"));
     }
 }

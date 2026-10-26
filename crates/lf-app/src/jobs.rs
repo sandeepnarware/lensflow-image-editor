@@ -33,21 +33,30 @@ pub enum Lane {
     Account,
     /// Opening and decoding photos.
     Open,
-    /// Disk work: imports, sidecars, exports.
+    /// Short disk work: sidecar writes, opening the catalogue, removing a folder, marking
+    /// photos missing, rebuilding the thumbnail pool.
     Io,
     /// Quick catalogue reads (folders, a folder's photos), so they never wait behind an
     /// import or an export.
     Query,
+    /// Long jobs that may run for minutes: scans and imports, exports, "Apply to N photos",
+    /// "Match a reference" (its fit and apply) and the installer download. They never hold
+    /// up a sidecar write or the opening of a photo.
+    Long,
 }
 
 impl Lane {
-    /// The worker thread's name: `lf-account`, `lf-open`, `lf-io`, `lf-query`.
+    /// Every lane, in the order they are started (and waited for at shutdown).
+    pub const ALL: [Lane; 5] = [Lane::Account, Lane::Open, Lane::Io, Lane::Query, Lane::Long];
+
+    /// The worker thread's name: `lf-account`, `lf-open`, `lf-io`, `lf-query`, `lf-long`.
     pub fn thread_name(self) -> &'static str {
         match self {
             Lane::Account => "lf-account",
             Lane::Open => "lf-open",
             Lane::Io => "lf-io",
             Lane::Query => "lf-query",
+            Lane::Long => "lf-long",
         }
     }
 }
@@ -160,7 +169,7 @@ struct Job {
     work: Work,
 }
 
-/// The three lanes and the channel they answer on.
+/// The lanes and the channel they answer on.
 ///
 /// [`Jobs::shutdown`] (called from `App::on_exit`) stops every lane from accepting work; each
 /// lane finishes the job it is running, and the jobs still queued are discarded without
@@ -225,11 +234,11 @@ struct Worker {
 }
 
 impl Jobs {
-    /// Starts the three lanes; each finished job wakes `ctx`.
+    /// Starts the lanes; each finished job wakes `ctx`.
     pub fn new(ctx: egui::Context) -> Jobs {
         let (results_tx, results) = mpsc::channel();
         let stopping = Arc::new(AtomicBool::new(false));
-        let lanes = [Lane::Account, Lane::Open, Lane::Io, Lane::Query]
+        let lanes = Lane::ALL
             .into_iter()
             .map(|lane| start_lane(lane, results_tx.clone(), ctx.clone(), stopping.clone()))
             .collect();
@@ -360,6 +369,36 @@ fn start_lane(
     }
 }
 
+/// What the photographer reads when the job named `name` panicked: the plain action and a
+/// pointer to the log (the panic's own text is logged by the lane, never shown).
+pub fn failed_text(name: &str) -> String {
+    let action = match name {
+        "open photo" => "opening the photo",
+        "pre-open photo" => "preparing the next photo",
+        "match" => "matching the reference",
+        "match apply" => "applying the match",
+        "export" => "exporting",
+        "batch" => "applying the edits",
+        "import" => "importing the folder",
+        "add folder" | "rescan" => "reading the folder",
+        "open catalogue" => "opening the catalogue",
+        "thumbnail pool" => "restarting the thumbnails",
+        "photos" => "listing the photos",
+        "folders" => "listing the folders",
+        "remove folder" => "removing the folder",
+        "mark missing" => "marking the photos missing",
+        "write sidecar" => "saving an edit file",
+        "update" => "downloading the update",
+        "sign in" => "signing in",
+        "sign out" | "forget" => "signing out",
+        "resume" | "me" => "checking your account",
+        "entitlement" | "forget entitlement" => "checking your studio",
+        "sync presets" => "syncing the studio presets",
+        _ => "working in the background",
+    };
+    format!("Something went wrong while {action}. Details are in the log.")
+}
+
 fn panic_message(panic: &(dyn Any + Send)) -> String {
     if let Some(text) = panic.downcast_ref::<&str>() {
         (*text).to_owned()
@@ -390,6 +429,22 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         got
+    }
+
+    #[test]
+    fn a_failed_job_reads_as_a_plain_sentence() {
+        assert_eq!(
+            failed_text("export"),
+            "Something went wrong while exporting. Details are in the log."
+        );
+        assert_eq!(
+            failed_text("open photo"),
+            "Something went wrong while opening the photo. Details are in the log."
+        );
+        assert_eq!(
+            failed_text("something new"),
+            "Something went wrong while working in the background. Details are in the log."
+        );
     }
 
     #[test]
@@ -440,15 +495,58 @@ mod tests {
     #[test]
     fn each_lane_runs_on_its_own_named_thread() {
         let jobs = Jobs::new(egui::Context::default());
-        for lane in [Lane::Account, Lane::Open, Lane::Io, Lane::Query] {
+        for lane in Lane::ALL {
             jobs.spawn(lane, lane.thread_name(), move || {
                 assert_eq!(std::thread::current().name(), Some(lane.thread_name()));
                 Msg::Probe(lane.thread_name())
             });
         }
-        let mut got = drain_until(&jobs, 4);
+        let mut got = drain_until(&jobs, 5);
         got.sort();
-        assert_eq!(got, ["lf-account", "lf-io", "lf-open", "lf-query"]);
+        assert_eq!(
+            got,
+            ["lf-account", "lf-io", "lf-long", "lf-open", "lf-query"]
+        );
+    }
+
+    #[test]
+    fn a_sidecar_write_finishes_while_a_long_job_runs() {
+        use crate::develop::debounce::{PendingWrite, SidecarSaver};
+        let dir = tempfile::tempdir().unwrap();
+        let mut jobs = Jobs::new(egui::Context::default());
+        // An export (or an import) that runs until it is told to stop.
+        let release = Arc::new(AtomicBool::new(false));
+        let (started_tx, started) = mpsc::channel();
+        {
+            let release = release.clone();
+            jobs.spawn(Lane::Long, "export", move || {
+                started_tx.send(()).unwrap();
+                while !release.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Msg::Probe("export")
+            });
+        }
+        started.recv_timeout(Duration::from_secs(10)).unwrap();
+
+        let photo = dir.path().join("a.jpg");
+        let saver = SidecarSaver::new();
+        let sidecar = crate::develop::debounce::tests::sidecar(0.5);
+        saver.push(PendingWrite::new(1, &photo, sidecar), Instant::now());
+        saver.pump(Instant::now() + Duration::from_secs(5), &jobs);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut written = false;
+        while !written && Instant::now() < deadline {
+            written = jobs
+                .drain()
+                .iter()
+                .any(|m| matches!(m, Msg::SidecarWritten(Ok(()))));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(written, "the sidecar was written while the long job ran");
+        assert!(lf_catalog::sidecar::path_for(&photo).exists());
+        release.store(true, Ordering::SeqCst);
+        assert!(jobs.shutdown(Duration::from_secs(5)).is_empty());
     }
 
     #[test]

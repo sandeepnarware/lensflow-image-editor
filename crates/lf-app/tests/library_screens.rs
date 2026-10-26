@@ -1065,7 +1065,9 @@ fn copy_then_paste_onto_one_photo_and_then_on_many() {
             .map(|s| s.exposure)
     };
     assert_eq!(exposure_of(ids[1]), Some(dragged));
-    assert!(lf_catalog::sidecar::path_for(&paths[1]).exists());
+    // Its edit file follows a quiet second later, off the UI thread.
+    let pasted = lf_catalog::sidecar::path_for(&paths[1]);
+    step_until(&mut h, "the pasted photo's edit file", |_| pasted.exists());
 
     // Every photo: "Apply to 3 photos".
     h.key_press_modifiers(egui::Modifiers::COMMAND, Key::A);
@@ -1125,7 +1127,8 @@ fn paste_works_in_the_library_before_any_photo_is_opened() {
         "pasted: {:?}",
         h.state().toasts.texts().collect::<Vec<_>>()
     );
-    assert!(lf_catalog::sidecar::path_for(&second).exists());
+    let written = lf_catalog::sidecar::path_for(&second);
+    step_until(&mut h, "the edit file", |_| written.exists());
 }
 
 #[test]
@@ -1362,4 +1365,159 @@ fn winding_down_for_another_catalogue_commits_stops_then_writes() {
             .exposure,
         1.5
     );
+}
+
+/// Closing the window while an export runs asks first; quitting stops it after the current
+/// photo (here, before the first: the export was still waiting for the lane).
+#[test]
+fn quitting_during_an_export_asks_and_stops_it() {
+    use lf_app::dialogs::{export, quit};
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 2);
+    import_folder(&mut h, &shoot, 2);
+    let out = dir.path().join("out");
+    std::fs::create_dir(&out).unwrap();
+    assert_eq!(h.state().lib.quit_question(), None);
+
+    // Hold the Long lane so the export cannot start yet.
+    let (release, held) = mpsc::channel::<()>();
+    h.state().jobs.spawn(Lane::Long, "hold", move || {
+        let _ = held.recv();
+        Msg::Cleared
+    });
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::A);
+    h.step();
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::E);
+    h.step();
+    h.step();
+    h.state_mut()
+        .lib
+        .export_mut()
+        .unwrap()
+        .set_typed(&out.to_string_lossy());
+    h.step();
+    h.get_by_role_and_label(Role::Button, export::USE_FOLDER)
+        .click();
+    step_until(&mut h, "the typed folder", |s| {
+        s.lib.export_folder().as_deref() == Some(out.as_path())
+    });
+    h.get_by_role_and_label(Role::Button, export::EXPORT)
+        .click();
+    h.step();
+    assert_eq!(h.state().lib.quit_question(), Some(quit::EXPORT_RUNNING));
+    assert_eq!(h.state().lib.running_export_folder(), Some(out.clone()));
+
+    h.state().lib.stop_long_work();
+    release.send(()).unwrap();
+    step_until_label(&mut h, "Stopped after 0 photos.");
+    assert!(!out.join("p0.jpg").exists(), "nothing was exported");
+    assert_eq!(h.state().lib.quit_question(), None);
+}
+
+#[test]
+fn an_edit_in_develop_remakes_the_thumbnail_and_marks_the_photo_edited() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    let id = h.state().lib.photos()[0].id;
+    let root = dir.path().join("catalogue");
+    let quality = lf_app::catalog_ext::THUMB_QUALITY;
+    step_until(&mut h, "the first thumbnail", |s| {
+        let (made, _, pending) = s.lib.thumbnail_counts();
+        made == 1 && pending == 0
+    });
+    assert!(!h.state().lib.photos()[0].edited);
+
+    drag_slider(&mut h, "Exposure", 60.0);
+    step_until(&mut h, "the drag to be committed", |s| {
+        s.lib.develop().edit_state().is_some_and(|e| !e.dirty)
+    });
+    let catalog = lf_catalog::Catalog::open(&root).unwrap();
+    assert!(
+        catalog.fresh_thumbnail(id, quality).unwrap().is_none(),
+        "the stored thumbnail is stale after the edit"
+    );
+
+    // G leaves the photo: its thumbnail is asked for again at once and its row is re-read.
+    h.key_press(Key::G);
+    h.step();
+    assert_eq!(h.state().lib.mode, Mode::Library);
+    step_until(&mut h, "a fresh thumbnail and the edited flag", |s| {
+        let (made, _, pending) = s.lib.thumbnail_counts();
+        s.lib.photos()[0].edited
+            && made == 1
+            && pending == 0
+            && catalog.fresh_thumbnail(id, quality).unwrap().is_some()
+    });
+}
+
+#[test]
+fn edits_in_develop_remake_the_thumbnail_a_quiet_second_later() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    let id = h.state().lib.photos()[0].id;
+    let root = dir.path().join("catalogue");
+    let quality = lf_app::catalog_ext::THUMB_QUALITY;
+    drag_slider(&mut h, "Exposure", 60.0);
+    step_until(&mut h, "the drag to be committed", |s| {
+        s.lib.develop().edit_state().is_some_and(|e| !e.dirty)
+    });
+    // Still in Develop: the filmstrip's thumbnail follows once the edits go quiet.
+    let catalog = lf_catalog::Catalog::open(&root).unwrap();
+    step_until(
+        &mut h,
+        "the filmstrip's thumbnail and the edited flag",
+        |s| s.lib.photos()[0].edited && catalog.fresh_thumbnail(id, quality).unwrap().is_some(),
+    );
+    assert_eq!(h.state().lib.mode, Mode::Develop(id));
+}
+
+#[test]
+fn an_import_finishing_leaves_develop_and_another_folder_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    // Nothing shown yet: the first import shows its folder.
+    develop_one(&mut h, dir.path());
+    let first_folder = h.state().lib.photos()[0].folder_id;
+    let open = h.state().lib.photos()[0].id;
+    assert_eq!(h.state().lib.mode, Mode::Develop(open));
+
+    // Another folder's import ends while a photo is open in Develop.
+    let other = dir.path().join("other");
+    pngs(&other, 2);
+    let scan = import::scan(&other);
+    h.state_mut().handle(Msg::Scanned {
+        folder: other.clone(),
+        scan,
+    });
+    step_until(&mut h, "the import", |s| !s.lib.importing());
+    step_until_label(&mut h, "other  (2)");
+    assert_eq!(h.state().lib.mode, Mode::Develop(open), "still in Develop");
+    assert_eq!(h.state().lib.current_folder(), Some(first_folder));
+    assert!(h.state().lib.develop().is_ready());
+
+    // In the library on the first folder, a rescan of the other one keeps the first shown.
+    h.key_press(Key::G);
+    h.step();
+    let scan = import::scan(&other);
+    h.state_mut().handle(Msg::Scanned {
+        folder: other.clone(),
+        scan,
+    });
+    step_until(&mut h, "the rescan", |s| {
+        !s.lib.importing() && !s.lib.loading()
+    });
+    assert_eq!(h.state().lib.current_folder(), Some(first_folder));
+    assert_eq!(h.state().lib.photos().len(), 1);
 }

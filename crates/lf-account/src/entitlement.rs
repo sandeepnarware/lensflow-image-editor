@@ -140,9 +140,16 @@ pub struct Cache {
 }
 
 impl Cache {
+    /// `<dir>/entitlement.json`.
     pub fn new(dir: &Path) -> Cache {
+        Cache::named(dir, "entitlement.json")
+    }
+
+    /// `<dir>/<file>`: one cache per server, so one server's answer is never replayed for
+    /// another.
+    pub fn named(dir: &Path, file: &str) -> Cache {
         Cache {
-            path: dir.join("entitlement.json"),
+            path: dir.join(file),
         }
     }
 

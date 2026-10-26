@@ -4,13 +4,21 @@
 use eframe::egui;
 use lf_app::app::App;
 use lf_app::prefs::Dirs;
-use lf_app::{gpu, logging, theme};
+use lf_app::{gpu, logging, startup, theme};
+use rfd::MessageLevel;
 
 fn main() -> eframe::Result {
     let dirs = Dirs::locate();
-    if let Err(e) = logging::init(&dirs.data) {
-        eprintln!("{e}");
-    }
+    let log = match logging::init(&dirs.data) {
+        Ok(path) => Some(path),
+        Err(e) => {
+            eprintln!("{e}");
+            if startup::NO_CONSOLE {
+                startup::tell(MessageLevel::Warning, &startup::log_failed_text(&e));
+            }
+            None
+        }
+    };
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("lensflow-ImageEditor")
@@ -35,6 +43,10 @@ fn main() -> eframe::Result {
     );
     if let Err(e) = &result {
         log::error!("the window could not open: {e}");
+        startup::tell(
+            MessageLevel::Error,
+            &startup::failed_text(startup::reason(e), log.as_deref()),
+        );
     }
     result
 }

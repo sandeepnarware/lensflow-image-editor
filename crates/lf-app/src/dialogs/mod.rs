@@ -9,6 +9,7 @@ pub mod group_picker;
 pub mod keys;
 pub mod match_reference;
 pub mod preferences;
+pub mod quit;
 pub mod save_preset;
 
 use crate::theme;

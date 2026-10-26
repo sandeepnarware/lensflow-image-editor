@@ -277,7 +277,6 @@ mod tests {
     use super::*;
     use crate::account::Credentials;
     use lf_account::Instance;
-    use lf_account::entitlement::Cache;
     use serde_json::json;
 
     const CURRENT: &str = "1.2.0";
@@ -475,7 +474,9 @@ mod tests {
     fn stored(dir: &std::path::Path) -> Credentials {
         let creds = Credentials::in_dir(&Instance::Dev, dir);
         creds.save_token("secret-token");
-        Cache::new(dir).save(&Entitlement::example(Standing::Active, true));
+        creds
+            .cache()
+            .save(&Entitlement::example(Standing::Active, true));
         assert_eq!(creds.token().as_deref(), Some("secret-token"));
         creds
     }
@@ -498,10 +499,7 @@ mod tests {
         };
         assert!(matches!(decision, Decision::SignIn));
         assert_eq!(creds.token(), None, "the token is cleared");
-        assert!(
-            Cache::new(dir.path()).load().is_none(),
-            "the cache is cleared"
-        );
+        assert!(creds.cache().load().is_none(), "the cache is cleared");
 
         let s = allowed();
         let next =
@@ -601,7 +599,7 @@ mod tests {
         let msg = crate::account::me(2, &mock_client(&server), &creds);
         assert!(matches!(msg, crate::jobs::Msg::Me(2, Err(_))));
         assert_eq!(creds.token().as_deref(), Some("secret-token"));
-        assert!(Cache::new(dir.path()).load().is_some());
+        assert!(creds.cache().load().is_some());
 
         // ... a 401 forgets both on the account lane.
         hiccup.delete();
@@ -616,7 +614,7 @@ mod tests {
             crate::jobs::Msg::Me(2, Err(lf_account::AccountError::Unauthorized))
         ));
         assert_eq!(creds.token(), None);
-        assert!(Cache::new(dir.path()).load().is_none());
+        assert!(creds.cache().load().is_none());
 
         // The app's own forget job (a 401 from any other call) does the same.
         let creds = stored(dir.path());
@@ -625,7 +623,7 @@ mod tests {
             crate::jobs::Msg::Cleared
         ));
         assert_eq!(creds.token(), None);
-        assert!(Cache::new(dir.path()).load().is_none());
+        assert!(creds.cache().load().is_none());
     }
 
     #[test]

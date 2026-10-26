@@ -19,8 +19,11 @@ Each `Renderer` call reports its own errors through per-call error scopes (in
 handler. The app's `gpu.take_error()` tap only counts these errors. Three in a
 minute show one toast: "The graphics device reported several errors. If a photo
 looks wrong, reopen it." A lost device (driver reset, sleep) shows the banner
-"The graphics device was reset. Reopen the photo to continue." and offers a
-restart. The app never panics on it.
+"The graphics device was reset. Restart lensflow-ImageEditor to continue." and
+offers a restart. The app never panics on it. A device error that stops only the
+thumbnails says "Thumbnails stopped because of a graphics error. They will
+restart when you change folders." An export cut short by a lost device logs how
+far it got.
 
 Every frame, `logic()` drains the jobs' messages, ticks the session, reads the
 keyboard map, and taps the device. `ui()` then draws the menu bar, the banners,
@@ -36,9 +39,16 @@ thread per lane. Each job returns a `Msg`, and `logic()` drains them every frame
 | Lane | Thread | What runs there |
 |------|--------|-----------------|
 | `Account` | `lf-account` | Sign-in, `auth/me`, the entitlement gate, preset sync, sign-out |
-| `Open` | `lf-open` | Opening and decoding a photo for Develop (its `Renderer` is built there), pre-opening neighbours, "Match a reference" fits and applies |
-| `Io` | `lf-io` | Opening the catalogue, scans and imports, sidecar writes, folder removal, "Apply to N photos", exports |
+| `Open` | `lf-open` | Opening and decoding a photo for Develop (its `Renderer` is built there), pre-opening neighbours |
+| `Io` | `lf-io` | Short disk work: opening the catalogue, sidecar writes, folder removal, marking photos missing, rebuilding the thumbnail pool |
 | `Query` | `lf-query` | Quick catalogue reads (folders, a folder's photos), so they never wait behind an import |
+| `Long` | `lf-long` | Work that can take minutes: scans and imports, exports, "Apply to N photos", "Match a reference" fits and applies, the installer download |
+
+Long work has a lane of its own so that a sidecar write, a folder removal or the
+opening of a photo never waits behind an export or an import. When the window
+closes, the export, the batch, the import and a match are told to stop after
+their current photo, every lane finishes its running job (up to ten seconds),
+and only then are the waiting sidecars written.
 
 `lf-catalog`'s thumbnail pool has its own threads. Folder pickers run on
 short-lived threads of their own, so a picker that never answers holds up
@@ -99,11 +109,11 @@ The folders come from `directories::ProjectDirs::from("in", "lensflow",
 |------|-------|
 | Preferences | `<config dir>/prefs.json` (Edit → Preferences…) |
 | Window size and position | `<config dir>/window.ron` |
-| Cached entitlement | `<config dir>/entitlement.json` |
+| Cached entitlement | `<config dir>/entitlement.json` (the development server: `entitlement-dev.json`) |
 | Sign-in token | The system keychain; without one, an encrypted file in the config dir |
 | Log | `<data dir>/logs/app.log`, rotated at 5 MB, three old files kept (Help → Show log folder) |
 | Decoded RAW frames | `<cache dir>/frames`, 4 GB by default (Preferences: frame cache size) |
-| Catalogue | `<catalogue root>/.lensflow/catalog.sqlite`; the root is chosen on first run |
+| Catalogue | `<catalogue root>/.lensflow/catalog.sqlite`; the root is chosen on first run. Studio presets in it are kept per studio and per server (a development-server studio's key is its negated id) |
 | Edits beside each photo | `<photo>.lensflow.json` sidecars |
 
 On Windows the config and data dirs are

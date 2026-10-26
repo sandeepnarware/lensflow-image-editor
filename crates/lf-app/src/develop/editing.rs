@@ -12,7 +12,7 @@ use crate::jobs::Jobs;
 use crate::toast::{Level, Toasts};
 use lf_catalog::{Catalog, Sidecar};
 use lf_settings::groups::GroupKey;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -26,6 +26,9 @@ pub const BUSY_TOASTS_AFTER: u32 = 3;
 /// How long leaving a photo waits for the write lock to save its last gesture: there is no
 /// retry after the photo is gone, so this waits as long as the catalogue's own default.
 pub const FINISH_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the open photo's edits stay quiet before the library remakes its thumbnail and
+/// re-reads its row (a photo that was left is done at once).
+pub const THUMB_QUIET: Duration = Duration::from_secs(1);
 
 /// The warning for a photo whose edit file cannot be read: `name` is the photo's file name.
 pub fn damaged_text(name: &str) -> String {
@@ -45,7 +48,12 @@ pub fn write_failed_text(message: &str) -> String {
 
 /// The toast when the open photo's last gesture could not be saved as the photo was left.
 pub fn last_change_failed_text(name: &str, reason: &str) -> String {
-    format!("Your last change to {name} could not be saved: {reason}")
+    let stop = if reason.ends_with(['.', '!', '?']) {
+        ""
+    } else {
+        "."
+    };
+    format!("Your last change to {name} could not be saved: {reason}{stop}")
 }
 
 /// The damaged-sidecar warning showing now.
@@ -86,6 +94,22 @@ fn connect<'a>(
         .ok_or_else(|| "no catalogue is open".to_owned())
 }
 
+/// Runs `f` with the [`FINISH_TIMEOUT`] wait for the write lock, then puts the quick
+/// timeout back.
+fn patiently<T>(
+    catalog: &Catalog,
+    f: impl FnOnce(&Catalog) -> Result<T, String>,
+) -> Result<T, String> {
+    if let Err(e) = catalog.set_busy_timeout(FINISH_TIMEOUT) {
+        log::warn!("could not lengthen the catalogue's busy timeout: {e}");
+    }
+    let result = f(catalog);
+    if let Err(e) = catalog.set_busy_timeout(BUSY_TIMEOUT) {
+        log::warn!("could not restore the catalogue's busy timeout: {e}");
+    }
+    result
+}
+
 #[derive(Default)]
 pub struct EditSession {
     /// The open photo's settings being edited (one history step per gesture).
@@ -102,6 +126,9 @@ pub struct EditSession {
     busy: u32,
     /// When a commit refused as busy is tried again.
     retry_at: Option<Instant>,
+    /// Photos whose edits changed in the catalogue here, with the last change's time: the
+    /// library remakes their thumbnails ([`EditSession::take_edited`]).
+    edited: HashMap<i64, Instant>,
 }
 
 impl EditSession {
@@ -248,6 +275,22 @@ impl EditSession {
         connect(&mut self.catalog, self.catalog_root.as_deref())
     }
 
+    /// Runs a one-shot change `f` (a preset saved or deleted, a paste onto another photo, a
+    /// version added, used or deleted) with the full [`FINISH_TIMEOUT`] wait for the write
+    /// lock: unlike a gesture it is never tried again, so it waits out an import batch
+    /// rather than give up after the quick timeout.
+    pub fn patient<T>(
+        &mut self,
+        f: impl FnOnce(&Catalog) -> Result<T, String>,
+    ) -> Result<T, String> {
+        patiently(connect(&mut self.catalog, self.catalog_root.as_deref())?, f)
+    }
+
+    /// Hands a sidecar for a photo that is not open to the debounced writer.
+    pub fn save_later(&mut self, write: PendingWrite) {
+        self.saver.push(write, Instant::now());
+    }
+
     /// Runs `f` against the catalogue and the open photo's edit state (versions, a batch
     /// reload); a sidecar it returns is handed to the writer unless `sidecar_damaged`.
     /// An error is toasted after `what`. True when `f` succeeded.
@@ -263,7 +306,7 @@ impl EditSession {
             return false;
         };
         let result = connect(&mut self.catalog, self.catalog_root.as_deref())
-            .and_then(|c| f(c, edit).map_err(|e| e.to_string()));
+            .and_then(|c| patiently(c, |c| f(c, edit).map_err(|e| e.to_string())));
         match result {
             Ok(sidecar) => {
                 if let Some(sidecar) = sidecar {
@@ -295,16 +338,8 @@ impl EditSession {
         let Some(edit) = self.edit.as_mut().filter(|e| e.dirty) else {
             return false;
         };
-        let result = connect(&mut self.catalog, self.catalog_root.as_deref()).and_then(|c| {
-            if let Err(e) = c.set_busy_timeout(FINISH_TIMEOUT) {
-                log::warn!("could not lengthen the catalogue's busy timeout: {e}");
-            }
-            let result = edit.commit(c).map_err(|e| e.to_string());
-            if let Err(e) = c.set_busy_timeout(BUSY_TIMEOUT) {
-                log::warn!("could not restore the catalogue's busy timeout: {e}");
-            }
-            result
-        });
+        let result = connect(&mut self.catalog, self.catalog_root.as_deref())
+            .and_then(|c| patiently(c, |c| edit.commit(c).map_err(|e| e.to_string())));
         match result {
             Ok(Some(sidecar)) => {
                 self.save_sidecar(sidecar, photo, sidecar_damaged);
@@ -323,6 +358,9 @@ impl EditSession {
     /// not be read: that file is left alone until it has been fixed (the edit is in the
     /// catalogue either way).
     fn save_sidecar(&mut self, sidecar: Sidecar, photo: Option<&Path>, sidecar_damaged: bool) {
+        if let Some(edit) = &self.edit {
+            self.edited.insert(edit.photo_id, Instant::now());
+        }
         let (Some(edit), Some(path)) = (&self.edit, photo) else {
             return;
         };
@@ -337,6 +375,26 @@ impl EditSession {
             PendingWrite::new(edit.photo_id, path, sidecar),
             Instant::now(),
         );
+    }
+
+    /// The photos whose thumbnails are due to be remade: every photo edited here that is no
+    /// longer `open`, and the open one once its edits have been quiet for [`THUMB_QUIET`].
+    pub fn take_edited(&mut self, open: Option<i64>, now: Instant) -> Vec<i64> {
+        let due: Vec<i64> = self
+            .edited
+            .iter()
+            .filter(|(id, at)| Some(**id) != open || now >= **at + THUMB_QUIET)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &due {
+            self.edited.remove(id);
+        }
+        due
+    }
+
+    /// When the open photo's thumbnail falls due (to wake the UI then).
+    pub fn edited_due(&self) -> Option<Instant> {
+        self.edited.values().map(|at| *at + THUMB_QUIET).min()
     }
 
     /// When a commit refused as busy is tried again.
@@ -430,6 +488,29 @@ mod tests {
     }
 
     #[test]
+    fn a_one_shot_change_waits_out_a_busy_catalogue() {
+        let (dir, c, _id, mut session) = editing();
+        let db = dir.path().join(".lensflow/catalog.sqlite");
+        let (locked_tx, locked) = std::sync::mpsc::channel();
+        // An import batch holds the write lock for 600 ms, longer than the quick timeout.
+        let holder = std::thread::spawn(move || {
+            let other = rusqlite::Connection::open(db).unwrap();
+            other.execute_batch("BEGIN IMMEDIATE").unwrap();
+            locked_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(600));
+            other.execute_batch("ROLLBACK").unwrap();
+        });
+        locked.recv().unwrap();
+        let saved = session.patient(|c| {
+            lf_catalog::presets::save(c, 7, "Warm", &serde_json::json!({"v": 2}))
+                .map_err(|e| e.to_string())
+        });
+        holder.join().unwrap();
+        assert!(saved.is_ok(), "{saved:?}");
+        assert_eq!(lf_catalog::presets::list(&c, 7).unwrap().len(), 1);
+    }
+
+    #[test]
     fn a_last_change_that_cannot_be_saved_says_so() {
         let (_dir, c, id, mut session) = editing();
         // The photo left the catalogue (its folder was removed) under the open edit.
@@ -441,6 +522,11 @@ mod tests {
         assert!(
             text.starts_with("Your last change to a.jpg could not be saved: "),
             "{text}"
+        );
+        assert!(text.ends_with('.'), "{text}");
+        assert_eq!(
+            last_change_failed_text("a.jpg", "disk full"),
+            "Your last change to a.jpg could not be saved: disk full."
         );
         let _ = id;
     }

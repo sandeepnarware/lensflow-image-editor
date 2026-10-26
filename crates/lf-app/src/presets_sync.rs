@@ -12,7 +12,7 @@
 use lf_account::presets::{self, LocalPreset, Preset, Sync};
 use lf_account::{AccountError, Client};
 use lf_catalog::Catalog;
-use lf_catalog::presets::{self as local, LocalPresetRow};
+use lf_catalog::presets::{self as local, LocalPresetRow, Seen, SeenRows};
 use std::fmt;
 
 /// What a sync did.
@@ -66,6 +66,14 @@ pub fn run(client: &Client, catalog: &Catalog, studio_id: i64) -> Result<SyncRep
         conflicts: plan.conflicts.len(),
         ..SyncReport::default()
     };
+    // Every write below is a compare-and-set against the rows as read here (updated after
+    // each of the sync's own writes): a preset saved, renamed or deleted on the UI thread
+    // while the sync talks to the server is never overwritten, brought back or purged.
+    let mut seen: SeenRows = live
+        .iter()
+        .chain(&dead)
+        .map(|r| (r.id, Seen::of(r)))
+        .collect();
     for &id in &plan.delete_remote {
         match presets::delete(client, id) {
             // Already gone there: nothing left to do but forget it here.
@@ -73,13 +81,13 @@ pub fn run(client: &Client, catalog: &Catalog, studio_id: i64) -> Result<SyncRep
             Err(e) => return Err(e.into()),
         }
         for row in dead.iter().filter(|r| r.remote_id == Some(id)) {
-            local::purge(catalog, row.id)?;
+            purge(catalog, row, &seen)?;
         }
         report.deleted += 1;
     }
     for name in &plan.purge {
         if let Some(row) = live.iter().chain(&dead).find(|r| &r.name == name) {
-            local::purge(catalog, row.id)?;
+            purge(catalog, row, &seen)?;
             report.deleted += 1;
         }
     }
@@ -89,31 +97,22 @@ pub fn run(client: &Client, catalog: &Catalog, studio_id: i64) -> Result<SyncRep
             None => presets::create(client, &p.name, &p.settings)?,
         };
         let at = server_time(&saved);
-        local::upsert(
+        record(
             catalog,
             studio_id,
             &p.name,
             &p.settings,
             &at,
-            Some(saved.id),
-            Some(&at),
+            saved.id,
+            &mut seen,
         )?;
         report.pushed += 1;
     }
     for r in &plan.pull {
         let at = server_time(r);
-        let pull = || {
-            local::upsert(
-                catalog,
-                studio_id,
-                &r.name,
-                &r.settings,
-                &at,
-                Some(r.id),
-                Some(&at),
-            )
-        };
-        match pull() {
+        let pull =
+            |seen: &mut SeenRows| record(catalog, studio_id, &r.name, &r.settings, &at, r.id, seen);
+        match pull(&mut seen) {
             Err(lf_catalog::CatalogError::PresetNameTaken(_)) => {
                 // Another row here still has the name (names changed on the server).
                 make_room(
@@ -124,8 +123,9 @@ pub fn run(client: &Client, catalog: &Catalog, studio_id: i64) -> Result<SyncRep
                     &plan.pull,
                     &remote,
                     &mut report,
+                    &mut seen,
                 )?;
-                pull()?;
+                pull(&mut seen)?;
             }
             other => {
                 other?;
@@ -137,9 +137,54 @@ pub fn run(client: &Client, catalog: &Catalog, studio_id: i64) -> Result<SyncRep
     Ok(report)
 }
 
+/// Writes the server's copy of a preset here (a push's answer or a pull), unless the row
+/// changed here since the sync read it (then it is left for the next sync); `seen` follows.
+fn record(
+    catalog: &Catalog,
+    studio_id: i64,
+    name: &str,
+    settings: &serde_json::Value,
+    at: &str,
+    remote_id: i64,
+    seen: &mut SeenRows,
+) -> Result<(), lf_catalog::CatalogError> {
+    let written = local::upsert_if_unchanged(
+        catalog,
+        studio_id,
+        name,
+        settings,
+        at,
+        Some(remote_id),
+        Some(at),
+        seen,
+    )?;
+    match written {
+        Some(id) => {
+            seen.insert(
+                id,
+                Seen {
+                    updated_at: at.to_owned(),
+                    deleted_at: None,
+                },
+            );
+        }
+        None => log::info!("preset {name:?} changed here during the sync; the next sync takes it"),
+    }
+    Ok(())
+}
+
+/// Purges `row` unless it changed here since the sync read it.
+fn purge(catalog: &Catalog, row: &LocalPresetRow, seen: &SeenRows) -> Result<(), SyncError> {
+    if !local::purge_if_unchanged(catalog, row.id, seen)? {
+        log::info!("preset {:?} changed here during the sync; kept", row.name);
+    }
+    Ok(())
+}
+
 /// Frees `name` for a pull. The row holding it is renamed: to a passing name when its own
 /// pull comes later in this sync (names swapped on the server), else to `<name> (desktop)`,
 /// pushed as a new preset (both kept, a conflict).
+#[allow(clippy::too_many_arguments)]
 fn make_room(
     client: &Client,
     catalog: &Catalog,
@@ -148,6 +193,7 @@ fn make_room(
     pulls: &[Preset],
     remote: &[Preset],
     report: &mut SyncReport,
+    seen: &mut SeenRows,
 ) -> Result<(), SyncError> {
     let Some(other) = local::find(catalog, studio_id, name)? else {
         return Ok(());
@@ -171,22 +217,30 @@ fn make_room(
     let pulled_later = other
         .remote_id
         .is_some_and(|id| pulls.iter().any(|p| p.id == id));
+    // The sync's own rename moves the row's stamp: `seen` follows it.
+    let renamed = |seen: &mut SeenRows, to: &str| -> Result<(), SyncError> {
+        local::rename(catalog, other.id, to)?;
+        if let Some(row) = local::find(catalog, studio_id, to)? {
+            seen.insert(row.id, Seen::of(&row));
+        }
+        Ok(())
+    };
     if pulled_later {
-        local::rename(catalog, other.id, &free("renaming")?)?;
+        renamed(seen, &free("renaming")?)?;
         return Ok(());
     }
     let copy = free("desktop")?;
     let saved = presets::create(client, &copy, &other.settings)?;
     let at = server_time(&saved);
-    local::rename(catalog, other.id, &copy)?;
-    local::upsert(
+    renamed(seen, &copy)?;
+    record(
         catalog,
         studio_id,
         &copy,
         &other.settings,
         &at,
-        Some(saved.id),
-        Some(&at),
+        saved.id,
+        seen,
     )?;
     report.pushed += 1;
     report.conflicts += 1;
@@ -240,6 +294,130 @@ mod tests {
             .into_iter()
             .map(|r| (r.name, r.remote_id, r.settings))
             .collect()
+    }
+
+    /// One catalogue serves both servers: a preset synced with the development server (its
+    /// remote id 9 there) is never sent to LensFlow, where preset 9 is another studio's
+    /// preset with the same studio id.
+    #[test]
+    fn a_dev_preset_never_patches_prod() {
+        use crate::prefs::InstanceChoice;
+        use crate::session_flow::presets_key;
+        let server = MockServer::start();
+        let (_d, c) = catalogue();
+        let (dev, prod) = (
+            presets_key(InstanceChoice::Dev, STUDIO),
+            presets_key(InstanceChoice::Prod, STUDIO),
+        );
+        assert_ne!(dev, prod);
+        local::upsert(
+            &c,
+            dev,
+            "Warm",
+            &json!({"v": 2, "temperature": 20}),
+            "2026-10-12T00:00:00.000Z",
+            Some(9),
+            Some(T0),
+        )
+        .unwrap();
+        server.mock(|w, t| {
+            w.method(GET).path("/api/galleries/edit-presets");
+            t.status(200).json_body(json!({"data": [
+                {"id": 9, "name": "Cool", "settings": {"v": 2, "temperature": -20},
+                 "created_at": T0, "updated_at": "2026-10-11T00:00:00+00:00"}
+            ]}));
+        });
+        let patch = server.mock(|w, t| {
+            w.method(PATCH);
+            t.status(500);
+        });
+        let post = server.mock(|w, t| {
+            w.method(POST);
+            t.status(500);
+        });
+        let delete = server.mock(|w, t| {
+            w.method(DELETE);
+            t.status(500);
+        });
+        let report = run(&client(&server), &c, prod).unwrap();
+        assert_eq!(patch.calls(), 0, "no PATCH to LensFlow");
+        assert_eq!(post.calls() + delete.calls(), 0);
+        assert_eq!(report.pulled, 1);
+        let names = |key| -> Vec<String> {
+            local::list(&c, key)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.name)
+                .collect()
+        };
+        assert_eq!(names(prod), ["Cool"]);
+        assert_eq!(names(dev), ["Warm"], "the development server's copy stays");
+    }
+
+    /// A preset deleted here while the sync waits for the server's answer stays deleted,
+    /// and the next sync deletes the server's copy it had just made.
+    #[test]
+    fn a_delete_during_the_sync_is_not_undone() {
+        let server = MockServer::start();
+        let (dir, c) = catalogue();
+        local::save(&c, STUDIO, "Warm", &json!({"v": 2, "temperature": 20})).unwrap();
+        let mut list = server.mock(|w, t| {
+            w.method(GET).path("/api/galleries/edit-presets");
+            t.status(200).json_body(json!({"data": []}));
+        });
+        let post = server.mock(|w, t| {
+            w.method(POST).path("/api/galleries/edit-presets");
+            t.status(201)
+                .delay(std::time::Duration::from_millis(800))
+                .json_body(json!({"data":
+                    {"id": 6, "name": "Warm", "settings": {"v": 2, "temperature": 20},
+                     "created_at": T0, "updated_at": "2026-10-12T00:00:00+00:00"}
+                }));
+        });
+        let root = dir.path().to_path_buf();
+        let url = server.url("/api");
+        let sync = std::thread::spawn(move || {
+            let url = reqwest::Url::parse(&url).unwrap();
+            let client = Client::new(Instance::custom(url).unwrap(), "1.0.0")
+                .with_token("t")
+                .with_studio("frames");
+            run(&client, &Catalog::open(&root).unwrap(), STUDIO)
+        });
+        // The sync has read the rows and is waiting for the server: delete the preset.
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while post.calls() == 0 {
+            assert!(std::time::Instant::now() < end, "the push never came");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let warm = local::find(&c, STUDIO, "Warm").unwrap().unwrap();
+        local::delete(&c, warm.id).unwrap();
+        sync.join().unwrap().unwrap();
+
+        assert!(local::list(&c, STUDIO).unwrap().is_empty(), "still deleted");
+        let dead = local::tombstones(&c, STUDIO).unwrap();
+        assert_eq!(dead.len(), 1);
+        assert_eq!(
+            dead[0].remote_id,
+            Some(6),
+            "linked to the copy the server made"
+        );
+
+        // The next sync deletes it there and forgets it here.
+        list.delete();
+        server.mock(|w, t| {
+            w.method(GET).path("/api/galleries/edit-presets");
+            t.status(200).json_body(json!({"data": [
+                {"id": 6, "name": "Warm", "settings": {"v": 2, "temperature": 20},
+                 "created_at": T0, "updated_at": "2026-10-12T00:00:00+00:00"}
+            ]}));
+        });
+        let gone = server.mock(|w, t| {
+            w.method(DELETE).path("/api/galleries/edit-presets/6");
+            t.status(204);
+        });
+        run(&client(&server), &c, STUDIO).unwrap();
+        gone.assert();
+        assert!(local::tombstones(&c, STUDIO).unwrap().is_empty());
     }
 
     #[test]

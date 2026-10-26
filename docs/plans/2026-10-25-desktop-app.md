@@ -31,7 +31,7 @@ Depends on Part 2c-i and its final fix wave (`wip/2c-fix-wave`: sidecars reconci
 
 1. Dragging a slider on a 60 MP RAW must stay responsive: the interactive path draws at viewport size through `Renderer::draw` with no readback, the histogram is throttled (at most every 200 ms after the last change), and the sidecar write is debounced. Pinned in Task 4 (throttle test) and Task 5 (debouncer test; no `render`/`pixels` call in the drag path).
 2. A token revoked mid-session (`Unauthorized` from any account call) must send the user to sign-in without aborting a running export or losing unsaved edits (edits are already in the database). Pinned in Task 2 (state-machine test) and Task 9 (the export worker does not hold the session).
-3. The graphics device being lost (driver reset, sleep) must show "The graphics device was reset. Reopen the photo to continue." and recover on the next open, never panic. Pinned in Task 4.
+3. The graphics device being lost (driver reset, sleep) must show "The graphics device was reset. Restart lensflow-ImageEditor to continue." and offer a restart, never panic. Pinned in Task 4 (copy changed in the final fix wave: a lost device does not come back until the app restarts).
 4. Quitting with a pending sidecar write or a running import must leave files consistent: the debouncer flushes in `on_exit`, imports commit per batch (library guarantee). Pinned in Task 5 (flush test).
 5. Two selected photos with the same file stem exported to one folder must stop before writing anything and name both files in the message (the library returns `NameCollision`; the dialog shows it). Pinned in Task 9.
 

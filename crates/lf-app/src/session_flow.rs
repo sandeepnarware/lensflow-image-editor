@@ -16,7 +16,7 @@ use crate::toast::{Level, Toasts};
 use crate::update::{self, DownloadProgress, UpdateError};
 use eframe::egui;
 use lf_account::auth::{SignedIn, StudioSummary, User};
-use lf_account::entitlement::{Cache, Decision};
+use lf_account::entitlement::Decision;
 use lf_account::{AccountError, Client, Instance, LockReason};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -62,8 +62,14 @@ struct AccountState {
     last_gate: Option<Instant>,
     /// Installer download progress (bytes done, total).
     download: Option<(u64, u64)>,
-    /// The generation whose sign-in preset sync was asked for (once per sign-in or studio).
+    /// The server signed in to (it keys the studio presets kept in the catalogue).
+    instance: InstanceChoice,
+    /// The generation whose sign-in preset sync was asked for (once per sign-in or studio);
+    /// cleared when a sync fails, so the next gate answer (back online) tries again.
     presets_synced: Option<Generation>,
+    /// "Studio presets will sync when LensFlow can be reached." was shown; quiet until a sync
+    /// works again.
+    sync_offline_told: bool,
 }
 
 impl AccountState {
@@ -84,7 +90,9 @@ impl AccountState {
             checking: None,
             last_gate: None,
             download: None,
+            instance: choice,
             presets_synced: None,
+            sync_offline_told: false,
         }
     }
 
@@ -172,10 +180,13 @@ impl SessionFlow {
         })
     }
 
-    /// The studio signed in to (its id keys the presets kept in the catalogue).
-    pub fn studio_id(&self) -> Option<i64> {
+    /// The key the open studio's presets are kept under in the catalogue
+    /// ([`presets_key`]: the studio and the server it is on).
+    pub fn presets_key(&self) -> Option<i64> {
         match &self.session {
-            Session::Active { studio, .. } => i64::try_from(studio.id).ok(),
+            Session::Active { studio, .. } => i64::try_from(studio.id)
+                .ok()
+                .map(|id| presets_key(self.account.instance, id)),
             _ => None,
         }
     }
@@ -208,7 +219,7 @@ impl SessionFlow {
         }
         Some((
             self.account.studio_client()?,
-            self.studio_id()?,
+            self.presets_key()?,
             root?.to_path_buf(),
         ))
     }
@@ -330,7 +341,7 @@ impl SessionFlow {
     /// entitlement (the gate's offline grace), when there are both.
     fn offline_studio(&self, prefs: &Prefs) -> Option<(User, StudioSummary)> {
         let slug = prefs.studio_slug.as_deref()?;
-        let cached = Cache::new(self.account.creds.cache_dir()).load()?;
+        let cached = self.account.creds.cache().load()?;
         let summary = serde_json::json!({
             "id": cached.studio.id, "name": cached.studio.name, "slug": slug,
         });
@@ -350,10 +361,10 @@ impl SessionFlow {
                 if let Session::SigningIn { busy, .. } = &mut self.session {
                     *busy = false;
                 }
-                env.toasts.push(
-                    Level::Error,
-                    format!("Something went wrong ({name}). {message}"),
-                );
+                // The lane has logged the panic's own text.
+                log::debug!("job {name} failed: {message}");
+                env.toasts
+                    .push(Level::Error, crate::jobs::failed_text(&name));
             }
             Msg::Resumed(generation, token) if self.is_current(generation) => {
                 self.account.checking = None;
@@ -495,6 +506,7 @@ impl SessionFlow {
     fn presets_synced(&mut self, result: Result<SyncReport, SyncError>, env: &mut Env) {
         match result {
             Ok(report) => {
+                self.account.sync_offline_told = false;
                 if report.conflicts > 0 {
                     env.toasts
                         .push(Level::Info, conflicts_text(report.conflicts));
@@ -502,11 +514,20 @@ impl SessionFlow {
             }
             Err(SyncError::Account(e)) if self.signed_out_by(&e, env.jobs) => {}
             Err(e) => {
-                log::warn!("the studio presets could not be synced: {e}");
-                env.toasts.push(
-                    Level::Warning,
-                    format!("Studio presets could not be synced. {e}"),
-                );
+                // Tried again at the next gate answer (the first one back online).
+                self.account.presets_synced = None;
+                if matches!(&e, SyncError::Account(a) if account::is_transient(a)) {
+                    log::info!("the studio presets could not be synced (offline): {e}");
+                    if !std::mem::replace(&mut self.account.sync_offline_told, true) {
+                        env.toasts.push(Level::Info, SYNC_LATER);
+                    }
+                } else {
+                    log::warn!("the studio presets could not be synced: {e}");
+                    env.toasts.push(
+                        Level::Warning,
+                        format!("Studio presets could not be synced. {e}"),
+                    );
+                }
             }
         }
     }
@@ -667,7 +688,7 @@ impl SessionFlow {
         let dest = env.dirs.cache.join("updates");
         let reporter = env.jobs.reporter();
         self.account.download = Some((0, 0));
-        env.jobs.spawn(Lane::Io, "update", move || {
+        env.jobs.spawn(Lane::Long, "update", move || {
             let result = update::run(&client, update::platform(), &dest, |progress| {
                 reporter.send(Msg::Download(progress));
             });
@@ -675,6 +696,21 @@ impl SessionFlow {
         });
     }
 }
+
+/// The key the presets of LensFlow studio `studio_id` are kept under in the catalogue: the
+/// id itself on LensFlow, and its negative on the development server. One catalogue serves
+/// both servers, and their studio and preset ids overlap, so a preset synced with one is
+/// never listed, pushed or updated on the other. (Rows from before presets were kept per
+/// studio have key 0: no studio's.)
+pub fn presets_key(instance: InstanceChoice, studio_id: i64) -> i64 {
+    match instance {
+        InstanceChoice::Prod => studio_id,
+        InstanceChoice::Dev => -studio_id,
+    }
+}
+
+/// The one quiet note when a preset sync cannot reach LensFlow (it is tried again later).
+pub const SYNC_LATER: &str = "Studio presets will sync when LensFlow can be reached.";
 
 /// The toast when presets were changed both here and on the web.
 pub fn conflicts_text(n: usize) -> String {
@@ -708,9 +744,95 @@ mod tests {
                 checking: None,
                 last_gate: None,
                 download: None,
+                instance: InstanceChoice::Dev,
                 presets_synced: None,
+                sync_offline_told: false,
             },
         }
+    }
+
+    fn dirs(dir: &Path) -> Dirs {
+        Dirs {
+            config: dir.join("config"),
+            data: dir.join("data"),
+            cache: dir.join("cache"),
+        }
+    }
+
+    /// Launched offline (the studio rebuilt from the cache), then the server answers: `me`
+    /// runs again and the presets sync, and a sync that fails offline is tried again at the
+    /// next gate answer, with one quiet note however often it fails.
+    #[test]
+    fn back_online_after_an_offline_launch_reruns_me_and_syncs_presets() {
+        use lf_account::entitlement::{Entitlement, Standing};
+        let dir = tempfile::tempdir().unwrap();
+        let mut flow = flow(dir.path());
+        let summary = serde_json::json!({
+            "id": 7, "name": "Frames", "slug": "frames", "permissions": ["galleries.manage"],
+        });
+        flow.account.token = Some("secret".into());
+        flow.account.studio = Some(serde_json::from_value(summary.clone()).unwrap());
+        flow.account.user = Some(
+            serde_json::from_value(serde_json::json!({
+                "id": 0, "name": "", "email": "", "studios": [summary],
+            }))
+            .unwrap(),
+        );
+        flow.account.offline_user = true;
+
+        let mut jobs = Jobs::new(egui::Context::default());
+        // Hold the account lane: the jobs asked for are counted, never run (no network).
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        jobs.spawn(Lane::Account, "hold", move || {
+            let _ = held.recv();
+            Msg::Cleared
+        });
+        let mut toasts = Toasts::default();
+        let mut prefs = Prefs {
+            catalogue_root: Some(dir.path().join("catalogue")),
+            ..Prefs::default()
+        };
+        let dirs = dirs(dir.path());
+        let ctx = egui::Context::default();
+        {
+            let mut env = Env {
+                jobs: &jobs,
+                toasts: &mut toasts,
+                prefs: &mut prefs,
+                dirs: &dirs,
+                ctx: &ctx,
+            };
+            let allow = || Decision::Allow(Entitlement::example(Standing::Active, true));
+            assert!(flow.handle(Msg::Gate(3, allow()), &mut env).is_none());
+            assert!(matches!(flow.session, Session::Active { .. }));
+            assert_eq!(
+                flow.account.checking,
+                Some("Checking your account…"),
+                "me runs again"
+            );
+            assert_eq!(flow.account.presets_synced, Some(3), "a sync was asked for");
+
+            // The sync could not reach LensFlow: one quiet note, and it is tried again.
+            for _ in 0..2 {
+                let offline = SyncError::Account(AccountError::Network("offline".into()));
+                assert!(
+                    flow.handle(Msg::PresetsSynced(3, Err(offline)), &mut env)
+                        .is_none()
+                );
+                assert_eq!(flow.account.presets_synced, None);
+            }
+            assert_eq!(env.toasts.count(), 1);
+            assert_eq!(env.toasts.last_text(), Some(SYNC_LATER));
+
+            flow.account.checking = None;
+            assert!(flow.handle(Msg::Gate(3, allow()), &mut env).is_none());
+            assert_eq!(flow.account.presets_synced, Some(3), "synced again");
+            let ok = Msg::PresetsSynced(3, Ok(SyncReport::default()));
+            assert!(flow.handle(ok, &mut env).is_none());
+            assert!(!flow.account.sync_offline_told);
+        }
+        jobs.shutdown(std::time::Duration::from_millis(1));
+        drop(release);
     }
 
     #[test]
@@ -815,8 +937,9 @@ mod tests {
             flow.account.decision = Some(decision);
             let target = flow.sync_target(Some(dir.path()));
             assert_eq!(target.is_some(), syncs, "{standing:?}");
-            if let Some((_, studio_id, _)) = target {
-                assert_eq!(studio_id, 7);
+            if let Some((_, key, _)) = target {
+                // Signed in to the development server: its own key for studio 7.
+                assert_eq!(key, -7);
             }
             assert!(flow.sync_target(None).is_none(), "no catalogue root yet");
         }
@@ -854,6 +977,13 @@ mod tests {
                 );
             }
         }
+        // A panicked job reads as a plain sentence; its own text stays in the log.
+        assert!(env.toasts.texts().all(|t| !t.contains("boom")));
+        assert!(
+            env.toasts
+                .texts()
+                .any(|t| t.ends_with("Details are in the log."))
+        );
         // Everything else is handed back.
         for msg in messages_owned_by(&[Owner::Library, Owner::App, Owner::Test], 3, dir.path()) {
             let shown = format!("{msg:?}");

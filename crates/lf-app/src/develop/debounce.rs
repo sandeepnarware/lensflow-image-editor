@@ -218,7 +218,7 @@ fn first_error(results: impl Iterator<Item = Result<(), String>>) -> Result<(), 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use lf_settings::EditSettings;
 

@@ -21,6 +21,7 @@ pub mod screens;
 pub mod session;
 pub mod session_flow;
 pub mod shortcuts;
+pub mod startup;
 pub mod theme;
 pub mod thumbs_ui;
 pub mod toast;

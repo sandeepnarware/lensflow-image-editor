@@ -9,7 +9,7 @@ use std::time::Duration;
 
 pub const NOT_VERIFIED: &str = "The download did not verify. Try again.";
 
-/// Progress of the installer download, sent from the `Io` lane.
+/// Progress of the installer download, sent from the `Long` lane.
 #[derive(Debug)]
 pub enum DownloadProgress {
     Progress { done: u64, total: u64 },

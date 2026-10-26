@@ -289,6 +289,17 @@ impl Develop {
         if let Some(due) = self.session.pump(now, jobs) {
             ctx.request_repaint_after(due.saturating_duration_since(now));
         }
+        if let Some(due) = self.session.edited_due() {
+            ctx.request_repaint_after(due.saturating_duration_since(now));
+        }
+    }
+
+    /// The photos whose edits changed here and whose thumbnails and rows the library should
+    /// refresh now: the open photo a quiet second after its last change, a photo that was
+    /// left at once.
+    pub fn take_edited(&mut self, now: Instant) -> Vec<i64> {
+        let open = self.photo_id();
+        self.session.take_edited(open, now)
     }
 
     /// The `Io` lane wrote the waiting sidecars.

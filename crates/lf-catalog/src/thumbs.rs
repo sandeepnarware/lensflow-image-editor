@@ -238,6 +238,9 @@ enum Failure {
     Device(String),
     /// The thumbnailer is being dropped.
     Cancelled,
+    /// The photo or its edits changed while it was being made: nothing is stored or
+    /// delivered, and it is made again.
+    Changed,
 }
 
 fn classify(e: PipelineError) -> Failure {
@@ -278,6 +281,10 @@ fn worker(shared: Arc<Shared>, gpu: Arc<Gpu>, path: PathBuf, quality: Quality) {
         match made {
             Ok(Some(img)) => lock(&shared.ready).push((id, img)),
             Ok(None) | Err(Failure::Cancelled) => {}
+            Err(Failure::Changed) => {
+                log::debug!("photo {id} changed while its thumbnail was made; making it again");
+                requeue(&shared, id);
+            }
             Err(Failure::Device(msg)) => {
                 log::error!("thumbnails stopped: graphics device error on photo {id}: {msg}");
                 lock(&shared.device_error).get_or_insert(msg);
@@ -307,10 +314,35 @@ fn worker(shared: Arc<Shared>, gpu: Arc<Gpu>, path: PathBuf, quality: Quality) {
     }
 }
 
+/// Queues `id` again at `High` (its thumbnail went stale while it was made), unless it is
+/// already queued that high.
+fn requeue(shared: &Shared, id: i64) {
+    let mut st = lock(&shared.state);
+    if st.stop || st.pending.get(&id).is_some_and(|p| *p >= Priority::High) {
+        return;
+    }
+    st.pending.insert(id, Priority::High);
+    st.seq += 1;
+    let seq = st.seq;
+    st.heap.push(Entry {
+        priority: Priority::High,
+        seq,
+        id,
+    });
+    shared.wake.notify_one();
+}
+
 /// The photo's path and the freshness key a thumbnail made now would carry.
 fn freshness(catalog: &Catalog, id: i64, quality: Quality) -> Result<Option<(String, String)>> {
-    Ok(catalog
-        .conn
+    freshness_in(&catalog.conn, id, quality)
+}
+
+fn freshness_in(
+    conn: &rusqlite::Connection,
+    id: i64,
+    quality: Quality,
+) -> Result<Option<(String, String)>> {
+    Ok(conn
         .query_row(
             "SELECT p.path, p.updated_at, p.file_size, p.mtime, e.updated_at
              FROM photos p LEFT JOIN edits e ON e.photo_id = p.id WHERE p.id = ?1",
@@ -347,6 +379,22 @@ impl Catalog {
                 |r| r.get(0),
             )
             .optional()?)
+    }
+}
+
+/// Test hook: the first time a photo named `lf-test-edit-while-made.*` is rendered, its edits
+/// change before the thumbnail is stored (as a commit in Develop would).
+#[cfg(feature = "test-hooks")]
+fn edit_while_made(catalog: &Catalog, id: i64, file: &str) {
+    use std::sync::atomic::AtomicBool;
+    static DONE: AtomicBool = AtomicBool::new(false);
+    let hooked = Path::new(file)
+        .file_stem()
+        .is_some_and(|s| s == "lf-test-edit-while-made");
+    if hooked && !DONE.swap(true, AtomicOrdering::SeqCst) {
+        let mut s = EditSettings::default_settings();
+        s.exposure = 1.0;
+        crate::edits::set_settings(catalog, id, &s).expect("the hook's edit");
     }
 }
 
@@ -399,6 +447,8 @@ fn make(
     if cancelled() {
         return Err(Failure::Cancelled);
     }
+    #[cfg(feature = "test-hooks")]
+    edit_while_made(catalog, id, &file);
     let rgb = image::DynamicImage::ImageRgba8(img.clone()).to_rgb8();
     let mut jpeg = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 85)
@@ -407,6 +457,12 @@ fn make(
     // The photo is fine now: clear an earlier error. A damaged sidecar is reported apart, in
     // `sidecar_error`, which only import and reconcile write.
     let tx = catalog.write_tx().map_err(|x| file_err(&x))?;
+    // An edit (or a rescan) that landed while this was made would be overwritten by an older
+    // picture under an older key, after a newer one may already be stored: made again instead.
+    let now = freshness_in(&tx, id, quality).map_err(|x| file_err(&x))?;
+    if now.is_none_or(|(_, key)| key != made_for) {
+        return Err(Failure::Changed);
+    }
     tx.execute(
         "INSERT OR REPLACE INTO thumbnails (photo_id, edge, jpeg, made_for_updated_at)
          VALUES (?1, ?2, ?3, ?4)",

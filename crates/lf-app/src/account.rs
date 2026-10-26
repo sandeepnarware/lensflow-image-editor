@@ -30,15 +30,38 @@ impl std::fmt::Debug for Token {
 pub struct Credentials {
     tokens: TokenStore,
     cache_dir: PathBuf,
+    /// The entitlement cache's file name, one per server ([`cache_file`]).
+    cache_file: String,
+}
+
+/// The entitlement cache's file name for `instance`: `entitlement.json` for LensFlow,
+/// `entitlement-dev.json` for the development server (and `entitlement-<host>.json` for any
+/// other), so switching servers never replays one server's answer for the other.
+pub fn cache_file(instance: &Instance) -> String {
+    match instance {
+        Instance::Prod => "entitlement.json".to_owned(),
+        Instance::Dev => "entitlement-dev.json".to_owned(),
+        Instance::Custom(url) => {
+            let host: String = url
+                .url()
+                .host_str()
+                .unwrap_or("custom")
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect();
+            format!("entitlement-{host}.json")
+        }
+    }
 }
 
 impl Credentials {
     /// The OS keychain (or its file fallback) for `instance`; the entitlement cache in
-    /// `config_dir`.
+    /// `config_dir`, one file per server.
     pub fn open(instance: &Instance, config_dir: &Path) -> Credentials {
         Credentials {
             tokens: TokenStore::open(instance),
             cache_dir: config_dir.to_path_buf(),
+            cache_file: cache_file(instance),
         }
     }
 
@@ -47,6 +70,7 @@ impl Credentials {
         Credentials {
             tokens: TokenStore::open_in(instance.base_url().as_str(), dir, false),
             cache_dir: dir.to_path_buf(),
+            cache_file: cache_file(instance),
         }
     }
 
@@ -58,13 +82,9 @@ impl Credentials {
         self.tokens.save(token);
     }
 
-    /// Where `Gate::refresh` keeps the last good entitlement.
-    pub fn cache_dir(&self) -> &Path {
-        &self.cache_dir
-    }
-
+    /// Where `Gate::refresh` keeps the last good entitlement (this server's file).
     pub fn cache(&self) -> Cache {
-        Cache::new(&self.cache_dir)
+        Cache::named(&self.cache_dir, &self.cache_file)
     }
 
     /// Drops the token and the cached entitlement.
@@ -240,5 +260,26 @@ mod tests {
         let msg = resume(3, &creds);
         assert!(matches!(&msg, Msg::Resumed(3, Some(Token(t))) if t == "secret-token"));
         assert!(!format!("{msg:?}").contains("secret-token"));
+    }
+
+    #[test]
+    fn each_server_keeps_its_own_entitlement_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let prod = Credentials::in_dir(&Instance::Prod, dir.path());
+        let dev = Credentials::in_dir(&Instance::Dev, dir.path());
+        dev.cache()
+            .save(&Entitlement::example(Standing::Active, true));
+        assert!(dev.cache().load().is_some());
+        assert!(prod.cache().load().is_none(), "never replayed for LensFlow");
+        assert!(dir.path().join("entitlement-dev.json").exists());
+        prod.cache()
+            .save(&Entitlement::example(Standing::Active, true));
+        assert!(dir.path().join("entitlement.json").exists());
+        dev.forget_entitlement();
+        assert!(dev.cache().load().is_none());
+        assert!(
+            prod.cache().load().is_some(),
+            "forgetting one leaves the other"
+        );
     }
 }

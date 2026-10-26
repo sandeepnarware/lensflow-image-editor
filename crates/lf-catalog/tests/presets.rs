@@ -176,3 +176,88 @@ fn migration_6_keeps_existing_presets_under_no_studio() {
     presets::save(&c, STUDIO, "Old", &json!({})).unwrap();
     assert_eq!(presets::list(&c, STUDIO).unwrap().len(), 1);
 }
+
+/// The sync's writes are a compare-and-set against the rows as it read them: a preset
+/// deleted, saved or made here meanwhile is never brought back or overwritten; only a row
+/// without a link to the server gets one.
+#[test]
+fn the_sync_never_revives_or_overwrites_a_row_changed_after_it_read_it() {
+    let (_d, c) = catalogue();
+    let t0 = "2026-10-01T00:00:00.000Z";
+    let t1 = "2026-10-02T00:00:00.000Z";
+    let id = presets::upsert(&c, STUDIO, "Warm", &json!({"v": 2}), t0, None, None).unwrap();
+    let read = |c: &Catalog| -> presets::SeenRows {
+        presets::list(c, STUDIO)
+            .unwrap()
+            .iter()
+            .chain(&presets::tombstones(c, STUDIO).unwrap())
+            .map(|r| (r.id, presets::Seen::of(r)))
+            .collect()
+    };
+
+    // Unchanged since it was read: written.
+    let seen = read(&c);
+    let written = presets::upsert_if_unchanged(
+        &c,
+        STUDIO,
+        "Warm",
+        &json!({"v": 2, "exposure": 1}),
+        t1,
+        Some(9),
+        Some(t1),
+        &seen,
+    )
+    .unwrap();
+    assert_eq!(written, Some(id));
+
+    // Deleted here after the read: it stays deleted.
+    let seen = read(&c);
+    presets::delete(&c, id).unwrap();
+    let written = presets::upsert_if_unchanged(
+        &c,
+        STUDIO,
+        "Warm",
+        &json!({"v": 2}),
+        t1,
+        Some(9),
+        Some(t1),
+        &seen,
+    )
+    .unwrap();
+    assert_eq!(written, None);
+    assert!(presets::list(&c, STUDIO).unwrap().is_empty(), "not revived");
+    assert_eq!(names(&presets::tombstones(&c, STUDIO).unwrap()), ["Warm"]);
+    assert!(
+        !presets::purge_if_unchanged(&c, id, &seen).unwrap(),
+        "nor purged"
+    );
+
+    // A new row took a name after the read: kept, and linked to the server's copy.
+    let seen = read(&c);
+    let cool = presets::save(&c, STUDIO, "Cool", &json!({"v": 2, "contrast": 5})).unwrap();
+    let written = presets::upsert_if_unchanged(
+        &c,
+        STUDIO,
+        "Cool",
+        &json!({"v": 2}),
+        t1,
+        Some(12),
+        Some(t1),
+        &seen,
+    )
+    .unwrap();
+    assert_eq!(written, None);
+    let row = presets::find(&c, STUDIO, "Cool").unwrap().unwrap();
+    assert_eq!(row.id, cool);
+    assert_eq!(
+        row.settings,
+        json!({"v": 2, "contrast": 5}),
+        "the change here stays"
+    );
+    assert_eq!(row.remote_id, Some(12));
+
+    // Unchanged rows purge.
+    let seen = read(&c);
+    assert!(presets::purge_if_unchanged(&c, id, &seen).unwrap());
+    assert!(presets::find(&c, STUDIO, "Warm").unwrap().is_none());
+}

@@ -1,8 +1,8 @@
 //! The library: catalogue root, folders, the grid, the filmstrip and the selection.
 //!
 //! The UI thread holds no catalogue connection: quick reads (folders, a folder's photos) run
-//! on the `Query` lane and writes (imports, rescans, removals) on the `Io` lane, each job with
-//! its own `Catalog`, answering with a [`Msg`]. So a folder never waits behind an import to
+//! on the `Query` lane, short writes (removals, marking missing) on the `Io` lane and imports
+//! and rescans on the `Long` lane, each job with its own `Catalog`, answering with a [`Msg`]. So a folder never waits behind an import to
 //! show. The thumbnail pool has its own connections.
 
 pub mod export_ui;
@@ -11,7 +11,7 @@ pub mod grid;
 pub mod import_ui;
 pub mod selection;
 
-use crate::app::DEVICE_LOST_BANNER;
+use crate::app::THUMBS_STOPPED_BANNER;
 use crate::catalog_ext::{self, count};
 use crate::clipboard::{self, Clipboard};
 use crate::develop::{self, Develop, Outcome};
@@ -201,7 +201,7 @@ impl Library {
     }
 
     /// Why the catalogue cannot be changed now (an export or "Apply to N photos" is
-    /// running, or "Match a reference" is open), if it cannot.
+    /// running, "Match a reference" is open, or a folder is being read), if it cannot.
     pub fn restart_blocked(&self) -> Option<&'static str> {
         if self.export.as_ref().is_some_and(ExportDialog::running) {
             Some("Wait for the export to finish, then change the catalogue folder.")
@@ -209,6 +209,8 @@ impl Library {
             Some("Wait for the edits to be applied, then change the catalogue folder.")
         } else if self.matching.is_some() {
             Some("Close “Match a reference” first, then change the catalogue folder.")
+        } else if self.busy.is_some() {
+            Some("Wait for the folder to be read, then change the catalogue folder.")
         } else {
             None
         }
@@ -278,6 +280,11 @@ impl Library {
         self.index.get(&id).map(|&i| &self.photos[i])
     }
 
+    /// The folder shown, if any.
+    pub fn current_folder(&self) -> Option<i64> {
+        self.current_folder
+    }
+
     /// The photos of the current folder, in display order.
     pub fn photos(&self) -> &[PhotoRow] {
         &self.photos
@@ -309,6 +316,37 @@ impl Library {
         if let Some(m) = &self.matching {
             m.cancel.store(true, Ordering::SeqCst);
         }
+    }
+
+    /// What to ask before the window closes: an export or "Apply to N photos" is running.
+    pub fn quit_question(&self) -> Option<&'static str> {
+        if self.export.as_ref().is_some_and(ExportDialog::running) {
+            Some(crate::dialogs::quit::EXPORT_RUNNING)
+        } else if self.batch.as_ref().is_some_and(BatchDialog::running) {
+            Some(crate::dialogs::quit::BATCH_RUNNING)
+        } else {
+            None
+        }
+    }
+
+    /// The app is quitting: a running import stops after its batch, a match at its next
+    /// step, and an export or "Apply to N photos" after the current photo.
+    pub fn stop_long_work(&self) {
+        self.stop_import();
+        if let Some(export) = &self.export {
+            export.stop.store(true, Ordering::SeqCst);
+        }
+        if let Some(batch) = &self.batch {
+            batch.stop.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// The folder a running export writes to (its unfinished files are removed on quit).
+    pub fn running_export_folder(&self) -> Option<PathBuf> {
+        self.export
+            .as_ref()
+            .filter(|d| d.running())
+            .and_then(|d| d.form.folder.clone())
     }
 
     /// The flag [`Library::stop_import`] sets (for the device-reset dialog's thread).
@@ -377,7 +415,8 @@ impl Library {
         }
     }
 
-    /// Starts the fit on the `Open` lane (the device renders the sheet); progress and the
+    /// Starts the fit on the `Long` lane (the device renders the sheet; opening photos for
+    /// Develop never waits behind it); progress and the
     /// answer arrive as `Msg::Match`. `ai` is `None` without a studio session.
     pub fn start_match(&mut self, ai: Option<AiLink>, shown: AiGate, jobs: &Jobs) {
         let Some(req) = self.matching.as_mut().and_then(|m| m.start(ai, shown)) else {
@@ -386,7 +425,7 @@ impl Library {
         let gpu = self.gpu.clone();
         let frames = self.frames.clone();
         let reporter = jobs.reporter();
-        jobs.spawn(Lane::Open, "match", move || {
+        jobs.spawn(Lane::Long, "match", move || {
             let open =
                 |p: &Path, edge: u32| matching::open_default(&gpu, frames.as_deref(), p, edge);
             let report = |step: MatchStep| reporter.send(Msg::Match(step));
@@ -463,7 +502,7 @@ impl Library {
     }
 
     /// Saves the preset when named, then writes the grade to every selected photo on the
-    /// `Open` lane (measuring a photo needs the device), each through the batch's per-photo
+    /// `Long` lane (measuring a photo needs the device), each through the batch's per-photo
     /// path.
     fn apply_match(&mut self, plan: matching::ApplyPlan, env: &mut Env) {
         let Some(root) = self.root.clone() else {
@@ -501,7 +540,7 @@ impl Library {
         let frames = self.frames.clone();
         let saver = self.develop.saver();
         let reporter = env.jobs.reporter();
-        env.jobs.spawn(Lane::Open, "match apply", move || {
+        env.jobs.spawn(Lane::Long, "match apply", move || {
             let total = ids.len();
             let report = match lf_catalog::Catalog::open(&root) {
                 Err(e) => matching::ApplyReport {
@@ -552,9 +591,17 @@ impl Library {
                     | Msg::PoolReady(..)
             )
         {
-            // Work for a catalogue left behind (Preferences → Change…): the Io lane runs it
-            // before this library's catalogue opens.
+            // Work for a catalogue left behind (Preferences → Change…), answered before
+            // this library's catalogue opened.
             log::debug!("library not open: dropped {msg:?}");
+            return None;
+        }
+        if matches!(msg, Msg::ImportProgress(..) | Msg::ImportDone(..)) && self.importing.is_none()
+        {
+            // An import this library never started: one for a catalogue left behind
+            // (Preferences → Change…, which waits for a scan but only tells an import to
+            // stop) still finishing on the `Long` lane after this library's catalogue opened.
+            log::debug!("dropped {msg:?}: not started here");
             return None;
         }
         match msg {
@@ -646,22 +693,24 @@ impl Library {
                 return Some(msg);
             }
             Msg::JobFailed { name, message } => {
-                // A panicking library job must not leave the library waiting for it.
+                // A panicking library job must not leave the library waiting for it. The
+                // panic's own text is in the log; the screens say what was being done.
+                let plain = crate::jobs::failed_text(&name);
                 match name.as_str() {
-                    "open photo" => self.develop.open_failed(&message),
+                    "open photo" => self.develop.open_failed(&plain),
                     "add folder" | "rescan" => self.busy = None,
                     "photos" => self.loading = None,
                     "import" => self.importing = None,
-                    "open catalogue" => self.stage = Stage::Failed(message.clone()),
+                    "open catalogue" => self.stage = Stage::Failed(plain),
                     "thumbnail pool" => self.reviving = false,
                     "match" | "match apply" => {
                         if let Some(m) = &mut self.matching {
-                            m.job_failed(&message);
+                            m.job_failed(&plain);
                         }
                     }
                     "export" => {
                         if self.export.as_ref().is_some_and(ExportDialog::running) {
-                            self.export_done(Err(message.clone()), env);
+                            self.export_done(Err(plain), env);
                         }
                     }
                     "batch" => {
@@ -917,11 +966,15 @@ impl Library {
         }
         self.sync_develop(env);
         self.develop.tick(ui.ctx(), env.jobs, env.toasts);
+        let edited = self.develop.take_edited(Instant::now());
+        if !edited.is_empty() {
+            self.refresh_photos(&edited, env);
+        }
 
         if self.thumbs.stopped() && !self.gpu.is_lost() {
             egui::Panel::top("library-device").show(ui, |ui| {
                 ui.add_space(4.0);
-                ui.label(RichText::new(DEVICE_LOST_BANNER).color(theme::DANGER));
+                ui.label(RichText::new(THUMBS_STOPPED_BANNER).color(theme::WARNING));
                 ui.add_space(4.0);
             });
         }
@@ -1147,6 +1200,8 @@ impl Library {
         let mut chosen = None;
         let mut rescan = None;
         let can_add = self.can_add();
+        // A folder being imported (on the `Long` lane) stays until its import ends.
+        let importing = self.importing.as_ref().map(|i| i.folder.clone());
         egui::ScrollArea::vertical()
             .id_salt("folder-list")
             .show(ui, |ui| {
@@ -1167,7 +1222,11 @@ impl Library {
                             rescan = Some(folder.clone());
                             ui.close();
                         }
-                        if ui.button("Remove from catalogue…").clicked() {
+                        let removable = importing.as_deref() != Some(folder.path.as_path());
+                        if ui
+                            .add_enabled(removable, egui::Button::new("Remove from catalogue…"))
+                            .clicked()
+                        {
                             self.confirm_remove = Some(folder.clone());
                             ui.close();
                         }
@@ -1468,15 +1527,27 @@ impl Library {
     /// Photos edited outside the open photo's edit (a paste, a batch): new thumbnails, the
     /// edited badges, and the open photo takes its new settings.
     fn edited(&mut self, ids: &[i64], env: &mut Env) {
-        for id in ids {
-            self.thumbs.forget(*id);
-        }
-        self.thumbs.background(&self.order);
         if let Mode::Develop(open) = self.mode
             && ids.contains(&open)
         {
             self.develop.reload_edit(env.toasts);
         }
+        self.refresh_photos(ids, env);
+    }
+
+    /// Photos whose edits changed in the catalogue: their thumbnails are made again (asked
+    /// for at `High`) and the folder's rows are read again (the edited badge).
+    fn refresh_photos(&mut self, ids: &[i64], env: &mut Env) {
+        for id in ids {
+            self.thumbs.forget(*id);
+        }
+        let shown: Vec<i64> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.index.contains_key(id))
+            .collect();
+        self.thumbs.strip(&shown);
+        self.thumbs.background(&self.order);
         if let (Some(folder_id), Some(root)) = (self.current_folder, self.root.clone()) {
             env.jobs.spawn(Lane::Query, "photos", move || {
                 let result = catalog_ext::photos_in(&root, folder_id);
@@ -1547,6 +1618,19 @@ mod tests {
         assert_eq!(status_text(1_200, 0), "1,200 photos");
         assert_eq!(status_text(1, 1), "1 photo · 1 selected");
         assert!(remove_folder_text(2).contains("No files are deleted"));
+    }
+
+    #[test]
+    fn graphics_banners_say_what_to_do() {
+        assert_eq!(
+            crate::app::DEVICE_LOST_BANNER,
+            "The graphics device was reset. Restart lensflow-ImageEditor to continue."
+        );
+        assert_eq!(
+            THUMBS_STOPPED_BANNER,
+            "Thumbnails stopped because of a graphics error. They will restart when you \
+             change folders."
+        );
     }
 
     #[test]

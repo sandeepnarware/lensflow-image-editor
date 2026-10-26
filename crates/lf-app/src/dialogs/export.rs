@@ -1,6 +1,6 @@
 //! "Export N photos" (`Ctrl+Shift+E`): format, size, file name pattern, metadata, replace,
 //! destination folder. The form is remembered in `prefs.last_export` as the `ExportSpec`
-//! JSON. The work is [`crate::export_job::run`] on the `Io` lane; while it runs the dialog
+//! JSON. The work is [`crate::export_job::run`] on the `Long` lane; while it runs the dialog
 //! shows "12 of 40" and Stop, and closing the window leaves the export running (the status
 //! bar keeps the count and a toast tells how it ended).
 

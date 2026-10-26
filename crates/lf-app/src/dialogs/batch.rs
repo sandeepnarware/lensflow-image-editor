@@ -1,5 +1,5 @@
 //! "Apply to N photos": pasted settings, the active photo's settings or a studio preset laid
-//! over each selected photo, as the web's `BatchEditDialog.vue`. The work runs on the `Io`
+//! over each selected photo, as the web's `BatchEditDialog.vue`. The work runs on the `Long`
 //! lane with its own `Catalog`: one `set_settings` and one sidecar write per photo, with a
 //! stop flag checked between photos, so closing the window stops after the current photo.
 
@@ -10,6 +10,7 @@ use crate::theme;
 use eframe::egui::{self, RichText};
 use lf_catalog::{Catalog, CatalogError, edits};
 use lf_settings::EditSettings;
+use lf_settings::groups::{GroupKey, groups_in};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,6 +18,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const KEEP_OPEN: &str = "Keep this window open. Closing it stops after the current photo.";
 pub const NOTE: &str = "Each photo keeps its own crop and spot removal.";
+/// Shown instead of [`NOTE`] when the copied edits hold a crop or spot removal.
+pub const PASTE_DROPS: &str =
+    "Crop and spot removal are not applied when pasting to several photos.";
 pub const STOP: &str = "Stop";
 pub const DONE: &str = "Done";
 pub const CANCEL: &str = "Cancel";
@@ -73,6 +77,21 @@ pub fn apply_with(
     saver: &SidecarSaver,
     next: impl FnOnce(&lf_catalog::PhotoRow, &EditSettings) -> Result<EditSettings, String>,
 ) -> Result<(), String> {
+    match record(catalog, photo_id, next)? {
+        Some(write) => saver.write_now(write),
+        None => Ok(()),
+    }
+}
+
+/// Records `next(photo, current)` as the photo's settings (one `set_settings`) and returns
+/// the sidecar to write beside it (`None` when that file is damaged and left alone); the
+/// caller writes it now (a batch) or hands it to the debounced writer (a paste on the UI
+/// thread).
+pub fn record(
+    catalog: &Catalog,
+    photo_id: i64,
+    next: impl FnOnce(&lf_catalog::PhotoRow, &EditSettings) -> Result<EditSettings, String>,
+) -> Result<Option<PendingWrite>, String> {
     let text = |e: CatalogError| e.to_string();
     let photo = catalog
         .photo(photo_id)
@@ -85,9 +104,9 @@ pub fn apply_with(
     let sidecar = edits::set_settings(catalog, photo_id, &next).map_err(text)?;
     if photo.sidecar_error.is_some() {
         log::debug!("photo {photo_id}: its sidecar is damaged; not writing");
-        return Ok(());
+        return Ok(None);
     }
-    saver.write_now(PendingWrite::new(photo_id, &photo.path, sidecar))
+    Ok(Some(PendingWrite::new(photo_id, &photo.path, sidecar)))
 }
 
 /// Applies `partial` to each of `ids` in turn, reporting after each photo; stops before the
@@ -121,7 +140,7 @@ pub fn run(
     p
 }
 
-/// Puts the batch on the `Io` lane; progress arrives as `Msg::BatchProgress`.
+/// Puts the batch on the `Long` lane; progress arrives as `Msg::BatchProgress`.
 pub fn spawn(
     jobs: &Jobs,
     root: PathBuf,
@@ -131,7 +150,7 @@ pub fn spawn(
     stop: Arc<AtomicBool>,
 ) {
     let reporter = jobs.reporter();
-    jobs.spawn(Lane::Io, "batch", move || {
+    jobs.spawn(Lane::Long, "batch", move || {
         let total = ids.len();
         let catalog = match Catalog::open(&root) {
             Ok(c) => c,
@@ -186,14 +205,20 @@ pub struct Choice {
     pub label: String,
     /// Always without crop, rotation or spots: each photo keeps its own.
     recipe: Recipe,
+    /// The copied edits held a crop or spot removal that is left out ([`PASTE_DROPS`]).
+    drops_geometry: bool,
 }
 
 impl Choice {
     /// Copied edits, without their crop, rotation and spots (as the note says).
     pub fn pasted(partial: Value) -> Choice {
+        let drops_geometry = groups_in(&partial)
+            .iter()
+            .any(|g| matches!(g, GroupKey::Geometry | GroupKey::Spots));
         Choice {
             label: PASTED.to_owned(),
             recipe: Recipe::Paste(partial).without_geometry(),
+            drops_geometry,
         }
     }
 
@@ -202,7 +227,13 @@ impl Choice {
         Choice {
             label: format!("Preset: {name}"),
             recipe: Recipe::Look(settings),
+            drops_geometry: false,
         }
+    }
+
+    /// The copied edits' crop or spot removal is left out: the dialog says so.
+    pub fn drops_geometry(&self) -> bool {
+        self.drops_geometry
     }
 
     pub fn recipe(&self) -> &Recipe {
@@ -219,6 +250,7 @@ pub fn current_choice(settings: &EditSettings) -> Choice {
             settings,
             &lf_settings::groups::DEFAULT_COPY_GROUPS,
         )),
+        drops_geometry: false,
     }
 }
 
@@ -324,7 +356,15 @@ impl BatchDialog {
                 }
             });
         ui.add_space(6.0);
-        ui.label(RichText::new(NOTE).color(theme::MUTED));
+        if self
+            .choices
+            .get(self.chosen)
+            .is_some_and(Choice::drops_geometry)
+        {
+            ui.label(RichText::new(PASTE_DROPS).color(theme::WARNING));
+        } else {
+            ui.label(RichText::new(NOTE).color(theme::MUTED));
+        }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             let can = self.choices.get(self.chosen).is_some();
@@ -507,6 +547,31 @@ mod tests {
             row_states(&ids, &running),
             [RowState::Done, RowState::Working, RowState::Waiting]
         );
+    }
+
+    #[test]
+    fn copied_crop_and_spots_are_named_as_left_out() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable as _;
+        let dialog = |partial: Value| {
+            let choices = vec![Choice::pasted(partial)];
+            let mut h = Harness::builder().with_size([800.0, 600.0]).build_ui_state(
+                |ui, d: &mut BatchDialog| {
+                    d.show(ui.ctx());
+                },
+                BatchDialog::new(vec![1, 2], vec!["a.jpg".into(), "b.jpg".into()], choices),
+            );
+            h.step();
+            h
+        };
+        let h = dialog(json!({"exposure": 1, "crop": {"x": 0.1, "y": 0.1, "w": 0.5, "h": 0.5}}));
+        h.get_by_label(PASTE_DROPS);
+        assert!(h.query_by_label(NOTE).is_none());
+        let h = dialog(json!({"exposure": 1, "spots": []}));
+        h.get_by_label(PASTE_DROPS);
+        let h = dialog(json!({"exposure": 1}));
+        h.get_by_label(NOTE);
+        assert!(h.query_by_label(PASTE_DROPS).is_none());
     }
 
     #[test]
