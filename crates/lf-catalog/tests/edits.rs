@@ -385,3 +385,22 @@ fn reconcile_on_open_records_a_damaged_sidecar_and_skips_the_reconcile() {
     let written = lf_catalog::sidecar::read(&side).unwrap().unwrap();
     assert_eq!(written.settings.exposure, 0.7);
 }
+
+#[test]
+fn history_steps_count_what_undo_and_redo_can_do() {
+    let (_d, c, id) = setup();
+    assert_eq!(
+        edits::history_steps(&c, id).unwrap(),
+        (0, 0),
+        "never edited"
+    );
+    for e in [0.1, 0.2, 0.3] {
+        edits::set_settings(&c, id, &with_exposure(e)).unwrap();
+    }
+    // The seeded "before" entry plus three edits, the cursor on the newest.
+    assert_eq!(edits::history_steps(&c, id).unwrap(), (3, 0));
+    edits::undo(&c, id).unwrap();
+    assert_eq!(edits::history_steps(&c, id).unwrap(), (2, 1));
+    while edits::undo(&c, id).unwrap().is_some() {}
+    assert_eq!(edits::history_steps(&c, id).unwrap(), (0, 3));
+}

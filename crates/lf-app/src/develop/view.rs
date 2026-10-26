@@ -45,14 +45,15 @@ pub struct Placement {
     pub rect: (f64, f64, f64, f64),
 }
 
-/// The scale at which `output` just fits `panel`.
+/// The scale at which `output` just fits `panel`, never above 1.0: a photo smaller than the
+/// panel shows at actual size (as Lightroom), not enlarged.
 pub fn fit(output_w: f64, output_h: f64, panel_w: f64, panel_h: f64) -> f64 {
     if output_w <= 0.0 || output_h <= 0.0 {
         return 1.0;
     }
     (panel_w / output_w)
         .min(panel_h / output_h)
-        .max(f64::MIN_POSITIVE)
+        .clamp(f64::MIN_POSITIVE, 1.0)
 }
 
 /// The centre on one axis: clamped so the photo covers the panel, or 0.5 (centred) when the
@@ -170,11 +171,11 @@ impl Viewport {
         );
     }
 
-    /// `Fit` ⇄ 100 %.
-    pub fn toggle_fit_100(&mut self) {
+    /// `Fit` ⇄ 100 %. A photo that fits at 100 % already stays at `Fit`.
+    pub fn toggle_fit_100(&mut self, output: (f64, f64), panel: (f64, f64)) {
         self.zoom = match self.zoom {
-            Zoom::Fit => Zoom::Scale(1.0),
-            Zoom::Scale(_) => Zoom::Fit,
+            Zoom::Fit if fit(output.0, output.1, panel.0, panel.1) < 1.0 => Zoom::Scale(1.0),
+            _ => Zoom::Fit,
         };
     }
 }
@@ -193,8 +194,10 @@ mod tests {
         assert!(close(fit(6000.0, 4000.0, 1200.0, 900.0), 0.2));
         // Portrait photo in the same panel: the height binds.
         assert!(close(fit(4000.0, 6000.0, 1200.0, 900.0), 0.15));
-        // A small photo is scaled up to fill the panel.
-        assert!(close(fit(300.0, 200.0, 1200.0, 900.0), 4.0));
+        // A small photo is never enlarged: it fits at 100 % (as Lightroom).
+        assert!(close(fit(300.0, 200.0, 1200.0, 900.0), 1.0));
+        let p = Viewport::default().placement((300.0, 200.0), (1200.0, 900.0));
+        assert_eq!(p.rect, (450.0, 350.0, 300.0, 200.0), "centred, actual size");
 
         let v = Viewport::default();
         let p = v.placement((4000.0, 6000.0), (1200.0, 900.0));
@@ -272,13 +275,25 @@ mod tests {
 
     #[test]
     fn toggle_between_fit_and_one() {
+        let (output, panel) = ((4000.0, 3000.0), (1000.0, 750.0));
         let mut v = Viewport::default();
-        v.toggle_fit_100();
+        v.toggle_fit_100(output, panel);
         assert_eq!(v.zoom, Zoom::Scale(1.0));
-        v.toggle_fit_100();
+        v.toggle_fit_100(output, panel);
         assert_eq!(v.zoom, Zoom::Fit);
         v.zoom = Zoom::Scale(3.0);
-        v.toggle_fit_100();
+        v.toggle_fit_100(output, panel);
+        assert_eq!(v.zoom, Zoom::Fit);
+
+        // A photo smaller than the panel fits at 100 % already: nothing to toggle.
+        let small = (300.0, 200.0);
+        let mut v = Viewport::default();
+        v.toggle_fit_100(small, panel);
+        assert_eq!(v.zoom, Zoom::Fit);
+        assert!(close(v.scale(small, panel), 1.0));
+        // Zoomed in on it, the toggle goes back to fit.
+        v.zoom = Zoom::Scale(4.0);
+        v.toggle_fit_100(small, panel);
         assert_eq!(v.zoom, Zoom::Fit);
     }
 }

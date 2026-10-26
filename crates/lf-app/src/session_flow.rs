@@ -552,46 +552,10 @@ impl SessionFlow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jobs::owners::{Owner, kinds_owned_by, messages_owned_by, owner};
     use crate::toast::Toasts;
-
-    /// Who handles each message. Exhaustive on purpose: a new `Msg` variant does not compile
-    /// until it is placed here, and then the tests below check its owner really consumes it.
-    #[derive(Debug, PartialEq, Eq)]
-    enum Owner {
-        Session,
-        Library,
-        /// `App::handle` itself, before the library and the session see it.
-        App,
-        /// Both look at it: the library resets its own waits and passes it on.
-        Shared,
-        Test,
-    }
-
-    fn owner(msg: &Msg) -> Owner {
-        match msg {
-            Msg::JobFailed { .. } => Owner::Shared,
-            Msg::Resumed(..)
-            | Msg::SignedIn(..)
-            | Msg::Me(..)
-            | Msg::Gate(..)
-            | Msg::Cleared
-            | Msg::Download(..) => Owner::Session,
-            Msg::FolderChosen { .. }
-            | Msg::CatalogueOpened { .. }
-            | Msg::PoolReady(..)
-            | Msg::MarkedMissing { .. }
-            | Msg::Scanned { .. }
-            | Msg::ImportProgress(..)
-            | Msg::ImportDone(..)
-            | Msg::Folders(..)
-            | Msg::Photos { .. }
-            | Msg::FolderRemoved { .. }
-            | Msg::Opened { .. }
-            | Msg::Preopened { .. } => Owner::Library,
-            Msg::DeviceReset(..) => Owner::App,
-            Msg::Probe(..) => Owner::Test,
-        }
-    }
+    use std::collections::HashSet;
+    use std::mem::discriminant;
 
     fn flow(dir: &Path) -> SessionFlow {
         let instance = Instance::Dev;
@@ -614,23 +578,6 @@ mod tests {
         }
     }
 
-    /// Every session message, for `generation`. None of them reaches the network or the
-    /// keychain from the state `flow` starts in.
-    fn session_messages(generation: Generation) -> Vec<Msg> {
-        vec![
-            Msg::JobFailed {
-                name: "test".into(),
-                message: "boom".into(),
-            },
-            Msg::Resumed(generation, None),
-            Msg::SignedIn(generation, Err(AccountError::Network("offline".into()))),
-            Msg::Me(generation, Err(AccountError::Server(400, "no".into()))),
-            Msg::Gate(generation, Decision::ChooseStudio),
-            Msg::Cleared,
-            Msg::Download(DownloadProgress::Progress { done: 1, total: 2 }),
-        ]
-    }
-
     #[test]
     fn handle_consumes_every_session_message_and_hands_back_the_rest() {
         let dir = tempfile::tempdir().unwrap();
@@ -651,15 +598,25 @@ mod tests {
             dirs: &dirs,
             ctx: &ctx,
         };
+        // Every message the session owns (or shares), derived from the owners table, so a
+        // variant classified as the session's is fed here without being listed again.
+        let session = [Owner::Session, Owner::Shared];
         for generation in [3, 2] {
-            for msg in session_messages(generation) {
-                assert!(matches!(owner(&msg), Owner::Session | Owner::Shared));
+            let messages = messages_owned_by(&session, generation, dir.path());
+            let fed: HashSet<_> = messages.iter().map(discriminant).collect();
+            assert_eq!(fed, kinds_owned_by(&session));
+            for msg in messages {
                 let shown = format!("{msg:?}");
                 assert!(
                     flow.handle(msg, &mut env).is_none(),
                     "{shown} (generation {generation}) was handed back"
                 );
             }
+        }
+        // Everything else is handed back.
+        for msg in messages_owned_by(&[Owner::Library, Owner::App, Owner::Test], 3, dir.path()) {
+            let shown = format!("{msg:?}");
+            assert!(flow.handle(msg, &mut env).is_some(), "{shown} was consumed");
         }
         let library = Msg::Folders(Ok(Vec::new()));
         assert_eq!(owner(&library), Owner::Library);

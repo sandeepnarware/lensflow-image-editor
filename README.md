@@ -12,9 +12,10 @@ that reproduces the web editor's output), Part 2b (RAW decoding and
 development, so `lf-render` opens camera files) and Part 2c-i (the grade,
 account and catalogue libraries) are built. The app itself (2c-ii) and
 packaging (2d) follow. 2c-i is libraries only: there is no UI yet.
-The application crate `lf-app` has started (2c-ii Tasks 1 to 4: window and runtime,
-sign-in and entitlement, catalogue root, import, library grid and filmstrip, and the
-Develop view's preview drawn straight into a texture egui shows).
+The application crate `lf-app` has started (2c-ii Tasks 1 to 5: window and runtime,
+sign-in and entitlement, catalogue root, import, library grid and filmstrip, the
+Develop view's preview drawn straight into a texture egui shows, and the adjust panels
+with one history step per gesture, undo and redo, and debounced sidecar writes).
 
 ## Crates
 
@@ -154,6 +155,7 @@ every file. A sidecar read successfully (or absent) clears `photos.sidecar_error
 `edits::reconcile_on_open(catalog, photo, path)` (used when Develop opens a photo)
 reads the sidecar from disk and reconciles it; one that cannot be read is recorded in
 `photos.sidecar_error` and skips the reconcile, so it is never treated as absent.
+`edits::history_steps(catalog, photo)` says how many steps undo and redo can take.
 
 Import. `import::scan` lists supported files under a folder (RAW and
 JPEG/PNG/TIFF/WebP by extension; hidden entries, `.lensflow` and sidecars are

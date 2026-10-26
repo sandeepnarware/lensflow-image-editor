@@ -91,7 +91,7 @@ fn main() -> Result<(), String> {
                     Ok::<_, String>(())
                 };
                 draw("fit", &viewport, false)?;
-                viewport.toggle_fit_100();
+                viewport.toggle_fit_100(output, panel);
                 draw("100 %", &viewport, false)?;
                 viewport.pan(-400.0, -250.0, output, panel);
                 draw("100 % panned", &viewport, false)?;
