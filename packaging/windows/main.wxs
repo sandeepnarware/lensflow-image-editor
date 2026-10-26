@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  lensflow-ImageEditor MSI (WiX Toolset v4).
+
+  wix build packaging/windows/main.wxs -arch x64 -ext WixToolset.UI.wixext
+    -d Version=<x.y.z> -d BinDir=<folder holding lensflow-image-editor.exe>
+    -o lensflow-ImageEditor-<x.y.z>-windows-x64.msi
+
+  Per-machine install to Program Files\lensflow-ImageEditor: the program, its NOTICE and a
+  Start-menu shortcut. No custom actions; nothing is written under the user's profile, so
+  the photographer's config, data, cache and catalogues (see docs/app.md) are untouched by
+  an upgrade or an uninstall.
+
+  The UpgradeCode is fixed for the life of the product: never change it, or an update
+  installs beside the old version instead of replacing it.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <?ifndef Version?>
+    <?error Pass -d Version=x.y.z ?>
+  <?endif?>
+  <?ifndef BinDir?>
+    <?error Pass -d BinDir=<folder holding lensflow-image-editor.exe> ?>
+  <?endif?>
+
+  <Package Name="lensflow-ImageEditor"
+           Manufacturer="LensFlow"
+           Version="$(var.Version)"
+           UpgradeCode="315A3A2A-2148-4FEF-9433-0E79AF16981C"
+           Scope="perMachine"
+           Language="1033"
+           Compressed="yes">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of lensflow-ImageEditor is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- An advertised shortcut's icon Id must end in the key file's extension (ICE50). -->
+    <Icon Id="AppIcon.exe" SourceFile="$(sys.SOURCEFILEDIR)..\icons\app.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.exe" />
+    <Property Id="ARPURLINFOABOUT" Value="https://lensflow.in" />
+
+    <WixVariable Id="WixUILicenseRtf" Value="$(sys.SOURCEFILEDIR)License.rtf" />
+    <ui:WixUI Id="WixUI_Minimal" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="lensflow-ImageEditor" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="lensflow-ImageEditor" Level="1">
+      <Component Id="AppExe" Directory="INSTALLFOLDER" Bitness="always64">
+        <File Id="AppExeFile" Source="$(var.BinDir)\lensflow-image-editor.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut"
+                    Directory="ProgramMenuFolder"
+                    Name="lensflow-ImageEditor"
+                    Description="Edit and grade RAW photos"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="AppIcon.exe"
+                    Advertise="yes" />
+        </File>
+      </Component>
+      <Component Id="Notice" Directory="INSTALLFOLDER" Bitness="always64">
+        <File Id="NoticeFile" Source="$(sys.SOURCEFILEDIR)..\..\NOTICE" Name="NOTICE.txt" KeyPath="yes" />
+      </Component>
+    </Feature>
+  </Package>
+</Wix>

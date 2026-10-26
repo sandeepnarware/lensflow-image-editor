@@ -561,4 +561,6 @@ common dialogs and macOS the open panel. Typing a folder path always works, with
 a picker.
 
 webbrowser opens links (Help > About) in the system browser.
+winresource (MIT) is build-only on Windows: it embeds the program icon and version
+information into the .exe and is not itself shipped.
 This notice is compiled into lensflow-ImageEditor and shown under Help > About.

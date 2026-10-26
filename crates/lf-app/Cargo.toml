@@ -46,3 +46,34 @@ httpmock = "0.8"
 [target.'cfg(windows)'.dependencies]
 # GetDriveTypeW: is the catalogue root on a network drive?
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[target.'cfg(windows)'.build-dependencies]
+# Embeds packaging/icons/app.ico and the version info into the .exe (build.rs). MIT.
+winresource = "0.1.34"
+
+# cargo-deb (lensflow-ImageEditor_<version>_amd64.deb). Asset sources are relative to this
+# file; scripts/release/check-packaging.sh checks that each one exists.
+[package.metadata.deb]
+name = "lensflow-image-editor"
+maintainer = "Sandeep Kumar Narware <sandeep.kumar.narware@gmail.com>"
+copyright = "2026 LensFlow / Sandeep Kumar Narware"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+lensflow-ImageEditor edits and grades RAW photos for LensFlow studios: a GPU develop \
+pipeline, a local catalogue and exports, matching the LensFlow web editor."""
+section = "graphics"
+priority = "optional"
+depends = "$auto, libvulkan1"
+assets = [
+    ["target/release/lensflow-image-editor", "usr/bin/", "755"],
+    ["../../packaging/linux/lensflow-image-editor.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/icons/16.png", "usr/share/icons/hicolor/16x16/apps/lensflow-image-editor.png", "644"],
+    ["../../packaging/icons/24.png", "usr/share/icons/hicolor/24x24/apps/lensflow-image-editor.png", "644"],
+    ["../../packaging/icons/32.png", "usr/share/icons/hicolor/32x32/apps/lensflow-image-editor.png", "644"],
+    ["../../packaging/icons/48.png", "usr/share/icons/hicolor/48x48/apps/lensflow-image-editor.png", "644"],
+    ["../../packaging/icons/64.png", "usr/share/icons/hicolor/64x64/apps/lensflow-image-editor.png", "644"],
+    ["../../packaging/icons/128.png", "usr/share/icons/hicolor/128x128/apps/lensflow-image-editor.png", "644"],
+    ["../../packaging/icons/256.png", "usr/share/icons/hicolor/256x256/apps/lensflow-image-editor.png", "644"],
+    ["../../packaging/icons/512.png", "usr/share/icons/hicolor/512x512/apps/lensflow-image-editor.png", "644"],
+    ["../../NOTICE", "usr/share/doc/lensflow-image-editor/NOTICE", "644"],
+]
