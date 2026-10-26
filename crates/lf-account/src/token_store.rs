@@ -1,12 +1,13 @@
 use crate::{AccountError, Instance};
 use chacha20poly1305::aead::{Aead, Payload};
-use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, Nonce};
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce};
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use zeroize::Zeroizing;
 
 const SERVICE: &str = "lensflow-ImageEditor";
 
@@ -19,6 +20,13 @@ const TAG_LEN: usize = 16;
 const SALT_FILE: &str = "token-salt";
 const SALT_LEN: usize = 16;
 const KEY_INFO: &str = "lensflow-ImageEditor token v1";
+/// The longest token accepted (Sanctum tokens are well under 100 characters).
+const MAX_TOKEN_LEN: usize = 8192;
+/// The largest token file read: header, the longest token and the tag.
+const MAX_FILE_LEN: usize = MAGIC.len() + NONCE_LEN + MAX_TOKEN_LEN + TAG_LEN;
+/// Machine-id files hold 32 hex digits; nothing longer is read.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+const MAX_ID_LEN: u64 = 256;
 const UNREADABLE: &str = "the saved sign-in could not be read on this machine; sign in again";
 
 /// Where the token file's key comes from: bytes bound to this machine and user account.
@@ -130,7 +138,12 @@ impl TokenStore {
             }
         }
         let path = self.file();
-        let bytes = fs::read(&path).ok()?;
+        let bytes = read_capped(&path, MAX_FILE_LEN as u64 + 1).ok()?;
+        if bytes.len() > MAX_FILE_LEN {
+            log::warn!("{UNREADABLE}");
+            let _ = fs::remove_file(&path);
+            return None;
+        }
         if let Some(sealed) = bytes.strip_prefix(MAGIC) {
             return match self.open_sealed(sealed) {
                 Some(t) => {
@@ -183,15 +196,15 @@ impl TokenStore {
 
     /// HKDF-SHA256(ikm = key material, salt, info = KEY_INFO ‖ base URL) → ChaCha20-Poly1305.
     fn cipher(&self, salt: &[u8; SALT_LEN]) -> ChaCha20Poly1305 {
-        let ikm = self.key.key_material();
+        let ikm = Zeroizing::new(self.key.key_material());
         let info = [KEY_INFO.as_bytes(), self.account.as_bytes()].concat();
-        let mut okm = [0u8; 32];
+        let mut okm = Zeroizing::new([0u8; 32]);
         Hkdf::<Sha256>::new(Some(salt), &ikm)
-            .expand(&info, &mut okm)
+            .expand(&info, okm.as_mut_slice())
             .expect("32 bytes is a valid HKDF-SHA256 output length");
-        let cipher = ChaCha20Poly1305::new(&Key::from(okm));
-        okm.fill(0);
-        cipher
+        // From the slice, so no un-zeroized copy of the key is made here; the cipher zeroizes
+        // its own copy on drop (the crate's `zeroize` feature).
+        ChaCha20Poly1305::new_from_slice(okm.as_slice()).expect("a 32-byte key")
     }
 
     /// The token from the bytes after the magic; None for a wrong key, tampering,
@@ -207,8 +220,9 @@ impl TokenStore {
             msg: ciphertext,
             aad: self.account.as_bytes(),
         };
-        let plain = self.cipher(&salt).decrypt(&nonce, payload).ok()?;
-        String::from_utf8(plain).ok().filter(|t| !t.is_empty())
+        let plain = Zeroizing::new(self.cipher(&salt).decrypt(&nonce, payload).ok()?);
+        let token = std::str::from_utf8(&plain).ok()?;
+        valid_token(token).then(|| token.to_string())
     }
 
     fn write_file(&self, token: &str) -> io::Result<()> {
@@ -230,46 +244,68 @@ impl TokenStore {
         out.extend_from_slice(&ciphertext);
         let path = self.file();
         let tmp = self.write_tmp(&path, &out)?;
-        fs::rename(&tmp, &path)
+        fs::rename(&tmp, &path).inspect_err(|_| {
+            let _ = fs::remove_file(&tmp);
+        })
     }
 
     fn read_salt(&self) -> Option<[u8; SALT_LEN]> {
         fs::read(self.salt_file()).ok()?.try_into().ok()
     }
 
-    /// The salt, made (once per config dir) when there is none.
+    /// The salt, made (once per config dir) when there is none. Several processes may race
+    /// here; whichever salt lands on disk first is the one everybody uses.
     fn salt_for_write(&self) -> io::Result<[u8; SALT_LEN]> {
         if let Some(salt) = self.read_salt() {
             return Ok(salt);
         }
         let path = self.salt_file();
-        // A salt file of the wrong size is useless: nothing sealed with it can be read.
-        let _ = fs::remove_file(&path);
-        let mut salt = [0u8; SALT_LEN];
-        random_bytes(&mut salt)?;
-        let tmp = self.write_tmp(&path, &salt)?;
-        // Link rather than rename so a salt another process has just made is never replaced.
-        match fs::hard_link(&tmp, &path) {
-            Ok(()) => {
-                let _ = fs::remove_file(&tmp);
-                Ok(salt)
-            }
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                let _ = fs::remove_file(&tmp);
-                self.read_salt()
-                    .ok_or_else(|| io::Error::other("the token salt file is unreadable"))
-            }
-            // A file system without hard links.
-            Err(_) => fs::rename(&tmp, &path).map(|()| salt),
+        // Only a salt file of the wrong size is replaced: nothing sealed with it can be read.
+        // (A failed read of a good one, or one another process is linking in, stays.)
+        if fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() != SALT_LEN as u64) {
+            let _ = fs::remove_file(&path);
         }
+        let mut salt = Zeroizing::new([0u8; SALT_LEN]);
+        random_bytes(salt.as_mut_slice())?;
+        let tmp = self.write_tmp(&path, salt.as_slice())?;
+        // Link rather than rename so a salt another process has just made is never replaced.
+        let linked = match fs::hard_link(&tmp, &path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+            // A file system without hard links.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::Unsupported | io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                if path.exists() {
+                    Ok(())
+                } else {
+                    fs::rename(&tmp, &path)
+                }
+            }
+            Err(e) => Err(e),
+        };
+        let _ = fs::remove_file(&tmp);
+        linked?;
+        self.read_salt()
+            .ok_or_else(|| io::Error::other("the token salt file is unreadable"))
     }
 
     /// Writes `bytes` to a private temp file next to `path` (0600 from the first byte on
-    /// Unix, in a 0700 dir) and returns its path for the caller to move into place.
+    /// Unix, in a 0700 dir) and returns its path for the caller to move into place. The temp
+    /// name is unique per call, so concurrent writers never share or delete each other's.
     fn write_tmp(&self, path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
         use std::io::Write;
-        let tmp = path.with_extension("tmp");
-        let _ = fs::remove_file(&tmp);
+        let mut suffix = [0u8; 8];
+        random_bytes(&mut suffix)?;
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let tmp = path.with_file_name(format!(
+            "{name}.{}.{}.tmp",
+            std::process::id(),
+            hex::encode(suffix)
+        ));
         #[cfg(unix)]
         let mut f = {
             use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
@@ -291,8 +327,12 @@ impl TokenStore {
                 .create_new(true)
                 .open(&tmp)?
         };
-        f.write_all(bytes)?;
-        f.sync_all()?;
+        let written = f.write_all(bytes).and_then(|()| f.sync_all());
+        drop(f);
+        if let Err(e) = written {
+            let _ = fs::remove_file(&tmp);
+            return Err(e);
+        }
         Ok(tmp)
     }
 
@@ -323,16 +363,27 @@ fn random_bytes(buf: &mut [u8]) -> io::Result<()> {
     getrandom::fill(buf).map_err(|e| io::Error::other(format!("no random bytes from the OS: {e}")))
 }
 
+/// Reads at most `cap` bytes of a file.
+fn read_capped(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    fs::File::open(path)?.take(cap).read_to_end(&mut out)?;
+    Ok(out)
+}
+
+/// What a token looks like: printable ASCII, no spaces, at most 8 KiB.
+fn valid_token(t: &str) -> bool {
+    !t.is_empty() && t.len() <= MAX_TOKEN_LEN && t.bytes().all(|b| b.is_ascii_graphic())
+}
+
 /// A token in the old plaintext file format: one line of printable ASCII.
 fn legacy_token(bytes: &[u8]) -> Option<String> {
     let t = std::str::from_utf8(bytes).ok()?.trim();
-    let looks_like_a_token =
-        !t.is_empty() && t.len() <= 8192 && t.bytes().all(|b| b.is_ascii_graphic());
-    looks_like_a_token.then(|| t.to_string())
+    valid_token(t).then(|| t.to_string())
 }
 
-/// machine id ‖ user id ‖ user name, each length-prefixed. With no readable machine id the
-/// home dir path stands in (weaker: any machine with the same path and user gives the same key).
+/// machine id ‖ user id (‖ user name on Windows), each length-prefixed. With no readable
+/// machine id the home dir path stands in (weaker: any machine with the same path and user
+/// gives the same key).
 fn machine_key_material() -> Vec<u8> {
     let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf());
     let machine = machine_id().unwrap_or_else(|| {
@@ -345,7 +396,18 @@ fn machine_key_material() -> Vec<u8> {
     let user = user_id(home.as_deref());
     let name = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
-        .unwrap_or_default();
+        .ok();
+    key_parts(&machine, &user, name)
+}
+
+/// The key material from its parts. On Unix the uid already binds the account, so the user
+/// name (an environment variable that `sudo -E` and friends change) is left out.
+fn key_parts(machine: &str, user: &str, name: Option<String>) -> Vec<u8> {
+    let name = if cfg!(unix) {
+        String::new()
+    } else {
+        name.unwrap_or_default()
+    };
     let mut out = Vec::new();
     for part in [machine.as_bytes(), user.as_bytes(), name.as_bytes()] {
         out.extend_from_slice(&(part.len() as u32).to_le_bytes());
@@ -374,16 +436,21 @@ fn user_id(home: Option<&Path>) -> String {
 fn machine_id() -> Option<String> {
     ["/etc/machine-id", "/var/lib/dbus/machine-id"]
         .iter()
-        .find_map(|p| {
-            let id = fs::read_to_string(p).ok()?;
-            let id = id.trim();
-            (!id.is_empty()).then(|| id.to_string())
-        })
+        .find_map(|p| read_id_file(Path::new(p)))
+}
+
+/// The trimmed contents of a machine-id file, reading at most 256 bytes.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn read_id_file(path: &Path) -> Option<String> {
+    let bytes = read_capped(path, MAX_ID_LEN).ok()?;
+    let id = String::from_utf8_lossy(&bytes);
+    let id = id.trim();
+    (!id.is_empty()).then(|| id.to_string())
 }
 
 #[cfg(target_os = "macos")]
 fn machine_id() -> Option<String> {
-    let out = std::process::Command::new("ioreg")
+    let out = std::process::Command::new("/usr/sbin/ioreg")
         .args(["-rd1", "-c", "IOPlatformExpertDevice"])
         .output()
         .ok()?;
@@ -394,7 +461,10 @@ fn machine_id() -> Option<String> {
 fn machine_id() -> Option<String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let out = std::process::Command::new("reg")
+    // By absolute path, so a `reg.exe` earlier on PATH or in the working dir is never run.
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+    let reg = Path::new(&root).join("System32").join("reg.exe");
+    let out = std::process::Command::new(reg)
         .args([
             "query",
             r"HKLM\SOFTWARE\Microsoft\Cryptography",
@@ -490,6 +560,31 @@ mod tests {
         assert_eq!(legacy_token(b""), None);
         assert_eq!(legacy_token(b"two words"), None);
         assert_eq!(legacy_token(&[0xff, 0x00, 0x13]), None);
+    }
+
+    #[test]
+    fn the_user_name_is_only_in_the_key_on_windows() {
+        let a = key_parts("m", "u", Some("alice".into()));
+        let b = key_parts("m", "u", Some("bob".into()));
+        if cfg!(unix) {
+            assert_eq!(a, b, "the uid binds the account on Unix");
+        } else {
+            assert_ne!(a, b);
+        }
+        assert_ne!(key_parts("m", "u", None), key_parts("m2", "u", None));
+        assert_ne!(key_parts("m", "u", None), key_parts("m", "u2", None));
+    }
+
+    #[test]
+    fn machine_id_files_are_read_capped() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("machine-id");
+        std::fs::write(&p, "a".repeat(10_000)).unwrap();
+        assert_eq!(read_id_file(&p).map(|s| s.len()), Some(256));
+        std::fs::write(&p, "  abc123\n").unwrap();
+        assert_eq!(read_id_file(&p).as_deref(), Some("abc123"));
+        std::fs::write(&p, "\n").unwrap();
+        assert_eq!(read_id_file(&p), None);
     }
 
     #[test]
