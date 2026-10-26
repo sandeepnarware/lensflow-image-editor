@@ -116,11 +116,18 @@ fn presets_crud_round_trip() {
     assert!(gone[0].deleted_at.is_some());
     assert!(presets::tombstones(&c, OTHER).unwrap().is_empty());
 
-    // Saving the name again brings the row back, as a new preset: no link to the server
-    // copy that is being deleted.
+    // Saving the name again brings the row back, still linked to its server copy, and
+    // changed here (a new `updated_at`), so the sync replaces the server copy.
+    let gone = presets::tombstones(&c, STUDIO).unwrap().remove(0);
     presets::save(&c, STUDIO, "Golden", &json!({"v": 2})).unwrap();
     let back = presets::find(&c, STUDIO, "Golden").unwrap().unwrap();
-    assert_eq!((back.remote_id, back.synced_at), (None, None));
+    assert_eq!(
+        (back.remote_id, &back.synced_at),
+        (gone.remote_id, &gone.synced_at)
+    );
+    assert_eq!(back.remote_id, Some(42));
+    assert_eq!(back.deleted_at, None);
+    assert_ne!(Some(back.updated_at.as_str()), back.synced_at.as_deref());
     assert_eq!(
         names(&presets::list(&c, STUDIO).unwrap()),
         ["Cool", "Golden"]

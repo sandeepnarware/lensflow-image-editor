@@ -449,6 +449,55 @@ mod tests {
     }
 
     #[test]
+    fn deleting_then_saving_again_replaces_the_server_copy() {
+        // Deleted here, saved again under the same name before any sync, the server copy
+        // untouched: one update of the same id, no "(desktop)" copy.
+        let server = MockServer::start();
+        let (_d, c) = catalogue();
+        let id = local::upsert(
+            &c,
+            STUDIO,
+            "Warm",
+            &json!({"v": 2, "temperature": 10}),
+            T0,
+            Some(9),
+            Some(T0),
+        )
+        .unwrap();
+        local::delete(&c, id).unwrap();
+        local::save(&c, STUDIO, "Warm", &json!({"v": 2, "temperature": 30})).unwrap();
+        server.mock(|w, t| {
+            w.method(GET).path("/api/galleries/edit-presets");
+            t.status(200).json_body(json!({"data": [
+                {"id": 9, "name": "Warm", "settings": {"v": 2, "temperature": 10},
+                 "created_at": T0, "updated_at": T0}
+            ]}));
+        });
+        let patch = server.mock(|w, t| {
+            w.method(PATCH)
+                .path("/api/galleries/edit-presets/9")
+                .json_body(json!({"name": "Warm", "settings": {"v": 2, "temperature": 30}}));
+            t.status(200).json_body(json!({"data":
+                {"id": 9, "name": "Warm", "settings": {"v": 2, "temperature": 30},
+                 "created_at": T0, "updated_at": "2026-10-13T00:00:00+00:00"}
+            }));
+        });
+        let post = server.mock(|w, t| {
+            w.method(POST).path("/api/galleries/edit-presets");
+            t.status(500);
+        });
+        let report = run(&client(&server), &c, STUDIO).unwrap();
+        patch.assert();
+        post.assert_calls(0);
+        assert_eq!((report.pushed, report.conflicts, report.deleted), (1, 0, 0));
+        assert_eq!(
+            rows(&c),
+            [("Warm".into(), Some(9), json!({"v": 2, "temperature": 30}))]
+        );
+        assert!(local::tombstones(&c, STUDIO).unwrap().is_empty());
+    }
+
+    #[test]
     fn a_preset_saved_again_after_a_web_delete_survives_the_sync() {
         // Deleted here while offline, deleted on the web by a teammate, then saved again
         // here: the new one is pushed, never purged.
