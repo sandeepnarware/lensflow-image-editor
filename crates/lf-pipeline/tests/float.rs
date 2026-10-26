@@ -200,3 +200,62 @@ fn render_f16_matches_render_within_one_level() {
         "the probe pixels are alike, so a flip would go unnoticed"
     );
 }
+
+/// `Renderer::from_frame` uploads and builds in one call, under its own error scopes: the
+/// same picture as `upload_f16` + `from_texture`, a bad frame refused, and a device error
+/// during the upload returned (not only logged).
+#[test]
+fn from_frame_uploads_under_its_own_error_scope() {
+    let gpu = shared_gpu();
+    let src = load_png(root().join("sources/portrait.png")).unwrap();
+    let (w, h) = src.dimensions();
+    let s = normalise(&case_json("identity").unwrap());
+    let frame = to_f16(&src);
+    let source = Source::upload_f16(&gpu, &frame, true).unwrap();
+    let via_texture = Renderer::from_texture(gpu.clone(), source, w, h)
+        .unwrap()
+        .render(&s)
+        .unwrap();
+    let mut r = Renderer::from_frame(gpu.clone(), &frame, w, h).unwrap();
+    assert!(r.render(&s).unwrap().as_raw() == via_texture.as_raw());
+
+    let short = FloatFrame {
+        width: 4,
+        height: 4,
+        data: vec![half::f16::ZERO; 3],
+    };
+    let err = Renderer::from_frame(gpu.clone(), &short, 4, 4)
+        .err()
+        .unwrap();
+    assert!(matches!(err, PipelineError::BadFrame { .. }), "{err}");
+
+    lf_pipeline::test_support::fail_next_upload();
+    match Renderer::from_frame(gpu.clone(), &frame, w, h) {
+        Err(PipelineError::Gpu(msg)) => assert!(!msg.is_empty()),
+        Err(e) => panic!("expected PipelineError::Gpu, got {e}"),
+        Ok(_) => panic!("the upload's device error was not returned"),
+    }
+    assert!(
+        gpu.take_error().is_none(),
+        "captured by the call, not uncaptured"
+    );
+}
+
+/// `prepare` runs under the same per-call error scopes as `draw`.
+#[test]
+fn prepare_reports_its_own_device_errors() {
+    let gpu = shared_gpu();
+    let src = load_png(root().join("sources/portrait.png")).unwrap();
+    let (w, h) = src.dimensions();
+    let s = normalise(&json!({ "sharpen": 40 }));
+    let mut r = Renderer::new(gpu.clone(), &src, w, h).unwrap();
+    r.prepare(&s).unwrap();
+    r.inject_validation_error();
+    match r.prepare(&s) {
+        Err(PipelineError::Gpu(msg)) => assert!(!msg.is_empty()),
+        Err(e) => panic!("expected PipelineError::Gpu, got {e}"),
+        Ok(_) => panic!("prepare did not report the device error"),
+    }
+    assert!(gpu.take_error().is_none());
+    r.prepare(&s).unwrap();
+}

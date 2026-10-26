@@ -70,6 +70,7 @@ fn harness(dir: &Path, root: Option<PathBuf>) -> Option<Harness<'static, State>>
                         config_dir: &s.config,
                     };
                     s.lib.ui(ui, &mut env);
+                    s.toasts.show(ui.ctx());
                 },
                 state,
             ),
@@ -323,5 +324,80 @@ fn develop_never_moves_onto_a_missing_photo() {
         h.state().lib.mode,
         Mode::Develop(first),
         "the missing photo is not opened"
+    );
+}
+
+#[test]
+fn develop_opens_a_photo_shows_its_facts_and_steps_over_missing_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 3);
+    import_folder(&mut h, &shoot, 3);
+    std::fs::remove_file(shoot.join("p1.png")).unwrap();
+    import_folder(&mut h, &shoot, 3);
+    step_until(&mut h, "the missing flag", |s| {
+        s.lib.photos().iter().filter(|p| p.missing).count() == 1
+    });
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    let missing = h.state().lib.photos()[1].missing;
+    assert!(missing, "p1 is the missing one");
+    h.state_mut().lib.selection.click(ids[0]);
+    h.key_press(Key::D);
+    step_until(&mut h, "the first photo to open", |s| {
+        s.lib.develop().is_ready()
+    });
+    assert_eq!(h.state().lib.develop().photo_id(), Some(ids[0]));
+    h.get_by_label("p0.png");
+    h.get_by_label("300 × 200");
+    h.get_by_label("PNG");
+    h.get_by_label(lf_app::develop::BEFORE);
+    // Headless: no egui renderer to share a texture with.
+    h.get_by_label(lf_app::develop::NO_PREVIEW);
+
+    // → steps over the missing photo to the third.
+    h.key_press(Key::ArrowRight);
+    step_until(&mut h, "the third photo to open", |s| {
+        s.lib.develop().is_ready() && s.lib.develop().photo_id() == Some(ids[2])
+    });
+    assert_eq!(h.state().lib.mode, Mode::Develop(ids[2]));
+    h.get_by_label("p2.png");
+    // ← steps back over it too.
+    h.key_press(Key::ArrowLeft);
+    step_until(&mut h, "the first photo again", |s| {
+        s.lib.develop().is_ready() && s.lib.develop().photo_id() == Some(ids[0])
+    });
+
+    // G leaves Develop and frees the renderer.
+    h.key_press(Key::G);
+    h.step();
+    assert_eq!(h.state().lib.mode, Mode::Library);
+    assert!(h.state().lib.develop().photo_id().is_none());
+    assert!(!h.state().lib.develop().is_ready());
+}
+
+#[test]
+fn a_photo_that_cannot_be_opened_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    std::fs::create_dir_all(&shoot).unwrap();
+    std::fs::write(shoot.join("broken.jpg"), b"\xff\xd8\xff not really a jpeg").unwrap();
+    import_folder(&mut h, &shoot, 1);
+    let id = h.state().lib.photos()[0].id;
+    h.state_mut().lib.selection.click(id);
+    h.key_press(Key::D);
+    step_until_label(&mut h, lf_app::develop::CANT_OPEN);
+    assert!(!h.state().lib.develop().is_ready());
+    assert_eq!(h.state().lib.develop().photo_id(), Some(id));
+    h.step();
+    assert!(
+        h.query_by_label_contains("This file can't be opened: ")
+            .is_some(),
+        "the toast names the problem"
     );
 }

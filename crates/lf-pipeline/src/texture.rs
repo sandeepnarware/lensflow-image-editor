@@ -141,6 +141,16 @@ impl Target {
         })
     }
 
+    /// The view of all mip levels (what a sampler or egui's `register_native_texture` reads).
+    pub fn view(&self) -> &wgpu::TextureView {
+        &self.view
+    }
+
+    /// The texture itself.
+    pub fn texture(&self) -> &wgpu::Texture {
+        &self.texture
+    }
+
     /// A view of one mip level.
     pub fn level_view(&self, level: u32) -> wgpu::TextureView {
         self.texture.create_view(&wgpu::TextureViewDescriptor {

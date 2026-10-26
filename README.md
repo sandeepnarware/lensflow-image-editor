@@ -12,8 +12,9 @@ that reproduces the web editor's output), Part 2b (RAW decoding and
 development, so `lf-render` opens camera files) and Part 2c-i (the grade,
 account and catalogue libraries) are built. The app itself (2c-ii) and
 packaging (2d) follow. 2c-i is libraries only: there is no UI yet.
-The application crate `lf-app` has started (2c-ii Tasks 1 to 3: window and runtime,
-sign-in and entitlement, catalogue root, import, library grid and filmstrip).
+The application crate `lf-app` has started (2c-ii Tasks 1 to 4: window and runtime,
+sign-in and entitlement, catalogue root, import, library grid and filmstrip, and the
+Develop view's preview drawn straight into a texture egui shows).
 
 ## Crates
 
@@ -23,8 +24,9 @@ sign-in and entitlement, catalogue root, import, library grid and filmstrip).
 - `lf-pipeline`: the headless wgpu renderer (`Gpu`, textures with mip chains,
   and the copy, gaussian, spots and develop passes) behind `Renderer`, which
   renders, draws a preview, and returns pixels and a histogram. It also holds
-  `Renderer::new` (8-bit source) and `Renderer::from_texture` (half-float
-  source with headroom above 1.0). Each renderer call runs under its own
+  `Renderer::new` (8-bit source), `Renderer::from_texture` (half-float
+  source with headroom above 1.0) and `Renderer::from_frame` (uploads a half-float
+  frame under the call's own error scopes). Each renderer call runs under its own
   (per-thread) wgpu error scopes, so on a device shared with the UI or other
   threads it reports only the errors it caused (`PipelineError::Gpu`,
   `OutOfMemory`) and then drops its caches; errors raised outside any call are
@@ -149,6 +151,9 @@ Otherwise the catalogue wins, and the sidecar is rewritten
 only when the catalogue is strictly newer or the content (`v`, settings,
 versions) differs: an equal sidecar is left alone, so reopening does not touch
 every file. A sidecar read successfully (or absent) clears `photos.sidecar_error`.
+`edits::reconcile_on_open(catalog, photo, path)` (used when Develop opens a photo)
+reads the sidecar from disk and reconciles it; one that cannot be read is recorded in
+`photos.sidecar_error` and skips the reconcile, so it is never treated as absent.
 
 Import. `import::scan` lists supported files under a folder (RAW and
 JPEG/PNG/TIFF/WebP by extension; hidden entries, `.lensflow` and sidecars are

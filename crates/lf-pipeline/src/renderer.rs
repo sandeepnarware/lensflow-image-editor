@@ -163,6 +163,33 @@ impl Renderer {
         made
     }
 
+    /// Uploads `frame` (the working copy of a `full_width`×`full_height` photo, half floats
+    /// that may exceed 1.0) with mips and builds the renderer as [`Renderer::from_texture`]
+    /// does, all under this call's own error scopes: a device error during the upload (or the
+    /// build) is returned as [`PipelineError::Gpu`] / `OutOfMemory`, not only logged. A frame
+    /// whose data does not match its size is [`PipelineError::BadFrame`]; a lost device is
+    /// [`PipelineError::DeviceLost`].
+    pub fn from_frame(
+        gpu: Arc<Gpu>,
+        frame: &FloatFrame,
+        full_width: u32,
+        full_height: u32,
+    ) -> Result<Renderer, PipelineError> {
+        gpu.check()?;
+        if full_width == 0 || full_height == 0 {
+            return Err(PipelineError::EmptyImage);
+        }
+        let scopes = Scopes::push(&gpu);
+        let made = Source::upload_f16(&gpu, frame, true)
+            .and_then(|source| Renderer::with_source(gpu.clone(), source, full_width, full_height));
+        #[cfg(feature = "test-support")]
+        if crate::test_support::take_upload_failure() {
+            crate::test_support::provoke_validation_error(&gpu);
+        }
+        scopes.pop(&gpu)?;
+        made
+    }
+
     /// `new` and `from_texture` past their checks: the intermediates take `source`'s format.
     fn with_source(
         gpu: Arc<Gpu>,
@@ -248,8 +275,9 @@ impl Renderer {
 
     /// The spots, the detail blurs (each cached) and the curve texture for `s`; returns the
     /// image to develop from: the spotted target when `s` has spots, else the source.
+    /// Runs under the call's own error scopes, as `draw` does.
     pub fn prepare(&mut self, s: &EditSettings) -> Result<&Target, PipelineError> {
-        let spotted = self.prepare_caches(s)?;
+        let spotted = self.scoped(|r| r.prepare_caches(s))?;
         Ok(self.image(spotted))
     }
 

@@ -42,6 +42,21 @@ pub fn provoke_validation_error(gpu: &Gpu) {
     });
 }
 
+thread_local! {
+    static FAIL_NEXT_UPLOAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The next [`crate::Renderer::from_frame`] on this thread provokes a validation error inside
+/// its own error scope (as a failed upload would).
+pub fn fail_next_upload() {
+    FAIL_NEXT_UPLOAD.with(|f| f.set(true));
+}
+
+/// Takes the flag [`fail_next_upload`] set.
+pub(crate) fn take_upload_failure() -> bool {
+    FAIL_NEXT_UPLOAD.with(|f| f.replace(false))
+}
+
 /// The test binary's one device; panics when there is none.
 pub fn shared_gpu() -> Arc<Gpu> {
     try_shared_gpu().expect("no GPU adapter")
