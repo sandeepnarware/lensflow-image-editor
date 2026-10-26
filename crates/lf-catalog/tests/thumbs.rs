@@ -25,7 +25,10 @@ fn setup(n: usize) -> (tempfile::TempDir, Vec<i64>) {
     }
     let c = Catalog::open(d.path()).unwrap();
     let f = c.add_folder("f").unwrap();
-    import::run(&c, f, &import::scan(d.path()), 200, &mut |_| Ok(())).unwrap();
+    import::run(&c, f, &import::scan(d.path()).candidates, 200, &mut |_| {
+        Ok(())
+    })
+    .unwrap();
     let mut ids = c.photo_ids().unwrap();
     ids.sort();
     (d, ids)
@@ -100,7 +103,7 @@ fn a_fresh_stored_thumbnail_is_served_without_decoding() {
         assert_eq!(t.decoded_count(), 1);
     }
     let c = Catalog::open(d.path()).unwrap();
-    assert!(c.fresh_thumbnail(ids[0]).unwrap().is_some());
+    assert!(c.fresh_thumbnail(ids[0], Quality::Fast).unwrap().is_some());
 
     let t = Thumbnailer::new(gpu.clone(), d.path(), 1, Quality::Fast).unwrap();
     t.request(ids[0], Priority::High);
@@ -114,7 +117,7 @@ fn a_fresh_stored_thumbnail_is_served_without_decoding() {
     let mut s = lf_settings::EditSettings::default_settings();
     s.exposure = 0.5;
     lf_catalog::edits::set_settings(&c, ids[0], &s).unwrap();
-    assert!(c.fresh_thumbnail(ids[0]).unwrap().is_none());
+    assert!(c.fresh_thumbnail(ids[0], Quality::Fast).unwrap().is_none());
     let t = Thumbnailer::new(gpu, d.path(), 1, Quality::Fast).unwrap();
     t.request(ids[0], Priority::High);
     assert_eq!(wait_for(&t, 1).len(), 1);
@@ -129,7 +132,10 @@ fn a_success_clears_an_earlier_error() {
     std::fs::write(&file, b"not yet a png").unwrap();
     let c = Catalog::open(d.path()).unwrap();
     let f = c.add_folder("f").unwrap();
-    import::run(&c, f, &import::scan(d.path()), 200, &mut |_| Ok(())).unwrap();
+    import::run(&c, f, &import::scan(d.path()).candidates, 200, &mut |_| {
+        Ok(())
+    })
+    .unwrap();
     let id = c.photo_ids().unwrap()[0];
     assert!(
         c.photo_kind_error(&file.to_string_lossy())
@@ -160,7 +166,10 @@ fn a_device_error_stops_the_workers_without_marking_the_photo() {
         .unwrap();
     let c = Catalog::open(d.path()).unwrap();
     let f = c.add_folder("f").unwrap();
-    import::run(&c, f, &import::scan(d.path()), 200, &mut |_| Ok(())).unwrap();
+    import::run(&c, f, &import::scan(d.path()).candidates, 200, &mut |_| {
+        Ok(())
+    })
+    .unwrap();
     let ids = c.photo_ids().unwrap();
     let t = Thumbnailer::new_paused(gpu, d.path(), 1, Quality::Fast).unwrap();
     t.request(ids[0], Priority::High);
@@ -218,4 +227,55 @@ fn cancel_pending_drops_queued_requests() {
     // New requests still work.
     t.request(ids[0], Priority::High);
     assert_eq!(wait_for(&t, 1).len(), 1);
+}
+
+#[test]
+fn a_thumbnail_made_at_another_quality_is_not_fresh() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let (d, ids) = setup(1);
+    {
+        let t = Thumbnailer::new(gpu.clone(), d.path(), 1, Quality::Fast).unwrap();
+        t.request(ids[0], Priority::High);
+        assert_eq!(wait_for(&t, 1).len(), 1);
+    }
+    let c = Catalog::open(d.path()).unwrap();
+    assert!(c.fresh_thumbnail(ids[0], Quality::Fast).unwrap().is_some());
+    assert!(
+        c.fresh_thumbnail(ids[0], Quality::Preview)
+            .unwrap()
+            .is_none()
+    );
+
+    let t = Thumbnailer::new(gpu, d.path(), 1, Quality::Preview).unwrap();
+    t.request(ids[0], Priority::High);
+    assert_eq!(wait_for(&t, 1).len(), 1);
+    assert_eq!(t.decoded_count(), 1, "made again at the new quality");
+}
+
+#[test]
+fn a_success_clears_error_but_not_sidecar_error() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let d = tempfile::tempdir().unwrap();
+    let file = d.path().join("p0.png");
+    std::fs::write(&file, b"not yet a png").unwrap();
+    std::fs::write(lf_catalog::sidecar::path_for(&file), b"{ cut short").unwrap();
+    let c = Catalog::open(d.path()).unwrap();
+    let f = c.add_folder("f").unwrap();
+    import::run(&c, f, &import::scan(d.path()).candidates, 200, &mut |_| {
+        Ok(())
+    })
+    .unwrap();
+    let id = c.photo_ids().unwrap()[0];
+    let row = c.photo(id).unwrap().unwrap();
+    assert!(row.error.is_some() && row.sidecar_error.is_some());
+
+    image::RgbaImage::from_pixel(60, 40, image::Rgba([10, 20, 30, 255]))
+        .save(&file)
+        .unwrap();
+    let t = Thumbnailer::new(gpu, d.path(), 1, Quality::Fast).unwrap();
+    t.request(id, Priority::High);
+    assert_eq!(wait_for(&t, 1).len(), 1);
+    let row = c.photo(id).unwrap().unwrap();
+    assert_eq!(row.error, None, "the photo is fine now");
+    assert!(row.sidecar_error.is_some(), "the sidecar is still damaged");
 }

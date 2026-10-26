@@ -77,9 +77,21 @@ fn supported(path: &Path) -> bool {
         .is_some_and(|e| EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
+/// What [`scan`] found under a folder.
+#[derive(Clone, Debug, Default)]
+pub struct Scan {
+    /// The supported files, sorted by path.
+    pub candidates: Vec<Candidate>,
+    /// The folder itself could be listed. False for a folder that is gone or on a drive that
+    /// is unplugged or unreachable: [`mark_missing`] then marks nothing.
+    pub root_readable: bool,
+}
+
 /// Every supported file under `root`, recursively, skipping hidden entries, the `.lensflow`
-/// folder and `*.lensflow.json` sidecars. Unreadable directories are skipped.
-pub fn scan(root: &Path) -> Vec<Candidate> {
+/// folder and `*.lensflow.json` sidecars. Unreadable directories below the root are skipped;
+/// whether the root itself was readable is reported in [`Scan::root_readable`].
+pub fn scan(root: &Path) -> Scan {
+    let root_readable = fs::read_dir(root).is_ok();
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     let mut visited = std::collections::HashSet::new();
@@ -114,7 +126,10 @@ pub fn scan(root: &Path) -> Vec<Candidate> {
         }
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
-    out
+    Scan {
+        candidates: out,
+        root_readable,
+    }
 }
 
 struct Meta {
@@ -198,7 +213,7 @@ fn unreadable(error: String) -> Meta {
     }
 }
 
-/// The sentence stored in `photos.error` when a photo's sidecar cannot be read.
+/// The sentence stored in `photos.sidecar_error` when a photo's sidecar cannot be read.
 fn sidecar_error(path: &Path, e: &CatalogError) -> String {
     let name = sidecar::path_for(path)
         .file_name()
@@ -232,9 +247,10 @@ struct Work<'a> {
 /// For each new or changed file the sidecar beside it is read and reconciled
 /// ([`crate::edits::reconcile`]) in the batch's transaction: a sidecar's settings, versions and
 /// unknown keys are adopted, and a sidecar the catalogue supersedes is rewritten after the
-/// commit. A sidecar that cannot be read is reported in `photos.error` and left untouched. A
-/// decoder panic marks the file unreadable ("the decoder crashed on this file"). Every file
-/// seen has its `missing` flag cleared.
+/// commit. A sidecar that cannot be read is reported in `photos.sidecar_error` (apart from
+/// `photos.error`, the file's own problem) and left untouched. A decoder panic marks the file
+/// unreadable ("the decoder crashed on this file"). Every file seen has its `missing` flag
+/// cleared.
 pub fn run(
     catalog: &Catalog,
     folder_id: i64,
@@ -361,13 +377,10 @@ pub fn run(
                     }
                     Err(e) => {
                         log::warn!("the sidecar of {} could not be read: {e}", c.path.display());
-                        // A file that cannot be read keeps that (more basic) reason.
-                        if m.error.is_none() {
-                            tx.execute(
-                                "UPDATE photos SET error = ?2 WHERE id = ?1",
-                                rusqlite::params![id, sidecar_error(&c.path, e)],
-                            )?;
-                        }
+                        tx.execute(
+                            "UPDATE photos SET sidecar_error = ?2 WHERE id = ?1",
+                            rusqlite::params![id, sidecar_error(&c.path, e)],
+                        )?;
                     }
                 }
             }
@@ -389,12 +402,21 @@ pub fn run(
 /// Flag the photos catalogued under `folder_id` whose file is not among `scanned` (the folder's
 /// fresh [`scan`]) as missing (`photos.missing = 1`); [`run`] clears the flag when the file is
 /// seen again. Returns how many rows this call newly flagged.
+///
+/// A scan that did not reach the folder marks nothing: one whose root could not be read (a
+/// drive unplugged or a network share offline), and one that found no files at all (the empty
+/// mount point an unplugged drive leaves behind is indistinguishable from a folder emptied on
+/// purpose, and wrongly hiding every photo is the worse mistake).
 pub fn mark_missing(
     catalog: &Catalog,
     folder_id: i64,
-    scanned: &[Candidate],
+    scanned: &Scan,
 ) -> Result<usize, CatalogError> {
+    if !scanned.root_readable || scanned.candidates.is_empty() {
+        return Ok(0);
+    }
     let present: HashSet<String> = scanned
+        .candidates
         .iter()
         .map(|c| c.path.to_string_lossy().into_owned())
         .collect();

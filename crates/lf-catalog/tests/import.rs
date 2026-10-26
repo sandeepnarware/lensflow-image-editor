@@ -39,6 +39,7 @@ fn scan_filters_by_extension_and_skips_hidden() {
         fs::write(r.join(f), b"x").unwrap();
     }
     let mut names: Vec<String> = import::scan(r)
+        .candidates
         .iter()
         .map(|c| {
             c.path
@@ -64,7 +65,7 @@ fn fault_after_batch_two_leaves_400_then_rerun_completes() {
     thousand(d.path());
     let c = Catalog::open(d.path()).unwrap();
     let folder = c.add_folder(&d.path().to_string_lossy()).unwrap();
-    let cands = import::scan(d.path());
+    let cands = import::scan(d.path()).candidates;
     assert_eq!(cands.len(), 1000);
     let mut seen = Vec::new();
     let r = import::run(&c, folder, &cands, 200, &mut |p: Progress| {
@@ -95,7 +96,14 @@ fn changed_files_update_and_bad_files_are_recorded() {
     fs::write(d.path().join("bad.png"), b"not a png").unwrap();
     let c = Catalog::open(d.path()).unwrap();
     let folder = c.add_folder("f").unwrap();
-    let s = import::run(&c, folder, &import::scan(d.path()), 200, &mut |_| Ok(())).unwrap();
+    let s = import::run(
+        &c,
+        folder,
+        &import::scan(d.path()).candidates,
+        200,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
     assert_eq!((s.added, s.updated, s.skipped), (2, 0, 0));
     let (kind, err) = c
         .photo_kind_error(&d.path().join("bad.png").to_string_lossy())
@@ -115,7 +123,14 @@ fn changed_files_update_and_bad_files_are_recorded() {
         ),
     )
     .unwrap();
-    let s = import::run(&c, folder, &import::scan(d.path()), 200, &mut |_| Ok(())).unwrap();
+    let s = import::run(
+        &c,
+        folder,
+        &import::scan(d.path()).candidates,
+        200,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
     assert_eq!((s.added, s.updated, s.skipped), (0, 1, 1));
     let (w, h) = c
         .photo_size(&d.path().join("a.png").to_string_lossy())
@@ -150,7 +165,14 @@ fn import_adopts_a_v3_sidecar_and_keeps_its_unknown_keys_and_versions() {
 
     let c = Catalog::open(d.path()).unwrap();
     let folder = c.add_folder("f").unwrap();
-    import::run(&c, folder, &import::scan(d.path()), 200, &mut |_| Ok(())).unwrap();
+    import::run(
+        &c,
+        folder,
+        &import::scan(d.path()).candidates,
+        200,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
     let id = only_id(&c);
     assert_eq!(edits::get_settings(&c, id).unwrap().unwrap().exposure, 0.75);
     assert_eq!(versions::list(&c, id).unwrap().len(), 2);
@@ -181,7 +203,14 @@ fn a_changed_file_with_a_newer_sidecar_takes_the_sidecar() {
     png(&photo, 8, 6);
     let c = Catalog::open(d.path()).unwrap();
     let folder = c.add_folder("f").unwrap();
-    import::run(&c, folder, &import::scan(d.path()), 200, &mut |_| Ok(())).unwrap();
+    import::run(
+        &c,
+        folder,
+        &import::scan(d.path()).candidates,
+        200,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
     let id = only_id(&c);
     let mut s = EditSettings::default_settings();
     s.exposure = 0.2;
@@ -198,7 +227,14 @@ fn a_changed_file_with_a_newer_sidecar_takes_the_sidecar() {
         ),
     )
     .unwrap();
-    let r = import::run(&c, folder, &import::scan(d.path()), 200, &mut |_| Ok(())).unwrap();
+    let r = import::run(
+        &c,
+        folder,
+        &import::scan(d.path()).candidates,
+        200,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
     assert_eq!(r.updated, 1);
     assert_eq!(edits::get_settings(&c, id).unwrap().unwrap().exposure, 0.9);
 }
@@ -213,16 +249,25 @@ fn a_corrupt_sidecar_is_reported_and_never_overwritten() {
     std::fs::write(&side, corrupt).unwrap();
     let c = Catalog::open(d.path()).unwrap();
     let folder = c.add_folder("f").unwrap();
-    import::run(&c, folder, &import::scan(d.path()), 200, &mut |_| Ok(())).unwrap();
+    import::run(
+        &c,
+        folder,
+        &import::scan(d.path()).candidates,
+        200,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
     let (kind, err) = c.photo_kind_error(&photo.to_string_lossy()).unwrap();
     assert_eq!(kind, "png");
-    let err = err.expect("the damaged sidecar is reported");
+    assert_eq!(err, None, "the photo itself is fine");
+    let id = only_id(&c);
+    let row = c.photo(id).unwrap().unwrap();
+    let err = row.sidecar_error.expect("the damaged sidecar is reported");
     assert!(err.contains("a.png.lensflow.json"), "{err}");
     assert!(err.contains("left untouched"), "{err}");
     assert_eq!(std::fs::read(&side).unwrap(), corrupt);
 
     // An edit does not get to replace it either.
-    let id = only_id(&c);
     let out = edits::set_settings(&c, id, &EditSettings::default_settings()).unwrap();
     assert!(sidecar::write(&side, &out).is_err());
     assert_eq!(std::fs::read(&side).unwrap(), corrupt);
@@ -236,7 +281,14 @@ fn a_decoder_panic_marks_the_file_unreadable_and_the_import_finishes() {
     png(&d.path().join("z.png"), 8, 6);
     let c = Catalog::open(d.path()).unwrap();
     let folder = c.add_folder("f").unwrap();
-    let s = import::run(&c, folder, &import::scan(d.path()), 200, &mut |_| Ok(())).unwrap();
+    let s = import::run(
+        &c,
+        folder,
+        &import::scan(d.path()).candidates,
+        200,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
     assert_eq!(s.added, 3);
     let (kind, err) = c
         .photo_kind_error(&d.path().join("lf-test-panic.png").to_string_lossy())
@@ -258,7 +310,14 @@ fn mark_missing_flags_gone_files_and_run_clears_the_flag() {
     let c = Catalog::open(d.path()).unwrap();
     let folder = c.add_folder("f").unwrap();
     let other = c.add_folder("g").unwrap();
-    import::run(&c, folder, &import::scan(d.path()), 200, &mut |_| Ok(())).unwrap();
+    import::run(
+        &c,
+        folder,
+        &import::scan(d.path()).candidates,
+        200,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
     let elsewhere = d.path().join("elsewhere.png");
     c.add_photo(
         other,
@@ -284,7 +343,106 @@ fn mark_missing_flags_gone_files_and_run_clears_the_flag() {
     assert_eq!(import::mark_missing(&c, folder, &scanned).unwrap(), 0);
 
     std::fs::rename(&moved, &b).unwrap();
-    let s = import::run(&c, folder, &import::scan(d.path()), 200, &mut |_| Ok(())).unwrap();
+    let s = import::run(
+        &c,
+        folder,
+        &import::scan(d.path()).candidates,
+        200,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
     assert_eq!(s.skipped, 2);
     assert!(!c.photo_missing(&b.to_string_lossy()).unwrap());
+}
+
+#[test]
+fn an_unreadable_photo_and_a_damaged_sidecar_are_reported_separately() {
+    let d = tempfile::tempdir().unwrap();
+    let photo = d.path().join("a.png");
+    std::fs::write(&photo, b"not a png").unwrap();
+    std::fs::write(sidecar::path_for(&photo), b"{ cut short").unwrap();
+    let c = Catalog::open(d.path()).unwrap();
+    let folder = c.add_folder("f").unwrap();
+    import::run(
+        &c,
+        folder,
+        &import::scan(d.path()).candidates,
+        200,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
+    let row = c.photo(only_id(&c)).unwrap().unwrap();
+    assert!(row.error.is_some(), "the file's own problem");
+    assert!(row.sidecar_error.is_some(), "and the sidecar's");
+}
+
+#[test]
+fn a_repaired_sidecar_clears_sidecar_error_on_reconcile() {
+    let d = tempfile::tempdir().unwrap();
+    let photo = d.path().join("a.png");
+    png(&photo, 8, 6);
+    let side = sidecar::path_for(&photo);
+    std::fs::write(&side, b"{ cut short").unwrap();
+    let c = Catalog::open(d.path()).unwrap();
+    let folder = c.add_folder("f").unwrap();
+    import::run(
+        &c,
+        folder,
+        &import::scan(d.path()).candidates,
+        200,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
+    let id = only_id(&c);
+    assert!(c.photo(id).unwrap().unwrap().sidecar_error.is_some());
+
+    std::fs::remove_file(&side).unwrap();
+    edits::reconcile(&c, id, None).unwrap();
+    assert_eq!(c.photo(id).unwrap().unwrap().sidecar_error, None);
+}
+
+#[test]
+fn scan_reports_whether_the_root_was_readable() {
+    let d = tempfile::tempdir().unwrap();
+    png(&d.path().join("a.png"), 8, 6);
+    let found = import::scan(d.path());
+    assert!(found.root_readable);
+    assert_eq!(found.candidates.len(), 1);
+
+    let gone = import::scan(&d.path().join("unplugged"));
+    assert!(!gone.root_readable);
+    assert!(gone.candidates.is_empty());
+}
+
+#[test]
+fn mark_missing_marks_nothing_when_the_folder_was_not_reached() {
+    let d = tempfile::tempdir().unwrap();
+    let shoot = d.path().join("shoot");
+    std::fs::create_dir(&shoot).unwrap();
+    png(&shoot.join("a.png"), 8, 6);
+    png(&shoot.join("b.png"), 8, 6);
+    let c = Catalog::open(d.path()).unwrap();
+    let folder = c.add_folder(&shoot.to_string_lossy()).unwrap();
+    import::run(
+        &c,
+        folder,
+        &import::scan(&shoot).candidates,
+        200,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
+
+    // The drive is unplugged: the folder cannot be read at all.
+    std::fs::rename(&shoot, d.path().join("shoot.away")).unwrap();
+    let unreachable = import::scan(&shoot);
+    assert_eq!(import::mark_missing(&c, folder, &unreachable).unwrap(), 0);
+
+    // An empty mount point left behind by an unplugged drive: readable, but nothing in it.
+    std::fs::create_dir(&shoot).unwrap();
+    let empty = import::scan(&shoot);
+    assert!(empty.root_readable);
+    assert_eq!(import::mark_missing(&c, folder, &empty).unwrap(), 0);
+    for row in c.photos_in(folder).unwrap() {
+        assert!(!row.missing, "{}", row.path.display());
+    }
 }

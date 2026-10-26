@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 
@@ -132,6 +132,9 @@ CREATE TABLE sidecar_meta (
     // Set by `import::mark_missing` when a file is gone from its folder; cleared when
     // `import::run` sees the file again.
     "ALTER TABLE photos ADD COLUMN missing INTEGER NOT NULL DEFAULT 0;",
+    // A damaged sidecar, kept apart from `error` (the file and its thumbnail): import and
+    // `edits::reconcile` write it, thumbnails never touch it.
+    "ALTER TABLE photos ADD COLUMN sidecar_error TEXT;",
 ];
 
 pub struct Catalog {
@@ -316,5 +319,118 @@ impl Catalog {
         )?;
         let rows = st.query_map([], |r| r.get::<_, String>(0))?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+}
+
+/// A catalogued folder and how many photos it holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Folder {
+    pub id: i64,
+    pub path: PathBuf,
+    pub count: i64,
+}
+
+impl Folder {
+    /// The folder's own name (the last part of its path), for the sidebar.
+    pub fn name(&self) -> String {
+        self.path.file_name().map_or_else(
+            || self.path.to_string_lossy().into_owned(),
+            |n| n.to_string_lossy().into_owned(),
+        )
+    }
+}
+
+/// One photo as the library shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PhotoRow {
+    pub id: i64,
+    pub folder_id: i64,
+    pub path: PathBuf,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub camera: Option<String>,
+    pub lens: Option<String>,
+    pub captured_at: Option<String>,
+    pub kind: String,
+    /// Why the file or its thumbnail could not be read: a message to show, never a reason
+    /// not to ask for a thumbnail again.
+    pub error: Option<String>,
+    /// Why the sidecar beside the photo could not be read.
+    pub sidecar_error: Option<String>,
+    pub missing: bool,
+    /// The photo has a row in `edits`.
+    pub edited: bool,
+    pub updated_at: String,
+}
+
+const PHOTO_COLUMNS: &str = "p.id, p.folder_id, p.path, p.width, p.height, p.camera, p.lens,
+     p.captured_at, p.kind, p.error, p.sidecar_error, p.missing,
+     EXISTS (SELECT 1 FROM edits e WHERE e.photo_id = p.id), p.updated_at";
+
+fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
+    Ok(PhotoRow {
+        id: r.get(0)?,
+        folder_id: r.get(1)?,
+        path: PathBuf::from(r.get::<_, String>(2)?),
+        width: r.get(3)?,
+        height: r.get(4)?,
+        camera: r.get(5)?,
+        lens: r.get(6)?,
+        captured_at: r.get(7)?,
+        kind: r.get(8)?,
+        error: r.get(9)?,
+        sidecar_error: r.get(10)?,
+        missing: r.get(11)?,
+        edited: r.get(12)?,
+        updated_at: r.get(13)?,
+    })
+}
+
+impl Catalog {
+    /// Every folder with its photo count, by path.
+    pub fn folders(&self) -> Result<Vec<Folder>> {
+        let mut st = self.conn.prepare(
+            "SELECT f.id, f.path, (SELECT COUNT(*) FROM photos p WHERE p.folder_id = f.id)
+             FROM folders f ORDER BY f.path",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok(Folder {
+                id: r.get(0)?,
+                path: PathBuf::from(r.get::<_, String>(1)?),
+                count: r.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// The folder's photos by capture time, then path; photos without a capture time last.
+    pub fn photos_in(&self, folder_id: i64) -> Result<Vec<PhotoRow>> {
+        let mut st = self.conn.prepare(&format!(
+            "SELECT {PHOTO_COLUMNS} FROM photos p WHERE p.folder_id = ?1
+             ORDER BY p.captured_at IS NULL, p.captured_at, p.path"
+        ))?;
+        let rows = st.query_map([folder_id], photo_row)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// One photo, if it is catalogued.
+    pub fn photo(&self, id: i64) -> Result<Option<PhotoRow>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!("SELECT {PHOTO_COLUMNS} FROM photos p WHERE p.id = ?1"),
+                [id],
+                photo_row,
+            )
+            .optional()?)
+    }
+
+    /// Forgets a folder and everything the catalogue knows about its photos (edits, history,
+    /// versions, thumbnails). The files themselves, and their sidecars, are never touched.
+    pub fn remove_folder(&self, id: i64) -> Result<()> {
+        let tx = self.write_tx()?;
+        tx.execute("DELETE FROM folders WHERE id = ?1", [id])?;
+        tx.commit()?;
+        Ok(())
     }
 }

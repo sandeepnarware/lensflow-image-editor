@@ -3,9 +3,10 @@
 //!
 //! A stored thumbnail is served without decoding while it is fresh: its key (the
 //! `made_for_updated_at` column) is `edit:<edits.updated_at, or "-">|photo:<photos.updated_at>|
-//! <file_size>|<mtime>`, taken when the render starts, so any edit (including undo, redo and
-//! versions, which stamp `edits.updated_at`) or a changed file (which import records with a
-//! new size, mtime and `updated_at`) makes it stale.
+//! <file_size>|<mtime>|q:<demosaic quality>`, taken when the render starts, so any edit
+//! (including undo, redo and versions, which stamp `edits.updated_at`), a changed file (which
+//! import records with a new size, mtime and `updated_at`) or a thumbnailer working at another
+//! quality makes it stale.
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
@@ -23,7 +24,6 @@ use rusqlite::OptionalExtension;
 
 use crate::db::{Catalog, Result};
 use crate::import::DECODER_CRASHED;
-use crate::sidecar;
 
 pub const THUMB_EDGE: u32 = 256;
 
@@ -259,7 +259,7 @@ fn worker(shared: Arc<Shared>, gpu: Arc<Gpu>, path: PathBuf, quality: Quality) {
     };
     while let Some(id) = next_job(&shared) {
         // A stored thumbnail that is still fresh needs no decode.
-        match catalog.fresh_thumbnail(id) {
+        match catalog.fresh_thumbnail(id, quality) {
             Ok(Some(jpeg)) => match image::load_from_memory(&jpeg) {
                 Ok(img) => {
                     lock(&shared.ready).push((id, img.to_rgba8()));
@@ -308,7 +308,7 @@ fn worker(shared: Arc<Shared>, gpu: Arc<Gpu>, path: PathBuf, quality: Quality) {
 }
 
 /// The photo's path and the freshness key a thumbnail made now would carry.
-fn freshness(catalog: &Catalog, id: i64) -> Result<Option<(String, String)>> {
+fn freshness(catalog: &Catalog, id: i64, quality: Quality) -> Result<Option<(String, String)>> {
     Ok(catalog
         .conn
         .query_row(
@@ -322,7 +322,10 @@ fn freshness(catalog: &Catalog, id: i64) -> Result<Option<(String, String)>> {
                 let mtime: i64 = r.get(3)?;
                 let edit: Option<String> = r.get(4)?;
                 let edit = edit.as_deref().unwrap_or("-").to_string();
-                Ok((path, format!("edit:{edit}|photo:{photo}|{size}|{mtime}")))
+                Ok((
+                    path,
+                    format!("edit:{edit}|photo:{photo}|{size}|{mtime}|q:{quality:?}"),
+                ))
             },
         )
         .optional()?)
@@ -331,8 +334,8 @@ fn freshness(catalog: &Catalog, id: i64) -> Result<Option<(String, String)>> {
 impl Catalog {
     /// The stored thumbnail JPEG while it is fresh (made at [`THUMB_EDGE`] for the photo's
     /// current edits and file; see the module docs), else `None`.
-    pub fn fresh_thumbnail(&self, photo_id: i64) -> Result<Option<Vec<u8>>> {
-        let Some((_, key)) = freshness(self, photo_id)? else {
+    pub fn fresh_thumbnail(&self, photo_id: i64, quality: Quality) -> Result<Option<Vec<u8>>> {
+        let Some((_, key)) = freshness(self, photo_id, quality)? else {
             return Ok(None);
         };
         Ok(self
@@ -356,7 +359,7 @@ fn make(
 ) -> std::result::Result<Option<RgbaImage>, Failure> {
     let file_err = |x: &dyn std::fmt::Display| Failure::File(x.to_string());
     let cancelled = || shared.cancel.load(AtomicOrdering::SeqCst);
-    let Some((file, made_for)) = freshness(catalog, id).map_err(|x| file_err(&x))? else {
+    let Some((file, made_for)) = freshness(catalog, id, quality).map_err(|x| file_err(&x))? else {
         return Ok(None);
     };
     let settings = catalog
@@ -401,9 +404,8 @@ fn make(
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 85)
         .encode_image(&rgb)
         .map_err(|x| file_err(&x))?;
-    // The photo is fine now: clear an earlier error, unless its sidecar is still damaged
-    // (import reports that in the same column, and it stays until the sidecar is fixed).
-    let sidecar_ok = sidecar::read(&sidecar::path_for(Path::new(&file))).is_ok();
+    // The photo is fine now: clear an earlier error. A damaged sidecar is reported apart, in
+    // `sidecar_error`, which only import and reconcile write.
     let tx = catalog.write_tx().map_err(|x| file_err(&x))?;
     tx.execute(
         "INSERT OR REPLACE INTO thumbnails (photo_id, edge, jpeg, made_for_updated_at)
@@ -411,13 +413,11 @@ fn make(
         rusqlite::params![id, THUMB_EDGE, jpeg, made_for],
     )
     .map_err(|x| file_err(&x))?;
-    if sidecar_ok {
-        tx.execute(
-            "UPDATE photos SET error = NULL WHERE id = ?1 AND error IS NOT NULL",
-            [id],
-        )
-        .map_err(|x| file_err(&x))?;
-    }
+    tx.execute(
+        "UPDATE photos SET error = NULL WHERE id = ?1 AND error IS NOT NULL",
+        [id],
+    )
+    .map_err(|x| file_err(&x))?;
     tx.commit().map_err(|x| file_err(&x))?;
     Ok(Some(img))
 }

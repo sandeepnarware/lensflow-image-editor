@@ -28,7 +28,7 @@ fn spec(format: Format, dest: &Path) -> ExportSpec {
 fn catalogue(dir: &Path) -> (Catalog, Vec<i64>) {
     let c = Catalog::open(dir).unwrap();
     let f = c.add_folder("f").unwrap();
-    import::run(&c, f, &import::scan(dir), 200, &mut |_| Ok(())).unwrap();
+    import::run(&c, f, &import::scan(dir).candidates, 200, &mut |_| Ok(())).unwrap();
     let ids = c.photo_ids().unwrap();
     (c, ids)
 }

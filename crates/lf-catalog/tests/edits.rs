@@ -312,3 +312,25 @@ fn use_version_of_an_unknown_id_is_not_found() {
     let (_d, c, id) = setup();
     assert!(versions::use_version(&c, id, "nope").is_err());
 }
+
+#[test]
+fn an_adopted_stamp_is_truncated_to_milliseconds_and_the_sidecar_rewritten() {
+    let (_d, c, id) = setup();
+    let mut sc = edits::set_settings(&c, id, &with_exposure(0.1)).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    // Another tool wrote a finer stamp than the catalogue keeps.
+    let base = lf_catalog::model::now() - Duration::milliseconds(10);
+    sc.settings = with_exposure(0.3);
+    sc.updated_at = base + Duration::microseconds(456);
+    let r = edits::reconcile(&c, id, Some(&sc)).unwrap();
+    assert_eq!(r.source, Source::Sidecar);
+    assert_eq!(exposure(&c, id), 0.3);
+    let out = r
+        .sidecar_to_write
+        .expect("rewritten with the stored (millisecond) stamp");
+    assert_eq!(out.updated_at, base);
+    // Next reopen: the rewritten sidecar matches, so it does not win again.
+    let again = edits::reconcile(&c, id, Some(&out)).unwrap();
+    assert_eq!(again.source, Source::Db);
+    assert!(again.sidecar_to_write.is_none());
+}

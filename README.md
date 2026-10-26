@@ -122,10 +122,10 @@ dir, `<temp dir>/lensflow-ImageEditor` (never the current directory). The entitl
 
 `Catalog::open(root)` creates `<catalogue root>/.lensflow/catalog.sqlite` in
 WAL mode (bundled SQLite) and migrates it under a write lock; the schema
-version is 4 (four migrations). A catalogue with a higher version was made by a
+version is 5 (five migrations). A catalogue with a higher version was made by a
 newer app and is refused (`CatalogError::NewerSchema`, "This catalogue was made
 by a newer lensflow-ImageEditor."), never downgraded. Tables: folders, photos
-(with `error` and `missing`), edits, history and history_cursor, versions,
+(with `error`, `sidecar_error` and `missing`), edits, history and history_cursor, versions,
 thumbnails, presets, export_jobs and sidecar_meta. Each thumbnail worker opens
 its own connection.
 
@@ -140,10 +140,12 @@ Conflict rule on reopen and on import (`edits::reconcile`): the newer
 `updated_at` wins. A sidecar must be strictly newer to replace the catalogue;
 adopting it takes its settings and versions and restarts the undo history from
 that state, and a stamp in the future is adopted as now (the sidecar is then
-rewritten with it). Otherwise the catalogue wins, and the sidecar is rewritten
+rewritten with it); a stamp finer than milliseconds is adopted truncated to the
+stored milliseconds and the sidecar rewritten, so it cannot win every reopen.
+Otherwise the catalogue wins, and the sidecar is rewritten
 only when the catalogue is strictly newer or the content (`v`, settings,
 versions) differs: an equal sidecar is left alone, so reopening does not touch
-every file.
+every file. A sidecar read successfully (or absent) clears `photos.sidecar_error`.
 
 Import. `import::scan` lists supported files under a folder (RAW and
 JPEG/PNG/TIFF/WebP by extension; hidden entries, `.lensflow` and sidecars are
@@ -155,9 +157,12 @@ is caught and recorded as "the decoder crashed on this file". For every new or
 changed file the sidecar beside it is read and reconciled in the batch's
 transaction, so edits, versions and unknown keys made elsewhere are adopted
 before anything can overwrite them; a sidecar that cannot be read is reported
-in `photos.error` and left untouched. `import::mark_missing(catalog, folder,
+in `photos.sidecar_error` (apart from the file's own `photos.error`) and left
+untouched. `import::scan` also reports whether the folder itself could be read
+(`Scan::root_readable`). `import::mark_missing(catalog, folder,
 &scan)` flags rows whose file is gone (`photos.missing`); `run` clears the
-flag when the file is seen again. The progress callback can stop the import
+flag when the file is seen again; a scan that could not read the folder, or
+found no files at all (an unplugged drive), marks nothing. The progress callback can stop the import
 after the batch it reports.
 
 Thumbnails. `Thumbnailer` runs a small worker pool (default `min(2, cores)`)
@@ -165,13 +170,14 @@ over a priority queue (`High` for what is on screen, `Normal` otherwise),
 renders 256 px thumbnails through the shared GPU, and stores JPEGs in the
 catalogue. A stored thumbnail is served without decoding while it is fresh
 (`Catalog::fresh_thumbnail`): its key is the edit stamp (`edits.updated_at`, or
-none), the photo row's `updated_at`, size and mtime, so an edit or a changed
-file makes it stale. `take_ready` returns finished ones; `take_failed` returns
+none), the photo row's `updated_at`, size, mtime and the demosaic quality, so
+an edit, a changed file or a thumbnailer at another quality makes it stale.
+`take_ready` returns finished ones; `take_failed` returns
 `(photo id, reason)` for photos that could not be made (the reason is also
 stored in `photos.error` and logged; id 0 means a worker could not open the
 catalogue). A graphics device error is not the photo's fault: nothing is
 stored, `take_device_error` reports it once and the workers stop. A successful
-thumbnail clears `photos.error` (unless the sidecar is damaged).
+thumbnail clears `photos.error` (never `sidecar_error`).
 `cancel_pending` forgets queued requests; dropping the `Thumbnailer` cancels
 work in progress between stages. The demosaic `Quality` is a constructor
 parameter. Memory: each in-flight open of a 60 MP RAW can use about 1 GB at
