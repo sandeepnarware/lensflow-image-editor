@@ -189,8 +189,8 @@ impl Session {
         }
     }
 
-    /// A call answered 401: back to sign-in with [`SIGNED_OUT_MESSAGE`]. The caller clears
-    /// the stored token and the cached entitlement (`account::Credentials::forget`).
+    /// A call answered 401: back to sign-in with [`SIGNED_OUT_MESSAGE`]. The account lane
+    /// clears the stored token and the cached entitlement (`account::forget`).
     pub fn on_unauthorized(self) -> Session {
         let email = match self {
             Session::SigningIn { email, .. } => email,
@@ -465,23 +465,47 @@ mod tests {
         assert!(Session::on_studio_chosen(&allowed()).is_none());
     }
 
+    fn mock_client(server: &httpmock::MockServer) -> lf_account::Client {
+        let url = reqwest::Url::parse(&server.url("/api")).unwrap();
+        lf_account::Client::new(Instance::custom(url).unwrap(), CURRENT)
+            .with_token("secret-token")
+            .with_studio("frames")
+    }
+
+    fn stored(dir: &std::path::Path) -> Credentials {
+        let creds = Credentials::in_dir(&Instance::Dev, dir);
+        creds.save_token("secret-token");
+        Cache::new(dir).save(&Entitlement::example(Standing::Active, true));
+        assert_eq!(creds.token().as_deref(), Some("secret-token"));
+        creds
+    }
+
     #[test]
     fn sign_in_decision_clears_token() {
         let dir = tempfile::tempdir().unwrap();
-        let instance = Instance::Dev;
-        let creds = Credentials::in_dir(&instance, dir.path());
-        creds.save_token("secret-token");
-        Cache::new(dir.path()).save(&Entitlement::example(Standing::Active, true));
-        assert_eq!(creds.token().as_deref(), Some("secret-token"));
+        let creds = stored(dir.path());
+        let server = httpmock::MockServer::start();
+        server.mock(|when, then| {
+            when.path("/api/desktop/entitlement");
+            then.status(401)
+                .json_body(json!({"message": "Unauthenticated."}));
+        });
+
+        // The account lane's gate job forgets the credentials before it answers.
+        let decision = match crate::account::gate(5, &mock_client(&server), &creds, 1) {
+            crate::jobs::Msg::Gate(5, decision) => decision,
+            other => panic!("expected Gate(5, ..), got {other:?}"),
+        };
+        assert!(matches!(decision, Decision::SignIn));
+        assert_eq!(creds.token(), None, "the token is cleared");
+        assert!(
+            Cache::new(dir.path()).load().is_none(),
+            "the cache is cleared"
+        );
 
         let s = allowed();
-        let next = creds.settle(
-            active_session(),
-            Decision::SignIn,
-            &user(std::slice::from_ref(&s)),
-            &s,
-            CURRENT,
-        );
+        let next =
+            active_session().on_decision(decision, &user(std::slice::from_ref(&s)), &s, CURRENT);
         match next {
             Session::SigningIn {
                 password,
@@ -495,11 +519,6 @@ mod tests {
             }
             other => panic!("expected SigningIn, got {other:?}"),
         }
-        assert_eq!(creds.token(), None, "the token is cleared");
-        assert!(
-            Cache::new(dir.path()).load().is_none(),
-            "the cache is cleared"
-        );
     }
 
     #[test]
@@ -564,24 +583,46 @@ mod tests {
 
     #[test]
     fn unauthorized_mid_session_returns_to_sign_in_with_message() {
-        let dir = tempfile::tempdir().unwrap();
-        let creds = Credentials::in_dir(&Instance::Dev, dir.path());
-        creds.save_token("secret-token");
-        Cache::new(dir.path()).save(&Entitlement::example(Standing::Active, true));
-
-        // Not a 401: nothing changes.
-        let network = lf_account::AccountError::Network("down".into());
-        let mut session = active_session();
-        assert!(!creds.signed_out_by(&mut session, &network));
-        assert!(matches!(session, Session::Active { .. }));
-        assert_eq!(creds.token().as_deref(), Some("secret-token"));
-
-        let mut next = active_session();
-        assert!(creds.signed_out_by(&mut next, &lf_account::AccountError::Unauthorized));
+        let next = active_session().on_unauthorized();
         assert!(matches!(
             &next,
             Session::SigningIn { error: Some(m), two_factor: false, busy: false, .. }
                 if m == "You were signed out. Sign in again to continue."
+        ));
+
+        // A server hiccup on `auth/me` keeps the credentials ...
+        let dir = tempfile::tempdir().unwrap();
+        let creds = stored(dir.path());
+        let server = httpmock::MockServer::start();
+        let mut hiccup = server.mock(|when, then| {
+            when.path("/api/auth/me");
+            then.status(503);
+        });
+        let msg = crate::account::me(2, &mock_client(&server), &creds);
+        assert!(matches!(msg, crate::jobs::Msg::Me(2, Err(_))));
+        assert_eq!(creds.token().as_deref(), Some("secret-token"));
+        assert!(Cache::new(dir.path()).load().is_some());
+
+        // ... a 401 forgets both on the account lane.
+        hiccup.delete();
+        server.mock(|when, then| {
+            when.path("/api/auth/me");
+            then.status(401)
+                .json_body(json!({"message": "Unauthenticated."}));
+        });
+        let msg = crate::account::me(2, &mock_client(&server), &creds);
+        assert!(matches!(
+            msg,
+            crate::jobs::Msg::Me(2, Err(lf_account::AccountError::Unauthorized))
+        ));
+        assert_eq!(creds.token(), None);
+        assert!(Cache::new(dir.path()).load().is_none());
+
+        // The app's own forget job (a 401 from any other call) does the same.
+        let creds = stored(dir.path());
+        assert!(matches!(
+            crate::account::forget(&creds),
+            crate::jobs::Msg::Cleared
         ));
         assert_eq!(creds.token(), None);
         assert!(Cache::new(dir.path()).load().is_none());

@@ -148,16 +148,42 @@ fn fetch(
     Ok(hex::encode(hasher.finalize()))
 }
 
+/// The Windows command for an installer: an `.msi` through `msiexec /i`, anything else
+/// run directly. No `cmd.exe` is involved, so `&`, `^` or `%` in a profile path mean
+/// nothing special.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_installer_command(path: &Path) -> std::process::Command {
+    let msi = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("msi"));
+    if msi {
+        let mut command = std::process::Command::new("msiexec");
+        command.arg("/i").arg(path);
+        command
+    } else {
+        std::process::Command::new(path)
+    }
+}
+
+/// Windows refuses to start an installer that asks for administrator rights from a plain
+/// `CreateProcess` (ERROR_ELEVATION_REQUIRED).
+#[cfg(target_os = "windows")]
+const ERROR_ELEVATION_REQUIRED: i32 = 740;
+
 /// Opens the downloaded installer with the system (an AppImage is made executable and
 /// started directly).
 pub fn launch(path: &Path) -> std::io::Result<()> {
     use std::process::Command;
     log::info!("starting the installer {}", path.display());
     #[cfg(target_os = "windows")]
-    Command::new("cmd")
-        .args(["/C", "start", ""])
-        .arg(path)
-        .spawn()?;
+    match windows_installer_command(path).spawn() {
+        Ok(_) => {}
+        // Explorer opens it through the shell, which shows the elevation prompt.
+        Err(e) if e.raw_os_error() == Some(ERROR_ELEVATION_REQUIRED) => {
+            Command::new("explorer.exe").arg(path).spawn()?;
+        }
+        Err(e) => return Err(e),
+    }
     #[cfg(target_os = "macos")]
     Command::new("open").arg(path).spawn()?;
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -251,6 +277,20 @@ mod tests {
         assert_eq!(files_in(dir.path()).len(), 1, "no .part file is left");
         let n = BYTES.len() as u64;
         assert_eq!(last, Some((n, n)));
+    }
+
+    #[test]
+    fn windows_launch_never_goes_through_cmd() {
+        let exe = Path::new(r"C:\Users\R&D ^50%\AppData\lensflow-ImageEditor-setup.exe");
+        let command = windows_installer_command(exe);
+        assert_eq!(command.get_program(), exe.as_os_str());
+        assert_eq!(command.get_args().count(), 0);
+
+        let msi = Path::new(r"C:\Users\R&D\lensflow-ImageEditor.MSI");
+        let command = windows_installer_command(msi);
+        assert_eq!(command.get_program(), "msiexec");
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, [std::ffi::OsStr::new("/i"), msi.as_os_str()]);
     }
 
     #[test]

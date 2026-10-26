@@ -108,6 +108,8 @@ A studio from sign-in can use the desktop editor when its member has
   back), or missing: locked with "Connect to the internet to keep using
   lensflow-ImageEditor." A definite answer (401, a lock, studio not found)
   clears the cache, so an older active entitlement is never replayed.
+  `Gate::evaluate`/`refresh` take the studio id asked about; a cached
+  entitlement for another studio counts as missing.
 
 Where things live. The sign-in token goes in the OS keychain (service
 `lensflow-ImageEditor`, account = the API base URL). With no usable keychain it
