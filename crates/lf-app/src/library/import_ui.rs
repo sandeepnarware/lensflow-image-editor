@@ -31,6 +31,8 @@ pub enum Purpose {
     Root,
     /// A folder of photos to add.
     AddFolder,
+    /// The export dialog's destination (checked writable too); its own tickets.
+    ExportTo,
 }
 
 /// A folder that exists and can be read.
@@ -110,7 +112,7 @@ pub fn emptied_question(photos: usize) -> String {
 
 /// Runs `choose` on its own thread and sends what it returns as the answer to `ticket`.
 /// A panic answers with an error instead of leaving the chooser waiting.
-fn on_own_thread(
+pub(crate) fn on_own_thread(
     reporter: Reporter,
     purpose: Purpose,
     ticket: u64,
@@ -186,6 +188,7 @@ impl Library {
         let title = match purpose {
             Purpose::Root => "Choose a folder for your catalogue",
             Purpose::AddFolder => "Add a folder of photos",
+            Purpose::ExportTo => "Export to this folder",
         };
         on_own_thread(env.jobs.reporter(), purpose, ticket, move || {
             let picked = rfd::FileDialog::new().set_title(title).pick_folder();
@@ -220,6 +223,12 @@ impl Library {
         result: Result<Option<Chosen>, String>,
         env: &mut Env,
     ) {
+        if purpose == Purpose::ExportTo {
+            if let Some(dialog) = &mut self.export {
+                dialog.folder_chosen(ticket, result.map(|c| c.map(|c| c.path)));
+            }
+            return;
+        }
         if self.chooser.picker == Some(ticket) {
             self.chooser.picker = None;
         }
@@ -239,6 +248,7 @@ impl Library {
         match purpose {
             Purpose::Root if chosen.network => self.stage = Stage::NetworkWarning(chosen.path),
             Purpose::Root => self.use_root(chosen.path, env),
+            Purpose::ExportTo => {}
             Purpose::AddFolder => {
                 if self.adding {
                     self.adding = false;

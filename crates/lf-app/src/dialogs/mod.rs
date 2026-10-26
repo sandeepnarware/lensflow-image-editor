@@ -2,6 +2,7 @@
 //! preset, and applying edits to many photos.
 
 pub mod batch;
+pub mod export;
 pub mod group_picker;
 pub mod save_preset;
 

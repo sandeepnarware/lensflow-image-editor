@@ -6,6 +6,7 @@ use crate::catalog_ext::{Imported, Opened, Pool};
 use crate::develop::open::OpenedPhoto;
 use crate::device_reset;
 use crate::dialogs::batch::BatchProgress;
+use crate::export_job::ExportOutcome;
 use crate::library::import_ui::{Chosen, Purpose};
 use crate::presets_sync::{SyncError, SyncReport};
 use crate::update::DownloadProgress;
@@ -133,6 +134,11 @@ pub enum Msg {
     PresetsSynced(Generation, Result<SyncReport, SyncError>),
     /// "Apply to N photos" moved on (or ended: `finished`).
     BatchProgress(BatchProgress),
+    /// An export to disk moved on: `done` photos handled of `total`.
+    ExportProgress { done: usize, total: usize },
+    /// An export to disk ended (finished or stopped), or why it was refused (the sentence to
+    /// show).
+    ExportDone(Result<ExportOutcome, String>),
 
     #[cfg(test)]
     Probe(&'static str),
@@ -497,7 +503,9 @@ pub(crate) mod owners {
             | Msg::Opened { .. }
             | Msg::Preopened { .. }
             | Msg::SidecarWritten(..)
-            | Msg::BatchProgress(..) => Owner::Library,
+            | Msg::BatchProgress(..)
+            | Msg::ExportProgress { .. }
+            | Msg::ExportDone(..) => Owner::Library,
             Msg::DeviceReset(..) => Owner::App,
             Msg::Probe(..) => Owner::Test,
         }
@@ -572,6 +580,8 @@ pub(crate) mod owners {
                 failed: Vec::new(),
                 finished: true,
             }),
+            Msg::ExportProgress { done: 1, total: 2 },
+            Msg::ExportDone(Err("no".into())),
             Msg::DeviceReset(device_reset::Choice::Quit),
             Msg::Probe("probe"),
         ]

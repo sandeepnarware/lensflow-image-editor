@@ -8,6 +8,7 @@ pub mod clipboard;
 pub mod develop;
 pub mod device_reset;
 pub mod dialogs;
+pub mod export_job;
 pub mod gpu;
 pub mod jobs;
 pub mod library;

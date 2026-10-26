@@ -30,4 +30,6 @@ kamadak-exif.workspace = true
 lf-pipeline = { path = "../lf-pipeline", features = ["test-support"] }
 filetime = "0.2"
 tempfile = "3"
+# Destroying a device (the device-lost export test).
+wgpu = "30.0.1"
 chrono.workspace = true
