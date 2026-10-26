@@ -318,6 +318,37 @@ impl Library {
         }
     }
 
+    /// What to ask before the window closes: an export or "Apply to N photos" is running.
+    pub fn quit_question(&self) -> Option<&'static str> {
+        if self.export.as_ref().is_some_and(ExportDialog::running) {
+            Some(crate::dialogs::quit::EXPORT_RUNNING)
+        } else if self.batch.as_ref().is_some_and(BatchDialog::running) {
+            Some(crate::dialogs::quit::BATCH_RUNNING)
+        } else {
+            None
+        }
+    }
+
+    /// The app is quitting: a running import stops after its batch, a match at its next
+    /// step, and an export or "Apply to N photos" after the current photo.
+    pub fn stop_long_work(&self) {
+        self.stop_import();
+        if let Some(export) = &self.export {
+            export.stop.store(true, Ordering::SeqCst);
+        }
+        if let Some(batch) = &self.batch {
+            batch.stop.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// The folder a running export writes to (its unfinished files are removed on quit).
+    pub fn running_export_folder(&self) -> Option<PathBuf> {
+        self.export
+            .as_ref()
+            .filter(|d| d.running())
+            .and_then(|d| d.form.folder.clone())
+    }
+
     /// The flag [`Library::stop_import`] sets (for the device-reset dialog's thread).
     pub fn import_stop_flag(&self) -> Arc<AtomicBool> {
         self.stop_import.clone()

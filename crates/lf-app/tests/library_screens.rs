@@ -1364,6 +1364,57 @@ fn winding_down_for_another_catalogue_commits_stops_then_writes() {
     );
 }
 
+/// Closing the window while an export runs asks first; quitting stops it after the current
+/// photo (here, before the first: the export was still waiting for the lane).
+#[test]
+fn quitting_during_an_export_asks_and_stops_it() {
+    use lf_app::dialogs::{export, quit};
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 2);
+    import_folder(&mut h, &shoot, 2);
+    let out = dir.path().join("out");
+    std::fs::create_dir(&out).unwrap();
+    assert_eq!(h.state().lib.quit_question(), None);
+
+    // Hold the Long lane so the export cannot start yet.
+    let (release, held) = mpsc::channel::<()>();
+    h.state().jobs.spawn(Lane::Long, "hold", move || {
+        let _ = held.recv();
+        Msg::Cleared
+    });
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::A);
+    h.step();
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::E);
+    h.step();
+    h.step();
+    h.state_mut()
+        .lib
+        .export_mut()
+        .unwrap()
+        .set_typed(&out.to_string_lossy());
+    h.step();
+    h.get_by_role_and_label(Role::Button, export::USE_FOLDER)
+        .click();
+    step_until(&mut h, "the typed folder", |s| {
+        s.lib.export_folder().as_deref() == Some(out.as_path())
+    });
+    h.get_by_role_and_label(Role::Button, export::EXPORT)
+        .click();
+    h.step();
+    assert_eq!(h.state().lib.quit_question(), Some(quit::EXPORT_RUNNING));
+    assert_eq!(h.state().lib.running_export_folder(), Some(out.clone()));
+
+    h.state().lib.stop_long_work();
+    release.send(()).unwrap();
+    step_until_label(&mut h, "Stopped after 0 photos.");
+    assert!(!out.join("p0.jpg").exists(), "nothing was exported");
+    assert_eq!(h.state().lib.quit_question(), None);
+}
+
 #[test]
 fn an_edit_in_develop_remakes_the_thumbnail_and_marks_the_photo_edited() {
     let dir = tempfile::tempdir().unwrap();

@@ -8,8 +8,8 @@
 //! own actions, and the app does the rest (Quit, Preferences, the Account and Help menus).
 
 use crate::dialogs::preferences::{self, PrefsAction, PrefsView};
-use crate::dialogs::{about, keys};
-use crate::jobs::{Jobs, Msg};
+use crate::dialogs::{about, keys, quit};
+use crate::jobs::{Jobs, Lane, Msg};
 use crate::library::{self, Library};
 use crate::menu::{self, Item, MENUS, MenuState};
 use crate::prefs::{Dirs, Prefs};
@@ -89,6 +89,10 @@ pub struct App {
     dialog: Option<Dialog>,
     /// The keyboard map's reader before a studio is open (the library has its own).
     keys: Keys,
+    /// Asking before closing while an export or a batch runs (the question shown).
+    quit_question: Option<&'static str>,
+    /// The user chose Quit anyway: the next close goes through.
+    quit_confirmed: bool,
 }
 
 impl App {
@@ -134,6 +138,8 @@ impl App {
             dirs,
             dialog: None,
             keys: Keys::default(),
+            quit_question: None,
+            quit_confirmed: false,
         };
         app.flow.resume(&app.jobs);
         app
@@ -343,6 +349,40 @@ impl App {
         }
     }
 
+    /// The window was asked to close while an export or a batch runs: ask first (a restart
+    /// after a device reset never asks).
+    fn check_close(&mut self, ctx: &egui::Context) {
+        let asked = ctx.input(|i| i.viewport().close_requested());
+        let resetting = self.exit.answered.load(std::sync::atomic::Ordering::SeqCst);
+        if !asked || self.quit_confirmed || resetting {
+            return;
+        }
+        if let Some(question) = self.library.as_ref().and_then(Library::quit_question) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.quit_question = Some(question);
+        }
+    }
+
+    /// The question asked by [`App::check_close`]: Quit stops the export or batch after the
+    /// current photo and closes; Keep working leaves everything running.
+    fn quit_dialog(&mut self, ctx: &egui::Context) {
+        let Some(question) = self.quit_question else {
+            return;
+        };
+        match quit::show(ctx, question) {
+            None => {}
+            Some(false) => self.quit_question = None,
+            Some(true) => {
+                self.quit_question = None;
+                self.quit_confirmed = true;
+                if let Some(lib) = &self.library {
+                    lib.stop_long_work();
+                }
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
     /// The signed-in screen until the library arrives.
     fn signed_in_placeholder(&self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
@@ -414,6 +454,7 @@ impl eframe::App for App {
         for msg in self.jobs.drain() {
             self.handle(msg);
         }
+        self.check_close(ctx);
         self.flow.tick(Instant::now(), &self.jobs);
         self.shortcuts(ctx);
         if let Some(lib) = &mut self.library {
@@ -501,20 +542,30 @@ impl eframe::App for App {
                 }
                 self.session_ui(ui);
                 self.dialogs(ui.ctx());
+                self.quit_dialog(ui.ctx());
             }
         }
         self.toasts.show(ui.ctx());
     }
 
     /// Review Focus 4: a gesture in progress is committed, a running import stops after its
-    /// batch (each batch commits), the lanes finish their running jobs, then the waiting
-    /// sidecars are written here, synchronously. A restart asked for starts last.
+    /// batch (each batch commits), an export or a batch after the current photo, the lanes
+    /// finish their running jobs, then the waiting sidecars are written here, synchronously.
+    /// An export still writing at the deadline has its unfinished files removed. A restart
+    /// asked for starts last.
     fn on_exit(&mut self) {
+        let mut exporting_to = None;
         if let Some(lib) = &mut self.library {
             lib.finish_edits(&mut self.toasts);
-            lib.stop_import();
+            lib.stop_long_work();
+            exporting_to = lib.running_export_folder();
         }
-        self.jobs.shutdown(Duration::from_secs(10));
+        let abandoned = self.jobs.shutdown(Duration::from_secs(10));
+        if let Some(folder) = exporting_to
+            && abandoned.contains(&Lane::Long)
+        {
+            crate::export_job::remove_unfinished(&folder);
+        }
         if let Some(lib) = &self.library
             && let Err(e) = lib.sidecar_saver().flush()
         {
