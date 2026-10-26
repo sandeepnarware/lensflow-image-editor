@@ -127,11 +127,12 @@ Where things live. The sign-in token goes in the OS keychain (service
 "lensflow", "lensflow-ImageEditor")`), with a logged warning; on a system with
 no config dir, `<temp dir>/lensflow-ImageEditor` (never the current directory).
 The file is encrypted (ChaCha20-Poly1305) with a key bound to this machine and
-user account: HKDF-SHA256 over the machine id, the user id and the user name,
-with a random salt kept next to it in `token-salt` (0600) and the base URL mixed
-in. That protects a copied file and casual reading. It does not protect against
-software running as the same user, which can derive the same key; the OS
-keychain cannot fully prevent that either. A file that cannot be read on this
+user account: HKDF-SHA256 over the machine id and the user id (plus the user
+name on Windows), with a random salt kept next to it in `token-salt` (0600) and
+the base URL mixed in. That protects the token file copied on its own, or the
+config folder copied without the machine's identity, and casual reading. A full
+copy of the disk can be read, as can software running as the same user; the OS
+keychain cannot fully prevent the latter either. A file that cannot be read on this
 machine is deleted and you sign in again. A plaintext token file from an older
 build is read once and re-saved encrypted. The entitlement cache is
 `entitlement.json`, written atomically in a folder the app chooses

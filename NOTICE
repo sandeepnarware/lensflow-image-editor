@@ -545,7 +545,8 @@ unmodified as a normal Cargo dependency, so you can replace it with your own bui
 The reqwest HTTP client uses rustls (no OpenSSL); the keyring crate talks to the Windows
 Credential Manager, the macOS Keychain and the Linux Secret Service.
 With no keychain, the token file is encrypted with the RustCrypto chacha20poly1305 and hkdf
-crates (MIT OR Apache-2.0), with random bytes from getrandom (MIT OR Apache-2.0). httpmock, tempfile and
+crates (MIT OR Apache-2.0), with random bytes from getrandom (MIT OR Apache-2.0); key
+material is wiped after use with zeroize (Apache-2.0 OR MIT). httpmock, tempfile and
 filetime are development-only and are not shipped.
 SQLite (bundled statically by libsqlite3-sys) is in the public domain.
 epaint_default_fonts bundles unmodified fonts: Hack (MIT), Noto Emoji (SIL Open Font

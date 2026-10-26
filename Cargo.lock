@@ -823,6 +823,7 @@ dependencies = [
  "cipher",
  "cpufeatures 0.3.1",
  "rand_core",
+ "zeroize",
 ]
 
 [[package]]
@@ -835,6 +836,7 @@ dependencies = [
  "chacha20",
  "cipher",
  "poly1305",
+ "zeroize",
 ]
 
 [[package]]
@@ -2845,6 +2847,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "url",
+ "zeroize",
 ]
 
 [[package]]

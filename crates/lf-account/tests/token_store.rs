@@ -1,5 +1,16 @@
 use lf_account::TokenStore;
 
+/// The keychain round trips and the salt race do not run at the same time: on Windows, a
+/// Credential Manager read right after a write was seen to miss (NoEntry) now and then while
+/// the race test hammered the disk. This keeps those tests about what they test.
+static KEYCHAIN_OR_RACE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn exclusive() -> std::sync::MutexGuard<'static, ()> {
+    KEYCHAIN_OR_RACE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[test]
 fn file_fallback_round_trip() {
     let dir = tempfile::tempdir().unwrap();
@@ -31,6 +42,7 @@ fn file_fallback_round_trip() {
 
 #[test]
 fn keyring_round_trip_when_the_backend_exists() {
+    let _serial = exclusive();
     let dir = tempfile::tempdir().unwrap();
     let url = format!("https://keyring-test-{}.test/api", std::process::id());
     let store = TokenStore::open_in(&url, dir.path(), true);
@@ -63,6 +75,7 @@ fn a_file_token_is_found_when_the_keyring_is_enabled_but_empty() {
 
 #[test]
 fn keyring_probe_does_not_destroy_a_stored_token() {
+    let _serial = exclusive();
     let dir = tempfile::tempdir().unwrap();
     let url = format!("https://probe-test-{}.test/api", std::process::id());
     let store = TokenStore::open_in(&url, dir.path(), true);
@@ -295,4 +308,77 @@ fn token_and_salt_files_are_0600() {
             "{p:?}"
         );
     }
+}
+
+#[test]
+fn stores_racing_to_create_the_salt_can_all_read_their_tokens() {
+    let _serial = exclusive();
+    for round in 0..30 {
+        let dir = tempfile::tempdir().unwrap();
+        let n = 8;
+        let barrier = Arc::new(std::sync::Barrier::new(n));
+        let handles: Vec<_> = (0..n)
+            .map(|i| {
+                let dir = dir.path().to_path_buf();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let url = format!("https://race-{i}.test/api");
+                    let store = store_on("machine-a", &url, &dir);
+                    barrier.wait();
+                    store.save(&format!("token-{i}"));
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        for i in 0..n {
+            let url = format!("https://race-{i}.test/api");
+            let store = store_on("machine-a", &url, dir.path());
+            assert_eq!(
+                store.load().as_deref(),
+                Some(format!("token-{i}").as_str()),
+                "round {round}, store {i}"
+            );
+        }
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
+    }
+}
+
+#[test]
+fn an_oversized_token_is_not_returned() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store_on("machine-a", "https://big.test/api", dir.path());
+    store.save(&"a".repeat(9000));
+    assert_eq!(store.load(), None);
+    assert!(
+        token_files(dir.path()).is_empty(),
+        "the unreadable file is removed"
+    );
+}
+
+#[test]
+fn a_decrypted_token_with_odd_characters_is_not_returned() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store_on("machine-a", "https://odd.test/api", dir.path());
+    store.save("two words\u{7}");
+    assert_eq!(store.load(), None);
+}
+
+#[test]
+fn a_huge_token_file_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store_on("machine-a", "https://huge.test/api", dir.path());
+    store.save("x");
+    let file = only_token_file(dir.path());
+    let mut bytes = b"LFT1".to_vec();
+    bytes.resize(4 << 20, b'z');
+    std::fs::write(&file, &bytes).unwrap();
+    assert_eq!(store.load(), None);
+    assert!(!file.exists());
 }
