@@ -159,6 +159,11 @@ impl Develop {
         self.session.saver()
     }
 
+    /// The tone curve point `Delete` would remove.
+    pub fn curve_selected(&self) -> Option<usize> {
+        self.panels.curve.selected()
+    }
+
     /// The open photo's edit state.
     pub fn edit_state(&self) -> Option<&EditState> {
         self.session.edit()
@@ -224,6 +229,8 @@ impl Develop {
             .run(op, self.photo_path.as_deref(), damaged, toasts);
         if op != EditOp::Commit {
             self.settings_changed();
+            // The points changed under the curve editor's selection.
+            self.panels.curve.clear_selection();
         }
         if committed {
             self.check_develop_change();
@@ -242,8 +249,15 @@ impl Develop {
     }
 
     /// Puts due sidecar writes on the `Io` lane and wakes the UI when the next falls due.
-    pub fn tick(&mut self, ctx: &egui::Context, jobs: &Jobs) {
+    /// Retries a commit the catalogue refused as busy.
+    pub fn tick(&mut self, ctx: &egui::Context, jobs: &Jobs, toasts: &mut Toasts) {
         let now = Instant::now();
+        if self.session.retry_due(now) {
+            self.commit(toasts);
+        }
+        if let Some(at) = self.session.retry_at() {
+            ctx.request_repaint_after(at.saturating_duration_since(now));
+        }
         if let Some(due) = self.session.pump(now, jobs) {
             ctx.request_repaint_after(due.saturating_duration_since(now));
         }
@@ -319,6 +333,7 @@ impl Develop {
         if !reopening {
             self.finish_edit(toasts);
             self.session.clear();
+            self.panels.curve.clear_selection();
             self.state = State::Opening(photo.id);
             self.preview = None;
             self.histogram = None;
@@ -375,6 +390,7 @@ impl Develop {
     pub fn close(&mut self, toasts: &mut Toasts) {
         self.finish_edit(toasts);
         self.session.clear();
+        self.panels.curve.clear_selection();
         self.reopen = false;
         self.latest.fetch_add(1, Ordering::SeqCst);
         self.preview = None;
@@ -406,6 +422,7 @@ impl Develop {
                     && self.session.edit().is_some_and(|e| e.photo_id == photo_id);
                 if !reopened {
                     self.session.start(photo_id, photo.settings.clone());
+                    self.panels.curve.clear_selection();
                     self.viewport = Viewport::default();
                     self.histogram = None;
                     if photo.sidecar_error.is_some() {
@@ -414,6 +431,11 @@ impl Develop {
                     }
                 }
                 self.state = State::Ready(photo, photo_id);
+                if reopened {
+                    // The settings may have changed again while it decoded (Linear, then
+                    // Camera before the answer): a decode that no longer matches reopens.
+                    self.check_develop_change();
+                }
                 self.last_drawn = None;
                 self.last_histogram = None;
                 self.settings_changed();

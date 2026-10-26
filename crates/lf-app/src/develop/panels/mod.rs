@@ -124,9 +124,14 @@ fn section(
     let state =
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, open);
     let mut reset = false;
-    let (_, _, _) = state
-        .show_header(ui, |ui| {
-            ui.label(RichText::new(label).strong().color(theme::INK));
+    let mut toggle = false;
+    let mut header = state.show_header(ui, |ui| {
+        // The whole label folds and unfolds the section, as the web's header button does.
+        let title = egui::Button::new(RichText::new(label).strong().color(theme::INK)).frame(false);
+        if ui.add(title).clicked() {
+            toggle = true;
+        }
+        {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let link = egui::Button::new(RichText::new("Reset").small().color(theme::MUTED))
                     .frame(false);
@@ -139,8 +144,12 @@ fn section(
                     reset = true;
                 }
             });
-        })
-        .body(body);
+        }
+    });
+    if toggle {
+        header.toggle();
+    }
+    let (_, _, _) = header.body(body);
     ui.separator();
     reset
 }

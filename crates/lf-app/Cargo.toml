@@ -35,6 +35,11 @@ image.workspace = true
 egui_kittest = "0.37"
 lf-pipeline = { path = "../lf-pipeline", features = ["test-support"] }
 tempfile = "3"
+# A second connection holding the catalogue's write lock (busy-retry tests).
+rusqlite.workspace = true
+# MsgDiscriminants (tests only): every Msg variant, to check each reaches its owner. MIT.
+strum = "0.27"
+strum_macros = "0.27"
 httpmock = "0.8"
 
 [target.'cfg(windows)'.dependencies]

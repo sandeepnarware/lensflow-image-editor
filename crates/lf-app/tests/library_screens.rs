@@ -25,10 +25,15 @@ struct State {
     toasts: Toasts,
     prefs: Prefs,
     config: PathBuf,
+    /// Open answers received.
+    opened: usize,
 }
 
 impl State {
     fn handle(&mut self, msg: Msg) {
+        if matches!(msg, Msg::Opened { .. }) {
+            self.opened += 1;
+        }
         let mut env = Env {
             jobs: &self.jobs,
             toasts: &mut self.toasts,
@@ -54,6 +59,7 @@ fn harness(dir: &Path, root: Option<PathBuf>) -> Option<Harness<'static, State>>
         toasts: Toasts::default(),
         prefs,
         config: dir.join("config"),
+        opened: 0,
     };
     Some(
         Harness::builder()
@@ -584,4 +590,108 @@ fn a_raw_profile_change_reopens_the_photo_with_it() {
         lf_settings::DevelopSettings::from_settings(&stored).profile,
         lf_settings::Profile::Linear
     );
+}
+
+/// Opens the corpus NEF in Develop (None when the corpus or a GPU is missing).
+fn develop_corpus_raw(dir: &Path) -> Option<(Harness<'static, State>, i64)> {
+    let corpus =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/raw-samples/files/nikon-d40.nef");
+    if !corpus.exists() {
+        eprintln!("RAW corpus not fetched: skipped");
+        return None;
+    }
+    let mut h = opened(dir)?;
+    let shoot = dir.join("shoot");
+    std::fs::create_dir_all(&shoot).unwrap();
+    std::fs::copy(&corpus, shoot.join("d40.nef")).unwrap();
+    import_folder(&mut h, &shoot, 1);
+    let id = h.state().lib.photos()[0].id;
+    h.state_mut().lib.selection.click(id);
+    h.key_press(Key::D);
+    step_until(&mut h, "the RAW to open", |s| s.lib.develop().is_ready());
+    Some((h, id))
+}
+
+/// Linear, then Camera again before the Linear decode answers: the photo ends decoded with
+/// the last choice, not the one in flight.
+#[test]
+fn flipping_the_profile_twice_before_the_open_answers_ends_on_the_last_choice() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some((mut h, _)) = develop_corpus_raw(dir.path()) else {
+        return;
+    };
+    let profile = |s: &State| s.lib.develop().opened().map(|o| o.develop.profile);
+    let edited = |s: &State| {
+        lf_settings::DevelopSettings::from_settings(&s.lib.develop().edit_state().unwrap().settings)
+            .profile
+    };
+    let answers = h.state().opened;
+    h.get_by_label("Linear").click();
+    h.step(); // commits Linear
+    h.get_by_label("Camera").click();
+    h.step(); // asks for the Linear decode, and commits Camera before it can answer
+    assert_eq!(edited(h.state()), lf_settings::Profile::Camera);
+    step_until(&mut h, "the Linear decode to answer", |s| {
+        s.opened > answers
+    });
+    step_until(&mut h, "the photo decoded as Camera again", |s| {
+        profile(s) == Some(lf_settings::Profile::Camera) && !s.lib.develop().wants_reopen()
+    });
+    assert_eq!(edited(h.state()), lf_settings::Profile::Camera);
+}
+
+fn curve_rect(h: &Harness<'static, State>) -> egui::Rect {
+    h.get_by_label_contains("Tone curve: click to add a point")
+        .rect()
+}
+
+#[test]
+fn undo_clears_the_selected_curve_point() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    // Fold Light and Colour so the curve is on screen, then unfold the curve.
+    for section in ["Light", "Colour", "Tone curve"] {
+        h.get_by_role_and_label(Role::Button, section).click();
+        h.step();
+        h.step();
+    }
+    let rect = curve_rect(&h);
+    h.get_by_label_contains("Tone curve: click to add a point")
+        .click();
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_eq!(h.state().lib.develop().curve_selected(), Some(1));
+    assert_eq!(
+        h.state()
+            .lib
+            .develop()
+            .edit_state()
+            .unwrap()
+            .settings
+            .curve
+            .rgb
+            .len(),
+        3
+    );
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::Z);
+    h.step();
+    assert_eq!(
+        h.state()
+            .lib
+            .develop()
+            .edit_state()
+            .unwrap()
+            .settings
+            .curve
+            .rgb
+            .len(),
+        2,
+        "the point was undone"
+    );
+    assert_eq!(h.state().lib.develop().curve_selected(), None);
+    let _ = rect;
 }
