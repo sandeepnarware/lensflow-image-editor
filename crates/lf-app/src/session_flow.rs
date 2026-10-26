@@ -148,26 +148,33 @@ impl SessionFlow {
     /// studio whose plan allows it (read-only skips it: the banner says why) and a catalogue
     /// root is chosen. The answer is `Msg::PresetsSynced`.
     pub fn sync_presets(&mut self, jobs: &Jobs, root: Option<&Path>) {
-        let allowed = self
-            .account
-            .decision
-            .as_ref()
-            .is_some_and(Decision::sync_allowed);
-        let (Some(client), Some(studio_id), Some(root), true) = (
-            self.account.studio_client(),
-            self.studio_id(),
-            root,
-            allowed,
-        ) else {
+        let Some((client, studio_id, root)) = self.sync_target(root) else {
             return;
         };
-        let root: PathBuf = root.to_path_buf();
         self.spawn_account(jobs, "sync presets", move |generation, _| {
             let result = lf_catalog::Catalog::open(&root)
                 .map_err(SyncError::from)
                 .and_then(|catalog| presets_sync::run(&client, &catalog, studio_id));
             Msg::PresetsSynced(generation, result)
         });
+    }
+
+    /// What a preset sync needs, when one may run now: signed in to a studio, the plan allows
+    /// sync (not read-only), and a catalogue root.
+    fn sync_target(&self, root: Option<&Path>) -> Option<(Client, i64, PathBuf)> {
+        let allowed = self
+            .account
+            .decision
+            .as_ref()
+            .is_some_and(Decision::sync_allowed);
+        if !allowed {
+            return None;
+        }
+        Some((
+            self.account.studio_client()?,
+            self.studio_id()?,
+            root?.to_path_buf(),
+        ))
     }
 
     /// The facts the screens show about the account.
@@ -699,8 +706,41 @@ mod tests {
             0,
             "no sync error on top of the sign-in screen"
         );
-        // Read-only or signed out: no sync is asked for.
-        flow.sync_presets(&jobs, Some(dir.path()));
+        // Signed out: no sync is asked for.
+        assert!(flow.sync_target(Some(dir.path())).is_none());
+    }
+
+    #[test]
+    fn read_only_skips_the_preset_sync() {
+        use lf_account::entitlement::{Entitlement, Standing};
+        let dir = tempfile::tempdir().unwrap();
+        let mut flow = flow(dir.path());
+        let summary = serde_json::json!({
+            "id": 7, "name": "Frames", "slug": "frames", "permissions": ["galleries.manage"],
+        });
+        let studio: StudioSummary = serde_json::from_value(summary.clone()).unwrap();
+        let user: User = serde_json::from_value(serde_json::json!({
+            "id": 1, "name": "Asha", "email": "a@example.com", "studios": [summary],
+        }))
+        .unwrap();
+        flow.account.token = Some("secret".into());
+        flow.account.studio = Some(studio.clone());
+        for (standing, syncs) in [(Standing::ReadOnly, false), (Standing::Active, true)] {
+            let decision = Decision::Allow(Entitlement::example(standing, true));
+            flow.session =
+                Session::signing_in().on_decision(decision.clone(), &user, &studio, VERSION);
+            assert!(
+                matches!(flow.session, Session::Active { .. }),
+                "{standing:?}"
+            );
+            flow.account.decision = Some(decision);
+            let target = flow.sync_target(Some(dir.path()));
+            assert_eq!(target.is_some(), syncs, "{standing:?}");
+            if let Some((_, studio_id, _)) = target {
+                assert_eq!(studio_id, 7);
+            }
+            assert!(flow.sync_target(None).is_none(), "no catalogue root yet");
+        }
     }
 
     #[test]

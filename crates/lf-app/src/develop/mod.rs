@@ -27,6 +27,7 @@ pub mod open;
 pub mod panels;
 pub mod preview;
 pub mod tools;
+pub mod versions_panel;
 pub mod view;
 
 use crate::app::DEVICE_LOST_BANNER;

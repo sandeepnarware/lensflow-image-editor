@@ -14,7 +14,7 @@ pub fn modal_open(ctx: &egui::Context) -> bool {
 }
 
 /// A yes-or-no question: `Some(true)` when confirmed, `Some(false)` when cancelled (also
-/// Esc or a click outside), `None` while it waits.
+/// Esc), `None` while it waits.
 pub fn confirm(
     ctx: &egui::Context,
     id: &str,

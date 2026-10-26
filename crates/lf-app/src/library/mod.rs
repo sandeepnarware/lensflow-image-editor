@@ -1023,6 +1023,10 @@ impl Library {
             })
         });
         match text {
+            Some(text) if text.len() > clipboard::MAX_TEXT => {
+                self.paste_asked = None;
+                env.toasts.push(Level::Info, clipboard::TOO_LONG);
+            }
             Some(text) => {
                 self.paste_asked = None;
                 match self.clipboard.source(Some(&text)) {
@@ -1061,7 +1065,8 @@ impl Library {
             }
             (_, [only]) => {
                 let id = *only;
-                if self.develop.apply_to_photo(id, &partial, env.toasts) {
+                let recipe = clipboard::Recipe::Paste(partial);
+                if self.develop.apply_to_photo(id, &recipe, env.toasts) {
                     self.edited(&[id], env);
                 }
             }
@@ -1085,10 +1090,7 @@ impl Library {
             .collect();
         let mut choices = Vec::new();
         if let Some(partial) = pasted.or_else(|| self.clipboard.slot().cloned()) {
-            choices.push(Choice {
-                label: batch::PASTED.to_owned(),
-                partial,
-            });
+            choices.push(Choice::pasted(partial));
         }
         if let Some(settings) = self
             .copy_source()
@@ -1097,10 +1099,7 @@ impl Library {
             choices.push(batch::current_choice(&settings));
         }
         for row in self.develop.preset_rows() {
-            choices.push(Choice {
-                label: format!("Preset: {}", row.name),
-                partial: row.settings,
-            });
+            choices.push(Choice::preset(&row.name, row.settings));
         }
         self.batch = Some(BatchDialog::new(ids, names, choices));
     }
@@ -1112,7 +1111,7 @@ impl Library {
         match dialog.show(ctx) {
             BatchAction::None => {}
             BatchAction::Closed => self.batch = None,
-            BatchAction::Start(partial) => {
+            BatchAction::Start(recipe) => {
                 let Some(root) = self.root.clone() else {
                     return;
                 };
@@ -1126,7 +1125,7 @@ impl Library {
                     env.jobs,
                     root,
                     dialog.ids.clone(),
-                    partial,
+                    recipe,
                     self.develop.saver(),
                     dialog.stop.clone(),
                 );

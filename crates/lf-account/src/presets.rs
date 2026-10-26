@@ -97,25 +97,53 @@ impl Sync {
     /// Plans a sync of this computer's presets (`local`, and the tombstones of those deleted
     /// here, `deleted`) with the server's (`remote`).
     ///
+    /// Changed since the last sync: the sync writes the server's own `updated_at` string to
+    /// both `updated_at` and `synced_at`, so a local preset changed here is one whose
+    /// `updated_at` is no longer equal to its `synced_at` (no comparison across this
+    /// computer's clock and the server's). A remote preset changed since is one whose
+    /// `updated_at` is later than `synced_at` (both the server's clock).
+    ///
     /// - A local preset is matched with a remote one by its `remote_id`, else by name (a
-    ///   rename on either side follows the id). Only one side changed since `synced_at`: the
-    ///   newer wins (push, or pull). Both changed (or a time that cannot be read, or never
-    ///   synced under this name): a conflict, both kept.
-    /// - A local preset not on the server: with a `remote_id` and a `synced_at` it was
-    ///   deleted on the server, so it is purged here; otherwise it is new here and pushed.
+    ///   rename on either side follows the id); an unlinked local preset never matches a
+    ///   remote one another local preset is linked to. Only one side changed: it wins (push,
+    ///   or pull). Both changed (or a time that cannot be read, or never synced under this
+    ///   name): a conflict, both kept.
+    /// - An unlinked local preset whose name a remote preset linked to another local one now
+    ///   has (a rename on the server onto it): a conflict; it is pushed as `<name> (desktop)`
+    ///   and its old name purged here, so the pull can take the name.
+    /// - A local preset not on the server: unchanged since it was synced, it was deleted on
+    ///   the server, so it is purged here; changed here (or never synced), it is pushed as new.
     /// - A tombstone whose `remote_id` is still on the server: deleted there
-    ///   (`delete_remote`). Any other tombstone: purged.
+    ///   (`delete_remote`), even if a teammate changed it since: the delete wins. Any other
+    ///   tombstone: purged.
     /// - A remote preset no local preset or tombstone matches: pulled.
     pub fn merge(local: &[LocalPreset], deleted: &[LocalPreset], remote: &[Preset]) -> Plan {
         let mut plan = Plan::default();
+        let linked = |id: i64| local.iter().any(|o| o.remote_id == Some(id));
         let find = |l: &LocalPreset| match l.remote_id {
             Some(id) => remote.iter().find(|r| r.id == id),
-            None => remote.iter().find(|r| r.name == l.name),
+            None => remote.iter().find(|r| r.name == l.name && !linked(r.id)),
         };
         for l in local {
             let Some(r) = find(l) else {
-                if l.remote_id.is_some() && l.synced_at.is_some() {
-                    // Synced once and gone from the server: deleted on the web.
+                let unchanged = l.synced_at.as_deref() == Some(l.updated_at.as_str());
+                if let Some(r) = remote
+                    .iter()
+                    .find(|r| r.name == l.name && l.remote_id.is_none())
+                {
+                    // Renamed on the server onto this unlinked preset's name: keep this one
+                    // under another name, and free the name for the pull.
+                    let copy = LocalPreset {
+                        name: conflict_name(&l.name, local, remote),
+                        remote_id: None,
+                        synced_at: None,
+                        ..l.clone()
+                    };
+                    plan.purge.push(l.name.clone());
+                    plan.push.push(copy.clone());
+                    plan.conflicts.push((copy, r.clone()));
+                } else if l.remote_id.is_some() && unchanged {
+                    // Synced, unchanged here since, and gone from the server: deleted on the web.
                     plan.purge.push(l.name.clone());
                 } else {
                     plan.push.push(LocalPreset {
@@ -132,18 +160,17 @@ impl Sync {
                 }
                 continue;
             }
-            let times = (
-                parse_utc(&l.updated_at),
-                parse_utc(&r.updated_at),
-                l.synced_at.as_deref().map(parse_utc),
-            );
-            let (lc, rc) = match (l.remote_id, times) {
-                // Never synced under this name, or a timestamp we cannot read: both count as changed.
-                (None, _) | (_, (_, _, None)) | (_, (None, _, _)) | (_, (_, None, _)) => {
-                    (true, true)
+            let synced = l.synced_at.as_deref();
+            let (lc, rc) = match (l.remote_id, synced, synced.and_then(parse_utc)) {
+                // Never synced under this name, or a time we cannot read: both count as changed.
+                (None, _, _) | (_, None, _) | (_, _, None) => (true, true),
+                (Some(_), Some(at), Some(s)) => {
+                    let local_changed = l.updated_at != at;
+                    match parse_utc(&r.updated_at) {
+                        Some(rt) => (local_changed, rt > s),
+                        None => (true, true),
+                    }
                 }
-                (_, (_, _, Some(None))) => (true, true),
-                (Some(_), (Some(lt), Some(rt), Some(Some(s)))) => (lt > s, rt > s),
             };
             match (lc, rc) {
                 (true, false) => plan.push.push(LocalPreset {

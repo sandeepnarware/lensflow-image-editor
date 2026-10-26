@@ -8,7 +8,8 @@
 
 use crate::develop::debounce::SidecarSaver;
 use lf_catalog::Catalog;
-use lf_settings::groups::{GroupKey, apply_groups, groups_in, pick_groups};
+use lf_settings::groups::{GROUPS, GroupKey, apply_groups, groups_in, pick_groups};
+use lf_settings::looks::apply_look;
 use lf_settings::{EditSettings, normalise};
 use serde_json::{Map, Value};
 
@@ -16,6 +17,52 @@ use serde_json::{Map, Value};
 pub const COPIED: &str = "Edits copied. Paste them on another photo, or on many selected photos.";
 /// The toast when the clipboard holds nothing to paste.
 pub const NOTHING: &str = "Nothing to paste: copy a photo's edits first (Ctrl+Shift+C).";
+
+/// The toast when the system clipboard holds far more text than any edits.
+pub const TOO_LONG: &str = "The clipboard holds too much text to be copied edits.";
+/// The longest clipboard text read as edits.
+pub const MAX_TEXT: usize = 256 * 1024;
+
+/// How settings are laid over a photo.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Recipe {
+    /// Copied edits: the groups they carry replace the photo's (the web's paste).
+    Paste(Value),
+    /// A look or studio preset (`apply_look`, the web's `applyLook`): the look groups are put
+    /// back to their defaults, then the preset is laid on; its crop, rotation and spots are
+    /// never applied.
+    Look(Value),
+}
+
+impl Recipe {
+    /// The settings `onto` becomes.
+    pub fn apply(&self, onto: &EditSettings) -> EditSettings {
+        match self {
+            Recipe::Paste(partial) => apply(onto, partial),
+            Recipe::Look(look) => apply_look(onto, &clipboard_settings(look)),
+        }
+    }
+
+    /// The same without crop, rotation, straighten or spots, so each photo keeps its own
+    /// (applying to many photos).
+    pub fn without_geometry(self) -> Recipe {
+        match self {
+            Recipe::Paste(mut partial) => {
+                if let Some(m) = partial.as_object_mut() {
+                    for (group, _, keys) in GROUPS {
+                        if matches!(group, GroupKey::Geometry | GroupKey::Spots) {
+                            for key in keys {
+                                m.remove(*key);
+                            }
+                        }
+                    }
+                }
+                Recipe::Paste(partial)
+            }
+            look => look,
+        }
+    }
+}
 
 /// The in-app slot.
 #[derive(Debug, Clone, Default)]
@@ -47,6 +94,9 @@ impl Clipboard {
 /// Settings copied as text: a JSON object carrying at least one setting group, made safe
 /// ([`clipboard_settings`]). Anything else is `None`.
 pub fn parse(text: &str) -> Option<Value> {
+    if text.len() > MAX_TEXT {
+        return None;
+    }
     let value: Value = serde_json::from_str(text.trim()).ok()?;
     (value.is_object() && !groups_in(&value).is_empty()).then(|| clipboard_settings(&value))
 }
@@ -84,12 +134,13 @@ pub fn paste(
     partial: &Value,
     saver: &SidecarSaver,
 ) -> Vec<(i64, Result<(), String>)> {
+    let recipe = Recipe::Paste(partial.clone());
     photo_ids
         .iter()
         .map(|&id| {
             (
                 id,
-                crate::dialogs::batch::apply_one(catalog, id, partial, saver),
+                crate::dialogs::batch::apply_one(catalog, id, &recipe, saver),
             )
         })
         .collect()
@@ -147,6 +198,55 @@ mod tests {
             empty.source(Some(r#"{"exposure": 1}"#)).unwrap()["exposure"].as_f64(),
             Some(1.0)
         );
+    }
+
+    #[test]
+    fn a_preset_applies_as_the_web_applies_a_look() {
+        let mut onto = EditSettings::default_settings();
+        onto.exposure = 1.0;
+        onto.temperature = 25.0;
+        onto.crop.w = 0.5;
+        onto.angle = 3.0;
+        // No Light group in the preset: exposure goes back to 0 (the look groups reset).
+        let next = Recipe::Look(json!({"v": 2, "contrast": 20})).apply(&onto);
+        assert_eq!(
+            (next.exposure, next.contrast, next.temperature),
+            (0.0, 20.0, 0.0)
+        );
+        assert_eq!((next.crop, next.angle), (onto.crop, 3.0), "geometry kept");
+        // A preset carrying a crop and spots never moves the photo's.
+        let preset = json!({"v": 2, "exposure": 0.5, "crop": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2},
+                            "angle": 10, "spots": [{"x": 0.5, "y": 0.5, "r": 0.02, "sx": 0.6, "sy": 0.5}]});
+        let next = Recipe::Look(preset).apply(&onto);
+        assert_eq!(next.exposure, 0.5);
+        assert_eq!((next.crop, next.angle), (onto.crop, 3.0));
+        assert!(next.spots.is_empty());
+    }
+
+    #[test]
+    fn a_batch_paste_keeps_each_photos_crop_and_spots() {
+        let mut onto = EditSettings::default_settings();
+        onto.crop.w = 0.5;
+        let copied = json!({"v": 2, "exposure": 1, "crop": {"x": 0, "y": 0, "w": 1, "h": 1},
+                            "angle": 5, "spots": []});
+        let one = Recipe::Paste(copied.clone()).apply(&onto);
+        assert_eq!(
+            (one.crop.w, one.angle),
+            (1.0, 5.0),
+            "one photo takes all it was given"
+        );
+        let many = Recipe::Paste(copied).without_geometry().apply(&onto);
+        assert_eq!(many.exposure, 1.0);
+        assert_eq!((many.crop, many.angle), (onto.crop, 0.0));
+    }
+
+    #[test]
+    fn huge_clipboard_text_is_not_read() {
+        let mut text = String::from("{\"exposure\": 1, \"x\": \"");
+        text.push_str(&"a".repeat(MAX_TEXT));
+        text.push_str("\"}");
+        assert!(parse(&text).is_none());
+        assert!(parse(r#"{"exposure": 1}"#).is_some());
     }
 
     #[test]
