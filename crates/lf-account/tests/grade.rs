@@ -207,3 +207,42 @@ fn oversized_examples_or_settings_are_refused_before_sending() {
     );
     m.assert_calls(0);
 }
+
+#[test]
+fn a_failed_grade_reports_the_requests_it_spent() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(POST).path("/api/desktop/grade");
+        then.status(422).json_body(json!({
+            "message": "The AI could not read the look.",
+            "errors": {"reference": ["The AI could not read the look."]},
+            "requests_used": 2,
+        }));
+    });
+    let failed = grade::extract_with_cost(
+        &client(&server),
+        Mode::Extract,
+        JPEG_REF,
+        JPEG_SHEET,
+        &[],
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(failed.requests_used, 2);
+    assert!(
+        matches!(&failed.error, AccountError::Validation(f) if f["reference"] == "The AI could not read the look."),
+        "{:?}",
+        failed.error
+    );
+    // A refusal before anything is sent costs nothing.
+    let failed = grade::extract_with_cost(
+        &client(&server),
+        Mode::Extract,
+        b"GIF89a",
+        JPEG_SHEET,
+        &[],
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(failed.requests_used, 0);
+}

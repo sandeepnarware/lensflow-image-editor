@@ -29,6 +29,7 @@ pub const AI_OFF: &str = "AI is off for your studio: the grade is fitted from me
 pub const PLAN_LIMIT: &str = "Your studio's AI requests are used up for this month.";
 pub const READ_ONLY: &str =
     "Your LensFlow plan has lapsed: editing works, but preset sync and AI are off until you renew.";
+pub const USED_UP: &str = "Your studio's AI requests are used up for this month: the grade is fitted from measurements only.";
 pub const STOPPED: &str = "The match was stopped.";
 pub const NOT_CHECKED: &str =
     "Your studio could not be checked, so the AI was not asked. Try again in a moment.";
@@ -59,10 +60,38 @@ pub fn lock_copy(decision: &Decision) -> String {
         Decision::Allow(e) | Decision::AllowStale(e, _) => {
             if e.standing != Standing::Active {
                 READ_ONLY.to_owned()
+            } else if decision.ai_allowed() && used_up(decision) {
+                USED_UP.to_owned()
             } else {
                 AI_OFF.to_owned()
             }
         }
+    }
+}
+
+/// The AI requests left this month under `decision` (`None`: unlimited or unknown).
+pub fn remaining(decision: &Decision) -> Option<u64> {
+    match decision {
+        Decision::Allow(e) | Decision::AllowStale(e, _) => e.ai.remaining,
+        _ => None,
+    }
+}
+
+fn used_up(decision: &Decision) -> bool {
+    remaining(decision) == Some(0)
+}
+
+/// AI may be asked under `decision`: allowed, with requests left (the web's `aiUsable`).
+pub fn ai_usable(decision: &Decision) -> bool {
+    decision.ai_allowed() && !used_up(decision)
+}
+
+/// Why the fit runs from measurements alone under `decision`.
+fn off_note(decision: &Decision) -> &'static str {
+    if decision.ai_allowed() && used_up(decision) {
+        USED_UP
+    } else {
+        AI_OFF
     }
 }
 
@@ -188,7 +217,7 @@ fn ask(
     reference: &[u8],
     sheet: &[u8],
     settings: Option<&EditSettings>,
-) -> Result<Result<Proposal, AccountError>, MatchError> {
+) -> Result<Result<Proposal, grade::Failed>, MatchError> {
     let fresh = (link.refresh)(cancel);
     if cancel.load(Ordering::SeqCst) {
         return Err(MatchError::Cancelled);
@@ -196,12 +225,12 @@ fn ask(
     let Some(fresh) = fresh else {
         return Err(MatchError::Failed(NOT_CHECKED.to_owned()));
     };
-    if !fresh.ai_allowed() {
+    if !ai_usable(&fresh) {
         return Err(MatchError::Failed(lock_copy(&fresh)));
     }
     link.decision = fresh;
     let examples: Vec<_> = LOOKS.iter().collect();
-    Ok(grade::extract(
+    Ok(grade::extract_with_cost(
         &link.client,
         mode,
         reference,
@@ -209,6 +238,15 @@ fn ask(
         &examples,
         settings,
     ))
+}
+
+/// The note for a failed AI call (`PlanLimit` has its own copy).
+fn unavailable(e: &AccountError, what: &str) -> String {
+    if let AccountError::PlanLimit(_) = e {
+        return PLAN_LIMIT.to_owned();
+    }
+    log::warn!("match: the AI could not {what}: {e}");
+    format!("AI unavailable ({e}); matched by measurement only.")
 }
 
 fn jpeg(img: &RgbaImage) -> Result<Vec<u8>, MatchError> {
@@ -301,11 +339,11 @@ pub fn run(ctx: MatchCtx<'_>) -> Result<Outcome, MatchError> {
         return Err(MatchError::Cancelled);
     }
     let target = measure(sheet::scaled(reference, MEASURE_EDGE).as_raw(), 1);
-    let sheet_edge = sheet.width().max(sheet.height());
+    // The anchors and every calibration render are measured at 512, as the web's.
     let defaults = EditSettings::default_settings();
     let anchors = measure(
         renderer
-            .pixels(&defaults, sheet_edge)
+            .pixels(&defaults, MEASURE_EDGE)
             .map_err(failed)?
             .as_raw(),
         1,
@@ -318,10 +356,11 @@ pub fn run(ctx: MatchCtx<'_>) -> Result<Outcome, MatchError> {
     let mut notes = String::new();
     let mut ai_note = None;
     let mut requests_used = 0;
-    let mut link = ai.filter(|l| l.decision.ai_allowed());
+    let off = ai.as_ref().map_or(AI_OFF, |l| off_note(&l.decision));
+    let mut link = ai.filter(|l| ai_usable(&l.decision));
     let mut reference_jpeg = None;
     match link.as_deref_mut() {
-        None => ai_note = Some(AI_OFF.to_owned()),
+        None => ai_note = Some(off.to_owned()),
         Some(link) => {
             let ref_jpeg = jpeg(reference)?;
             let sheet_jpeg = jpeg(sheet)?;
@@ -337,16 +376,15 @@ pub fn run(ctx: MatchCtx<'_>) -> Result<Outcome, MatchError> {
                     notes = p.notes;
                     reference_jpeg = Some(ref_jpeg);
                 }
-                Err(AccountError::Unauthorized) => {
-                    return Err(MatchError::Unauthorized(link.generation));
-                }
-                Err(AccountError::PlanLimit(_)) => ai_note = Some(PLAN_LIMIT.to_owned()),
-                Err(e) => {
-                    log::warn!("match: the AI could not read the look: {e}");
-                    ai_note = Some(format!(
-                        "AI unavailable ({e}); matched by measurement only."
-                    ));
-                }
+                Err(failed) => match failed.error {
+                    AccountError::Unauthorized => {
+                        return Err(MatchError::Unauthorized(link.generation));
+                    }
+                    e => {
+                        requests_used += failed.requests_used;
+                        ai_note = Some(unavailable(&e, "read the look"));
+                    }
+                },
             }
         }
     }
@@ -362,7 +400,7 @@ pub fn run(ctx: MatchCtx<'_>) -> Result<Outcome, MatchError> {
         target: &target,
         anchors: &anchors,
         scene_bands: &scene_bands,
-        edge: sheet_edge,
+        edge: MEASURE_EDGE,
         cancel,
         error: &mut render_error,
     };
@@ -380,15 +418,24 @@ pub fn run(ctx: MatchCtx<'_>) -> Result<Outcome, MatchError> {
             .pixels(&result.settings, AI_EDGE)
             .map_err(failed)?;
         let rendered = jpeg(&rendered)?;
-        match ask(
+        let asked = match ask(
             link,
             cancel,
             Mode::Review,
             ref_jpeg,
             &rendered,
             Some(&result.settings),
-        )? {
-            Ok(p) => {
+        ) {
+            // A refused check keeps the first reading; the note says why it was not checked.
+            Err(MatchError::Failed(message)) => {
+                ai_note = Some(message);
+                None
+            }
+            other => Some(other?),
+        };
+        match asked {
+            None => {}
+            Some(Ok(p)) => {
                 requests_used += p.requests_used;
                 if !p.notes.is_empty() {
                     notes = p.notes;
@@ -396,12 +443,20 @@ pub fn run(ctx: MatchCtx<'_>) -> Result<Outcome, MatchError> {
                 let next = merged(&result.settings, &p.settings);
                 result = fit.run(&next, Some(1), progress);
             }
-            Err(AccountError::Unauthorized) => {
-                return Err(MatchError::Unauthorized(link.generation));
-            }
-            // The first reading stands; the review is a refinement.
-            Err(AccountError::PlanLimit(_)) => ai_note = Some(PLAN_LIMIT.to_owned()),
-            Err(e) => log::warn!("match: the AI could not check the result: {e}"),
+            Some(Err(failed)) => match failed.error {
+                AccountError::Unauthorized => {
+                    return Err(MatchError::Unauthorized(link.generation));
+                }
+                // The first reading stands; the review is a refinement.
+                e => {
+                    requests_used += failed.requests_used;
+                    if matches!(e, AccountError::PlanLimit(_)) {
+                        ai_note = Some(PLAN_LIMIT.to_owned());
+                    } else {
+                        log::warn!("match: the AI could not check the result: {e}");
+                    }
+                }
+            },
         }
     }
     if stopped() {
@@ -425,7 +480,7 @@ pub fn run(ctx: MatchCtx<'_>) -> Result<Outcome, MatchError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use httpmock::prelude::*;
     use lf_account::Instance;
@@ -444,23 +499,27 @@ mod tests {
         }
     }
 
-    fn client(server: &MockServer) -> Client {
+    pub(crate) fn client(server: &MockServer) -> Client {
         let url = reqwest::Url::parse(&server.url("/api")).unwrap();
         Client::new(Instance::custom(url).unwrap(), "1.0.0")
             .with_token("t")
             .with_studio("frames")
     }
 
-    fn allowed() -> Decision {
+    pub(crate) fn allowed() -> Decision {
         Decision::Allow(Entitlement::example(Standing::Active, true))
     }
 
-    fn read_only() -> Decision {
+    pub(crate) fn read_only() -> Decision {
         Decision::Allow(Entitlement::example(Standing::ReadOnly, true))
     }
 
     /// A link whose fresh check answers `fresh`, counting the checks.
-    fn link(server: &MockServer, shown: Decision, fresh: Decision) -> (AiLink, Arc<AtomicUsize>) {
+    pub(crate) fn link(
+        server: &MockServer,
+        shown: Decision,
+        fresh: Decision,
+    ) -> (AiLink, Arc<AtomicUsize>) {
         let checks = Arc::new(AtomicUsize::new(0));
         let counter = checks.clone();
         let link = AiLink {
@@ -476,7 +535,7 @@ mod tests {
     }
 
     /// Noise, so the JPEGs are not trivially small.
-    fn noisy(w: u32, h: u32, seed: u32) -> RgbaImage {
+    pub(crate) fn noisy(w: u32, h: u32, seed: u32) -> RgbaImage {
         let mut s = seed.wrapping_mul(2_654_435_761).max(1);
         RgbaImage::from_fn(w, h, |x, y| {
             s ^= s << 13;
@@ -819,6 +878,121 @@ mod tests {
         });
         assert!(matches!(result, Err(MatchError::Cancelled)));
         assert_eq!(checks.load(Ordering::SeqCst), 0);
+        grade.assert_calls(0);
+    }
+
+    #[test]
+    fn a_refused_check_before_the_review_keeps_the_first_reading() {
+        let server = MockServer::start();
+        let extract = server.mock(|w, t| {
+            w.method(POST)
+                .path("/api/desktop/grade")
+                .body_includes("name=\"mode\"\r\n\r\nextract");
+            t.status(200).json_body(json!({"data": {
+                "settings": {"v": 2, "contrast": 15}, "notes": "First.", "requests_used": 1,
+            }}));
+        });
+        let review = server.mock(|w, t| {
+            w.method(POST)
+                .path("/api/desktop/grade")
+                .body_includes("name=\"mode\"\r\n\r\nreview");
+            t.status(200).json_body(json!({"data": {"settings": {}}}));
+        });
+        // Allowed for the reading, read-only by the time of the review.
+        let answers = Arc::new(Mutex::new(vec![read_only(), allowed()]));
+        let mut ai = AiLink {
+            client: client(&server),
+            decision: allowed(),
+            refresh: Box::new(move |_| answers.lock().unwrap().pop()),
+            generation: 4,
+        };
+        let cancel = AtomicBool::new(false);
+        let (result, _) = fit(
+            &noisy(300, 200, 21),
+            &noisy(512, 256, 22),
+            Some(&mut ai),
+            true,
+            &cancel,
+        );
+        let outcome = result.unwrap();
+        extract.assert_calls(1);
+        review.assert_calls(0);
+        assert_eq!(outcome.requests_used, 1);
+        assert_eq!(outcome.notes, "First.");
+        assert_eq!(outcome.settings.contrast, 15.0);
+        assert_eq!(outcome.ai_note.as_deref(), Some(READ_ONLY));
+    }
+
+    #[test]
+    fn a_failed_call_still_counts_the_requests_it_spent() {
+        let server = MockServer::start();
+        let grade = server.mock(|w, t| {
+            w.method(POST).path("/api/desktop/grade");
+            t.status(422).json_body(json!({
+                "message": "The AI could not read the look.",
+                "errors": {"reference": ["The AI could not read the look."]},
+                "requests_used": 2,
+            }));
+        });
+        let (mut ai, _) = link(&server, allowed(), allowed());
+        let cancel = AtomicBool::new(false);
+        let (result, _) = fit(
+            &noisy(300, 200, 23),
+            &noisy(512, 256, 24),
+            Some(&mut ai),
+            true,
+            &cancel,
+        );
+        let outcome = result.unwrap();
+        grade.assert_calls(1);
+        assert_eq!(outcome.requests_used, 2);
+        assert!(
+            outcome
+                .ai_note
+                .as_deref()
+                .is_some_and(|n| n.starts_with("AI unavailable")),
+            "{:?}",
+            outcome.ai_note
+        );
+    }
+
+    #[test]
+    fn used_up_requests_turn_the_ai_off() {
+        let server = MockServer::start();
+        let grade = server.mock(|w, t| {
+            w.method(POST).path("/api/desktop/grade");
+            t.status(200).json_body(json!({"data": {"settings": {}}}));
+        });
+        let mut none_left = Entitlement::example(Standing::Active, true);
+        none_left.ai.remaining = Some(0);
+        let none_left = Decision::Allow(none_left);
+        assert!(!ai_usable(&none_left));
+        assert!(ai_usable(&allowed()));
+        assert_eq!(lock_copy(&none_left), USED_UP);
+        let cancel = AtomicBool::new(false);
+
+        // Shown with none left: nothing is asked.
+        let (mut ai, checks) = link(&server, none_left.clone(), allowed());
+        let (result, _) = fit(
+            &noisy(300, 200, 25),
+            &noisy(512, 256, 26),
+            Some(&mut ai),
+            true,
+            &cancel,
+        );
+        assert_eq!(result.unwrap().ai_note.as_deref(), Some(USED_UP));
+        assert_eq!(checks.load(Ordering::SeqCst), 0);
+
+        // Used up by the time of the call: stopped with the used-up copy.
+        let (mut ai, _) = link(&server, allowed(), none_left);
+        let (result, _) = fit(
+            &noisy(300, 200, 25),
+            &noisy(512, 256, 26),
+            Some(&mut ai),
+            true,
+            &cancel,
+        );
+        assert!(matches!(&result, Err(MatchError::Failed(m)) if m == USED_UP));
         grade.assert_calls(0);
     }
 

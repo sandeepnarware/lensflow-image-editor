@@ -49,9 +49,25 @@ pub struct Proposal {
     pub requests_used: u32,
 }
 
-/// Asks the server to grade from a reference image and a contact sheet
-/// (`POST desktop/grade`). Both images must already be JPEGs within the server's limits
-/// (700 KB, 1024 px). `settings` is sent only when given (required by the server for `Review`).
+/// A grade request that failed, with the AI requests it still cost (the server's
+/// `requests_used` on an error answer, as the web's `spentRequests`; 0 when it says nothing
+/// or nothing was sent).
+#[derive(Debug)]
+pub struct Failed {
+    pub error: AccountError,
+    pub requests_used: u32,
+}
+
+impl From<AccountError> for Failed {
+    fn from(error: AccountError) -> Failed {
+        Failed {
+            error,
+            requests_used: 0,
+        }
+    }
+}
+
+/// [`extract_with_cost`] without the cost of a failure.
 pub fn extract(
     client: &Client,
     mode: Mode,
@@ -60,13 +76,29 @@ pub fn extract(
     examples: &[&Look],
     settings: Option<&EditSettings>,
 ) -> Result<Proposal, AccountError> {
+    extract_with_cost(client, mode, reference_jpeg, sheet_jpeg, examples, settings)
+        .map_err(|f| f.error)
+}
+
+/// Asks the server to grade from a reference image and a contact sheet
+/// (`POST desktop/grade`). Both images must already be JPEGs within the server's limits
+/// (700 KB, 1024 px). `settings` is sent only when given (required by the server for `Review`).
+pub fn extract_with_cost(
+    client: &Client,
+    mode: Mode,
+    reference_jpeg: &[u8],
+    sheet_jpeg: &[u8],
+    examples: &[&Look],
+    settings: Option<&EditSettings>,
+) -> Result<Proposal, Failed> {
     check_jpeg(reference_jpeg, "reference", "reference picture")?;
     check_jpeg(sheet_jpeg, "sheet", "contact sheet")?;
     if examples.len() > MAX_EXAMPLES {
-        return invalid("examples", "Use at most 16 example looks.");
+        return invalid("examples", "Use at most 16 example looks.").map_err(Failed::from);
     }
     if mode == Mode::Review && settings.is_none() {
-        return invalid("settings", "A review needs the current edit settings.");
+        return invalid("settings", "A review needs the current edit settings.")
+            .map_err(Failed::from);
     }
     let jpeg = |bytes: &[u8], name: &'static str| {
         Part::bytes(bytes.to_vec())
@@ -83,7 +115,8 @@ pub fn extract(
         return invalid(
             "examples",
             "The example looks are too large to send; use fewer of them.",
-        );
+        )
+        .map_err(Failed::from);
     }
     let settings = settings.map(|s| s.to_value().to_string());
     if settings
@@ -93,7 +126,7 @@ pub fn extract(
         return invalid(
             "settings",
             "The current edit is too large to send for review (often too many spots); remove some and try again.",
-        );
+        ).map_err(Failed::from);
     }
     let mut form = Form::new()
         .text("mode", mode.as_str())
@@ -104,10 +137,15 @@ pub fn extract(
         form = form.text("settings", s);
     }
     let long = client.long();
-    let body = long.send(
-        long.request(reqwest::Method::POST, "desktop/grade")
-            .multipart(form),
-    )?;
+    let body = long
+        .send_spent(
+            long.request(reqwest::Method::POST, "desktop/grade")
+                .multipart(form),
+        )
+        .map_err(|(error, requests_used)| Failed {
+            error,
+            requests_used,
+        })?;
     let data = body.get("data").unwrap_or(&body);
     Ok(Proposal {
         settings: data.get("settings").cloned().unwrap_or(Value::Null),
