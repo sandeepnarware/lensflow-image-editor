@@ -23,6 +23,9 @@ pub const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 pub const RETRY_AFTER: Duration = Duration::from_millis(50);
 /// Busy refusals in a row before the user is told.
 pub const BUSY_TOASTS_AFTER: u32 = 3;
+/// How long leaving a photo waits for the write lock to save its last gesture: there is no
+/// retry after the photo is gone, so this waits as long as the catalogue's own default.
+pub const FINISH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The warning for a photo whose edit file cannot be read: `name` is the photo's file name.
 pub fn damaged_text(name: &str) -> String {
@@ -38,6 +41,11 @@ pub fn write_failed_text(message: &str) -> String {
         "The edit file beside the photo could not be saved, so the edit is kept in the \
          catalogue only. {message}"
     )
+}
+
+/// The toast when the open photo's last gesture could not be saved as the photo was left.
+pub fn last_change_failed_text(name: &str, reason: &str) -> String {
+    format!("Your last change to {name} could not be saved: {reason}")
 }
 
 /// The damaged-sidecar warning showing now.
@@ -205,11 +213,14 @@ impl EditSession {
                 self.busy += 1;
                 let dirty = self.edit.as_ref().is_some_and(|e| e.dirty);
                 self.retry_at = dirty.then(|| Instant::now() + RETRY_AFTER);
-                log::info!(
-                    "the catalogue was busy ({op:?}, {} in a row): {e}",
-                    self.busy
-                );
                 let stepping = matches!(op, EditOp::Undo | EditOp::Redo);
+                // Logged once per streak: at the first refusal and when the user is told.
+                if self.busy == 1 || self.busy == BUSY_TOASTS_AFTER || stepping {
+                    log::info!(
+                        "the catalogue was busy ({op:?}, {} in a row): {e}",
+                        self.busy
+                    );
+                }
                 if stepping || self.busy == BUSY_TOASTS_AFTER {
                     toasts.push(
                         Level::Warning,
@@ -227,6 +238,46 @@ impl EditSession {
                     Level::Error,
                     format!("The edit could not be saved in the catalogue. {e}"),
                 );
+                false
+            }
+        }
+    }
+
+    /// Leaving the photo (another photo, Library, quitting): commits a gesture still in
+    /// progress with the full [`FINISH_TIMEOUT`] wait (the quick timeout and retry are for
+    /// gestures inside the open photo; once it is left there is nothing to retry). A failure
+    /// is toasted with the photo's `name`. True when a step was recorded.
+    pub fn finish(
+        &mut self,
+        photo: Option<&Path>,
+        sidecar_damaged: bool,
+        name: &str,
+        toasts: &mut Toasts,
+    ) -> bool {
+        self.busy = 0;
+        self.retry_at = None;
+        let Some(edit) = self.edit.as_mut().filter(|e| e.dirty) else {
+            return false;
+        };
+        let result = connect(&mut self.catalog, self.catalog_root.as_deref()).and_then(|c| {
+            if let Err(e) = c.set_busy_timeout(FINISH_TIMEOUT) {
+                log::warn!("could not lengthen the catalogue's busy timeout: {e}");
+            }
+            let result = edit.commit(c).map_err(|e| e.to_string());
+            if let Err(e) = c.set_busy_timeout(BUSY_TIMEOUT) {
+                log::warn!("could not restore the catalogue's busy timeout: {e}");
+            }
+            result
+        });
+        match result {
+            Ok(Some(sidecar)) => {
+                self.save_sidecar(sidecar, photo, sidecar_damaged);
+                true
+            }
+            Ok(None) => false,
+            Err(e) => {
+                log::error!("the last change to {name} could not be saved: {e}");
+                toasts.push(Level::Error, last_change_failed_text(name, &e));
                 false
             }
         }
@@ -287,6 +338,76 @@ mod tests {
     use super::*;
     use lf_catalog::NewPhoto;
     use lf_catalog::edits;
+    use std::time::Duration;
+
+    /// A catalogue with one photo, and a session editing it (exposure 0.5, not committed).
+    fn editing() -> (tempfile::TempDir, Catalog, i64, EditSession) {
+        let dir = tempfile::tempdir().unwrap();
+        let c = Catalog::open(dir.path()).unwrap();
+        let folder = c.add_folder("shoot").unwrap();
+        let id = c
+            .add_photo(
+                folder,
+                &NewPhoto {
+                    path: "shoot/a.jpg".into(),
+                    kind: "jpeg".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut session = EditSession::new();
+        session.set_root(dir.path());
+        session.start(id, lf_settings::EditSettings::default_settings());
+        session.edit_mut().unwrap().set(|s| s.exposure = 0.5);
+        (dir, c, id, session)
+    }
+
+    #[test]
+    fn leaving_the_photo_waits_out_a_busy_catalogue_and_saves_the_edit() {
+        let (dir, c, id, mut session) = editing();
+        let db = dir.path().join(".lensflow/catalog.sqlite");
+        let (locked_tx, locked) = std::sync::mpsc::channel();
+        // An import batch holds the write lock for 600 ms, longer than the quick timeout.
+        let holder = std::thread::spawn(move || {
+            let other = rusqlite::Connection::open(db).unwrap();
+            other.execute_batch("BEGIN IMMEDIATE").unwrap();
+            locked_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(600));
+            other.execute_batch("ROLLBACK").unwrap();
+        });
+        locked.recv().unwrap();
+        let mut toasts = Toasts::default();
+        assert!(session.finish(None, false, "a.jpg", &mut toasts), "saved");
+        holder.join().unwrap();
+        assert_eq!(toasts.count(), 0);
+        assert!(!session.edit().unwrap().dirty);
+        assert_eq!(edits::get_settings(&c, id).unwrap().unwrap().exposure, 0.5);
+        // The quick timeout is back for gestures inside the photo.
+        let other =
+            rusqlite::Connection::open(dir.path().join(".lensflow/catalog.sqlite")).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE").unwrap();
+        session.edit_mut().unwrap().set(|s| s.exposure = 0.7);
+        let began = Instant::now();
+        assert!(!session.run(EditOp::Commit, None, false, &mut toasts));
+        assert!(began.elapsed() < Duration::from_secs(2));
+        other.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn a_last_change_that_cannot_be_saved_says_so() {
+        let (_dir, c, id, mut session) = editing();
+        // The photo left the catalogue (its folder was removed) under the open edit.
+        c.remove_folder(c.folders().unwrap()[0].id).unwrap();
+        let mut toasts = Toasts::default();
+        assert!(!session.finish(None, false, "a.jpg", &mut toasts));
+        assert_eq!(toasts.count(), 1);
+        let text = toasts.last_text().unwrap();
+        assert!(
+            text.starts_with("Your last change to a.jpg could not be saved: "),
+            "{text}"
+        );
+        let _ = id;
+    }
 
     #[test]
     fn a_busy_catalogue_keeps_the_edit_and_retries_quietly() {

@@ -259,13 +259,19 @@ mod tests {
         assert_eq!(cached_entries(dir.path()), 0);
     }
 
-    /// A corpus RAW goes through the cache: the second open is served from it (skipped when
-    /// the corpus has not been fetched, as in CI).
+    /// A corpus RAW goes through the cache: the second open is served from it. Skipped when
+    /// the corpus has not been fetched, unless `LF_REQUIRE_SAMPLES=1` (CI, when the whole
+    /// corpus is present), where a missing file fails.
     #[test]
     fn a_raw_is_stored_then_served_from_the_frame_cache() {
         let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/raw-samples/files/nikon-d40.nef");
         if !corpus.exists() {
+            assert!(
+                std::env::var("LF_REQUIRE_SAMPLES").as_deref() != Ok("1"),
+                "LF_REQUIRE_SAMPLES=1 but {} is missing",
+                corpus.display()
+            );
             eprintln!("RAW corpus not fetched: skipped");
             return;
         }

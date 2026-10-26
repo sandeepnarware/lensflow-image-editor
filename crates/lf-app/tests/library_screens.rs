@@ -548,16 +548,31 @@ fn a_damaged_edit_file_is_never_overwritten_and_the_warning_shows_once() {
     assert!(h.query_by_label(&warning).is_none());
 }
 
+/// The corpus NEF (`scripts/fetch-raw-samples.sh`). `None` (the test skips) when it has not
+/// been fetched, unless `LF_REQUIRE_SAMPLES=1`, which CI sets when the whole corpus is
+/// present: then a missing file fails instead of skipping.
+fn corpus_nef() -> Option<PathBuf> {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/raw-samples/files/nikon-d40.nef");
+    if path.exists() {
+        return Some(path);
+    }
+    assert!(
+        std::env::var("LF_REQUIRE_SAMPLES").as_deref() != Ok("1"),
+        "LF_REQUIRE_SAMPLES=1 but {} is missing",
+        path.display()
+    );
+    eprintln!("RAW corpus not fetched: skipped");
+    None
+}
+
 /// A RAW's profile change commits and decodes the photo again with it, keeping it on
-/// screen meanwhile (skipped when the RAW corpus has not been fetched, as in CI).
+/// screen meanwhile (needs the RAW corpus; see [`corpus_nef`]).
 #[test]
 fn a_raw_profile_change_reopens_the_photo_with_it() {
-    let corpus =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/raw-samples/files/nikon-d40.nef");
-    if !corpus.exists() {
-        eprintln!("RAW corpus not fetched: skipped");
+    let Some(corpus) = corpus_nef() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().unwrap();
     let Some(mut h) = opened(dir.path()) else {
         return;
@@ -592,14 +607,10 @@ fn a_raw_profile_change_reopens_the_photo_with_it() {
     );
 }
 
-/// Opens the corpus NEF in Develop (None when the corpus or a GPU is missing).
+/// Opens the corpus NEF in Develop (None when the corpus, see [`corpus_nef`], or a GPU is
+/// missing).
 fn develop_corpus_raw(dir: &Path) -> Option<(Harness<'static, State>, i64)> {
-    let corpus =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/raw-samples/files/nikon-d40.nef");
-    if !corpus.exists() {
-        eprintln!("RAW corpus not fetched: skipped");
-        return None;
-    }
+    let corpus = corpus_nef()?;
     let mut h = opened(dir)?;
     let shoot = dir.join("shoot");
     std::fs::create_dir_all(&shoot).unwrap();
@@ -694,4 +705,65 @@ fn undo_clears_the_selected_curve_point() {
     );
     assert_eq!(h.state().lib.develop().curve_selected(), None);
     let _ = rect;
+}
+
+/// A gesture still in progress when the photo is changed is saved, even while an import
+/// batch holds the catalogue's write lock for longer than the quick timeout.
+#[test]
+fn changing_photo_mid_gesture_saves_it_past_a_busy_catalogue() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 2);
+    import_folder(&mut h, &shoot, 2);
+    let first = h.state().lib.photos()[0].id;
+    h.state_mut().lib.selection.click(first);
+    h.key_press(Key::D);
+    step_until(&mut h, "the photo to open", |s| s.lib.develop().is_ready());
+
+    // Drag exposure without letting go: the edit is live but not committed.
+    let start = h.get_by_label("Exposure").rect().center();
+    h.drag_at(start);
+    h.step();
+    for i in 1..=3 {
+        h.hover_at(start + egui::vec2(20.0 * i as f32, 0.0));
+        h.step();
+    }
+    let edit = h.state().lib.develop().edit_state().unwrap();
+    assert!(edit.dirty && edit.settings.exposure > 0.0);
+    let dragged = edit.settings.exposure;
+
+    let db = dir.path().join("catalogue/.lensflow/catalog.sqlite");
+    let (locked_tx, locked) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let other = rusqlite::Connection::open(db).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE").unwrap();
+        locked_tx.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(600));
+        other.execute_batch("ROLLBACK").unwrap();
+    });
+    locked.recv().unwrap();
+    let toasts_before = h.state().toasts.count();
+    h.key_press(Key::ArrowRight);
+    h.step();
+    holder.join().unwrap();
+    h.drop_at(start);
+    h.step();
+
+    let catalog = lf_catalog::Catalog::open(&dir.path().join("catalogue")).unwrap();
+    assert_eq!(
+        lf_catalog::edits::get_settings(&catalog, first)
+            .unwrap()
+            .expect("the first photo's edit was saved")
+            .exposure,
+        dragged
+    );
+    assert_eq!(
+        h.state().toasts.count(),
+        toasts_before,
+        "no error: {:?}",
+        h.state().toasts.last_text()
+    );
 }

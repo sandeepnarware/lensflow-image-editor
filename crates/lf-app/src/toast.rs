@@ -46,6 +46,11 @@ impl Toasts {
         self.toasts.len()
     }
 
+    /// The newest toast's text.
+    pub fn last_text(&self) -> Option<&str> {
+        self.toasts.last().map(|t| t.text.as_str())
+    }
+
     pub fn push(&mut self, level: Level, text: impl Into<String>) {
         self.toasts.push(Toast {
             id: self.next_id,
