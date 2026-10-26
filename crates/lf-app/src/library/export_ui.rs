@@ -1,6 +1,6 @@
 //! The library's side of "Export N photos": opening the dialog for the selection, the
 //! destination picker (its own thread, as the import picker) and typed path, starting
-//! [`export_job::run`] on the `Io` lane, and its progress in the dialog and the status bar.
+//! [`export_job::run`] on the `Long` lane, and its progress in the dialog and the status bar.
 
 use super::import_ui::{Chosen, Purpose, on_own_thread};
 use super::{Env, Library};
@@ -110,7 +110,7 @@ impl Library {
                 let gpu = self.gpu.clone();
                 let reporter = env.jobs.reporter();
                 log::info!("exporting {} photos with {spec:?}", ids.len());
-                env.jobs.spawn(Lane::Io, "export", move || {
+                env.jobs.spawn(Lane::Long, "export", move || {
                     let result = export_job::run(
                         gpu,
                         &root,

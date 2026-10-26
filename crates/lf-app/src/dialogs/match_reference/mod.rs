@@ -6,7 +6,7 @@
 //! * [`steps`] measures, asks the AI (only when allowed, after a fresh check), calibrates.
 //! * [`preview`] is the before/after of one sampled photo.
 //!
-//! The fit runs on the `Open` lane (it opens photos and renders the sheet on the device) and
+//! The fit runs on the `Long` lane (it opens photos and renders the sheet on the device) and
 //! reports progress; closing the dialog stops it at the next step. Applying writes each photo
 //! through the batch's per-photo path (one `set_settings` and its sidecar).
 
@@ -874,7 +874,7 @@ mod tests {
         };
         let (flag, count) = (cancel.clone(), opened.clone());
         let reporter = jobs.reporter();
-        jobs.spawn(Lane::Open, "match", move || {
+        jobs.spawn(Lane::Long, "match", move || {
             let open = |_: &Path, edge: u32| {
                 // The dialog is closed while the third photo is being read.
                 if count.fetch_add(1, Ordering::SeqCst) == 2 {

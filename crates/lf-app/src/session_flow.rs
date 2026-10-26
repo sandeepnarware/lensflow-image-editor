@@ -667,7 +667,7 @@ impl SessionFlow {
         let dest = env.dirs.cache.join("updates");
         let reporter = env.jobs.reporter();
         self.account.download = Some((0, 0));
-        env.jobs.spawn(Lane::Io, "update", move || {
+        env.jobs.spawn(Lane::Long, "update", move || {
             let result = update::run(&client, update::platform(), &dest, |progress| {
                 reporter.send(Msg::Download(progress));
             });

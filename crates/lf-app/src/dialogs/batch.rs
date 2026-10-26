@@ -1,5 +1,5 @@
 //! "Apply to N photos": pasted settings, the active photo's settings or a studio preset laid
-//! over each selected photo, as the web's `BatchEditDialog.vue`. The work runs on the `Io`
+//! over each selected photo, as the web's `BatchEditDialog.vue`. The work runs on the `Long`
 //! lane with its own `Catalog`: one `set_settings` and one sidecar write per photo, with a
 //! stop flag checked between photos, so closing the window stops after the current photo.
 
@@ -121,7 +121,7 @@ pub fn run(
     p
 }
 
-/// Puts the batch on the `Io` lane; progress arrives as `Msg::BatchProgress`.
+/// Puts the batch on the `Long` lane; progress arrives as `Msg::BatchProgress`.
 pub fn spawn(
     jobs: &Jobs,
     root: PathBuf,
@@ -131,7 +131,7 @@ pub fn spawn(
     stop: Arc<AtomicBool>,
 ) {
     let reporter = jobs.reporter();
-    jobs.spawn(Lane::Io, "batch", move || {
+    jobs.spawn(Lane::Long, "batch", move || {
         let total = ids.len();
         let catalog = match Catalog::open(&root) {
             Ok(c) => c,

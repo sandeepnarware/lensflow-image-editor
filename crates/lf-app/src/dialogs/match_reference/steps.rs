@@ -319,7 +319,7 @@ fn without_effects(s: &EditSettings) -> EditSettings {
     out
 }
 
-/// Runs the fit (on the `Open` lane: the sheet renderer needs the device).
+/// Runs the fit (on the `Long` lane: the sheet renderer needs the device).
 pub fn run(ctx: MatchCtx<'_>) -> Result<Outcome, MatchError> {
     let MatchCtx {
         reference,

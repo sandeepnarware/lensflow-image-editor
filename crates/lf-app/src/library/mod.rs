@@ -1,8 +1,8 @@
 //! The library: catalogue root, folders, the grid, the filmstrip and the selection.
 //!
 //! The UI thread holds no catalogue connection: quick reads (folders, a folder's photos) run
-//! on the `Query` lane and writes (imports, rescans, removals) on the `Io` lane, each job with
-//! its own `Catalog`, answering with a [`Msg`]. So a folder never waits behind an import to
+//! on the `Query` lane, short writes (removals, marking missing) on the `Io` lane and imports
+//! and rescans on the `Long` lane, each job with its own `Catalog`, answering with a [`Msg`]. So a folder never waits behind an import to
 //! show. The thumbnail pool has its own connections.
 
 pub mod export_ui;
@@ -201,7 +201,7 @@ impl Library {
     }
 
     /// Why the catalogue cannot be changed now (an export or "Apply to N photos" is
-    /// running, or "Match a reference" is open), if it cannot.
+    /// running, "Match a reference" is open, or a folder is being read), if it cannot.
     pub fn restart_blocked(&self) -> Option<&'static str> {
         if self.export.as_ref().is_some_and(ExportDialog::running) {
             Some("Wait for the export to finish, then change the catalogue folder.")
@@ -209,6 +209,8 @@ impl Library {
             Some("Wait for the edits to be applied, then change the catalogue folder.")
         } else if self.matching.is_some() {
             Some("Close “Match a reference” first, then change the catalogue folder.")
+        } else if self.busy.is_some() {
+            Some("Wait for the folder to be read, then change the catalogue folder.")
         } else {
             None
         }
@@ -382,7 +384,8 @@ impl Library {
         }
     }
 
-    /// Starts the fit on the `Open` lane (the device renders the sheet); progress and the
+    /// Starts the fit on the `Long` lane (the device renders the sheet; opening photos for
+    /// Develop never waits behind it); progress and the
     /// answer arrive as `Msg::Match`. `ai` is `None` without a studio session.
     pub fn start_match(&mut self, ai: Option<AiLink>, shown: AiGate, jobs: &Jobs) {
         let Some(req) = self.matching.as_mut().and_then(|m| m.start(ai, shown)) else {
@@ -391,7 +394,7 @@ impl Library {
         let gpu = self.gpu.clone();
         let frames = self.frames.clone();
         let reporter = jobs.reporter();
-        jobs.spawn(Lane::Open, "match", move || {
+        jobs.spawn(Lane::Long, "match", move || {
             let open =
                 |p: &Path, edge: u32| matching::open_default(&gpu, frames.as_deref(), p, edge);
             let report = |step: MatchStep| reporter.send(Msg::Match(step));
@@ -468,7 +471,7 @@ impl Library {
     }
 
     /// Saves the preset when named, then writes the grade to every selected photo on the
-    /// `Open` lane (measuring a photo needs the device), each through the batch's per-photo
+    /// `Long` lane (measuring a photo needs the device), each through the batch's per-photo
     /// path.
     fn apply_match(&mut self, plan: matching::ApplyPlan, env: &mut Env) {
         let Some(root) = self.root.clone() else {
@@ -506,7 +509,7 @@ impl Library {
         let frames = self.frames.clone();
         let saver = self.develop.saver();
         let reporter = env.jobs.reporter();
-        env.jobs.spawn(Lane::Open, "match apply", move || {
+        env.jobs.spawn(Lane::Long, "match apply", move || {
             let total = ids.len();
             let report = match lf_catalog::Catalog::open(&root) {
                 Err(e) => matching::ApplyReport {
@@ -557,9 +560,17 @@ impl Library {
                     | Msg::PoolReady(..)
             )
         {
-            // Work for a catalogue left behind (Preferences → Change…): the Io lane runs it
-            // before this library's catalogue opens.
+            // Work for a catalogue left behind (Preferences → Change…), answered before
+            // this library's catalogue opened.
             log::debug!("library not open: dropped {msg:?}");
+            return None;
+        }
+        if matches!(msg, Msg::ImportProgress(..) | Msg::ImportDone(..)) && self.importing.is_none()
+        {
+            // An import this library never started: one for a catalogue left behind
+            // (Preferences → Change…, which waits for a scan but only tells an import to
+            // stop) still finishing on the `Long` lane after this library's catalogue opened.
+            log::debug!("dropped {msg:?}: not started here");
             return None;
         }
         match msg {
@@ -1156,6 +1167,8 @@ impl Library {
         let mut chosen = None;
         let mut rescan = None;
         let can_add = self.can_add();
+        // A folder being imported (on the `Long` lane) stays until its import ends.
+        let importing = self.importing.as_ref().map(|i| i.folder.clone());
         egui::ScrollArea::vertical()
             .id_salt("folder-list")
             .show(ui, |ui| {
@@ -1176,7 +1189,11 @@ impl Library {
                             rescan = Some(folder.clone());
                             ui.close();
                         }
-                        if ui.button("Remove from catalogue…").clicked() {
+                        let removable = importing.as_deref() != Some(folder.path.as_path());
+                        if ui
+                            .add_enabled(removable, egui::Button::new("Remove from catalogue…"))
+                            .clicked()
+                        {
                             self.confirm_remove = Some(folder.clone());
                             ui.close();
                         }

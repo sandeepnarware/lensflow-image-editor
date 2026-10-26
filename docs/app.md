@@ -36,9 +36,16 @@ thread per lane. Each job returns a `Msg`, and `logic()` drains them every frame
 | Lane | Thread | What runs there |
 |------|--------|-----------------|
 | `Account` | `lf-account` | Sign-in, `auth/me`, the entitlement gate, preset sync, sign-out |
-| `Open` | `lf-open` | Opening and decoding a photo for Develop (its `Renderer` is built there), pre-opening neighbours, "Match a reference" fits and applies |
-| `Io` | `lf-io` | Opening the catalogue, scans and imports, sidecar writes, folder removal, "Apply to N photos", exports |
+| `Open` | `lf-open` | Opening and decoding a photo for Develop (its `Renderer` is built there), pre-opening neighbours |
+| `Io` | `lf-io` | Short disk work: opening the catalogue, sidecar writes, folder removal, marking photos missing, rebuilding the thumbnail pool |
 | `Query` | `lf-query` | Quick catalogue reads (folders, a folder's photos), so they never wait behind an import |
+| `Long` | `lf-long` | Work that can take minutes: scans and imports, exports, "Apply to N photos", "Match a reference" fits and applies, the installer download |
+
+Long work has a lane of its own so that a sidecar write, a folder removal or the
+opening of a photo never waits behind an export or an import. When the window
+closes, the export, the batch, the import and a match are told to stop after
+their current photo, every lane finishes its running job (up to ten seconds),
+and only then are the waiting sidecars written.
 
 `lf-catalog`'s thumbnail pool has its own threads. Folder pickers run on
 short-lived threads of their own, so a picker that never answers holds up

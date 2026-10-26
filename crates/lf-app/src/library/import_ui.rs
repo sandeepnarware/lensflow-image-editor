@@ -6,7 +6,7 @@
 //! for a cancel and a failure alike), and one that never answers must not hold up other
 //! work. A typed path is always available, so a machine without a working picker (no
 //! desktop portal and no zenity on Linux) can still choose a folder. Scans and imports run
-//! on the `Io` lane.
+//! on the `Long` lane; opening the catalogue on the `Io` lane.
 
 use super::{Env, Library, Stage};
 use crate::catalog_ext::{self, Imported, NETWORK_WARNING, count};
@@ -392,7 +392,7 @@ impl Library {
 
     fn scan_folder(&mut self, folder: PathBuf, name: &str, env: &mut Env) {
         self.busy = Some("Looking for photos…");
-        env.jobs.spawn(Lane::Io, name, move || {
+        env.jobs.spawn(Lane::Long, name, move || {
             let scan = import::scan(&folder);
             Msg::Scanned { folder, scan }
         });
@@ -427,7 +427,7 @@ impl Library {
         });
         let reporter = env.jobs.reporter();
         let stop = self.stop_import.clone();
-        env.jobs.spawn(Lane::Io, "import", move || {
+        env.jobs.spawn(Lane::Long, "import", move || {
             let result = catalog_ext::import_folder(&root, &folder, &scan, &stop, &mut |p| {
                 reporter.send(Msg::ImportProgress(p));
             });

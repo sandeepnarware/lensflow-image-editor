@@ -1,4 +1,4 @@
-//! Export to disk, on the `Io` lane: the worker side of the export dialog.
+//! Export to disk, on the `Long` lane: the worker side of the export dialog.
 //!
 //! The job opens its own `Catalog` and calls [`lf_catalog::export::run`]. It holds no account
 //! client and no session, so a token revoked while it runs (Review Focus 2) cannot stop it:
