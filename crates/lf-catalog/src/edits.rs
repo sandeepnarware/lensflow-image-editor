@@ -332,6 +332,8 @@ pub fn reconcile_on_open(catalog: &Catalog, photo_id: i64, photo: &Path) -> Resu
     match sidecar::read(&path) {
         Ok(found) => {
             let r = reconcile(catalog, photo_id, found.as_ref())?;
+            // Written outside the app's SidecarSaver lock: acceptable, since writes are atomic
+            // (temp file + rename) and the newer catalogue wins again on the next open.
             if let Some(out) = &r.sidecar_to_write
                 && let Err(e) = sidecar::write(&path, out)
             {

@@ -14,15 +14,12 @@
 //! writes it on the `Io` lane a quiet second later. Nothing on the drag path renders or
 //! reads pixels back (Review Focus 1).
 //!
-//! The catalogue connection for commits, undo and redo lives here, on the UI thread: each is
-//! a single-row transaction of a few milliseconds, undo and redo must change the settings
-//! the next frame draws (a lane would answer later, and the `Io` lane can be busy with an
-//! import for minutes), and a commit must be in the catalogue before a RAW reopen reads it
-//! on the `Open` lane. The connection waits up to the catalogue's busy timeout behind an
-//! import batch's write.
+//! The edit state, the catalogue connection and the sidecar writer live in
+//! [`editing::EditSession`].
 
 pub mod debounce;
 pub mod edit_state;
+pub mod editing;
 pub mod histogram;
 pub mod info;
 pub mod open;
@@ -34,13 +31,13 @@ use crate::app::DEVICE_LOST_BANNER;
 use crate::jobs::{Jobs, Lane};
 use crate::theme;
 use crate::toast::{Level, Toasts};
-use debounce::{PendingWrite, SidecarSaver};
+use debounce::SidecarSaver;
 use edit_state::EditState;
+use editing::{EditOp, EditSession};
 use eframe::egui::{self, Key, Modifiers, RichText, Sense};
 use eframe::egui_wgpu::RenderState;
 use histogram::Throttle;
 use lf_catalog::PhotoRow;
-use lf_catalog::{Catalog, Sidecar};
 use lf_pipeline::renderer::{DrawOptions, Histogram, View};
 use lf_pipeline::{Gpu, PipelineError};
 use lf_raw::cache::FrameCache;
@@ -51,7 +48,6 @@ use lf_settings::groups::GroupKey;
 use open::OpenedPhoto;
 use panels::{PanelContext, PanelOutput, PanelState};
 use preview::Preview;
-use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -68,84 +64,10 @@ pub const BEFORE: &str = "Before";
 /// Shown where the preview would be when the window has no graphics device to share.
 pub const NO_PREVIEW: &str = "The preview needs the graphics device.";
 
-/// The warning for a photo whose edit file cannot be read: `name` is the photo's file name.
-pub fn damaged_text(name: &str) -> String {
-    format!(
-        "This photo's edit file is damaged, so edits are kept in the catalogue only. Fix or \
-         remove {name}.lensflow.json to save beside the photo again."
-    )
-}
+pub use editing::{damaged_text, write_failed_text};
 
 /// The damaged-sidecar warning's button.
 pub const SHOW_FILE: &str = "Show file";
-
-/// The toast when the sidecar beside a photo could not be written.
-pub fn write_failed_text(message: &str) -> String {
-    format!(
-        "The edit file beside the photo could not be saved, so the edit is kept in the \
-         catalogue only. {message}"
-    )
-}
-
-/// Shows `path` in the system's file manager (selected where the system can).
-pub fn show_in_folder(path: &Path) -> std::io::Result<()> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        std::process::Command::new("explorer")
-            .raw_arg(format!("/select,\"{}\"", path.display()))
-            .spawn()
-            .map(|_| ())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg("-R")
-            .arg(path)
-            .spawn()
-            .map(|_| ())
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(path.parent().unwrap_or(path))
-            .spawn()
-            .map(|_| ())
-    }
-}
-
-/// The damaged-sidecar warning showing now.
-#[derive(Debug, Clone)]
-struct Damaged {
-    photo_id: i64,
-    /// The photo's file name.
-    name: String,
-    /// The edit file beside it.
-    sidecar: PathBuf,
-}
-
-/// A change to the edits that goes through the catalogue.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EditOp {
-    Commit,
-    Undo,
-    Redo,
-    Reset(&'static [GroupKey]),
-}
-
-/// Opens the catalogue connection once (see the module docs).
-fn connect<'a>(
-    catalog: &'a mut Option<Catalog>,
-    root: Option<&Path>,
-) -> Result<&'a Catalog, String> {
-    if catalog.is_none() {
-        let root = root.ok_or_else(|| "no catalogue is open".to_owned())?;
-        *catalog = Some(Catalog::open(root).map_err(|e| e.to_string())?);
-    }
-    catalog
-        .as_ref()
-        .ok_or_else(|| "no catalogue is open".to_owned())
-}
 
 /// The start of the toast for a photo that cannot be opened.
 pub fn cant_open_text(message: &str) -> String {
@@ -199,22 +121,13 @@ pub struct Develop {
     last_change: Instant,
     last_histogram: Option<Instant>,
     lost_logged: bool,
-    /// The open photo's settings being edited (one history step per gesture).
-    edit: Option<EditState>,
-    /// The catalogue connection for commits, undo and redo (see the module docs).
-    catalog: Option<Catalog>,
-    catalog_root: Option<PathBuf>,
+    /// The edit state, catalogue connection, sidecar writer and damaged-sidecar warning.
+    session: EditSession,
     /// The photo shown or being opened (its sidecar sits beside it).
     photo_path: Option<PathBuf>,
-    saver: SidecarSaver,
     panels: PanelState,
-    /// Photos whose damaged-sidecar warning was shown this session.
-    warned: HashSet<i64>,
-    damaged: Option<Damaged>,
     /// The open photo must be decoded again (its RAW develop settings changed).
     reopen: bool,
-    /// A failed sidecar write was shown; quiet until one succeeds.
-    write_failed: bool,
 }
 
 impl Develop {
@@ -234,27 +147,21 @@ impl Develop {
             last_change: Instant::now(),
             last_histogram: None,
             lost_logged: false,
-            edit: None,
-            catalog: None,
-            catalog_root: None,
+            session: EditSession::new(),
             photo_path: None,
-            saver: SidecarSaver::new(),
             panels: PanelState::default(),
-            warned: HashSet::new(),
-            damaged: None,
             reopen: false,
-            write_failed: false,
         }
     }
 
     /// The sidecar writer (the app flushes it when quitting).
     pub fn saver(&self) -> SidecarSaver {
-        self.saver.clone()
+        self.session.saver()
     }
 
     /// The open photo's edit state.
     pub fn edit_state(&self) -> Option<&EditState> {
-        self.edit.as_ref()
+        self.session.edit()
     }
 
     /// The one entry point for "the settings changed": the preview draws again and the
@@ -266,7 +173,7 @@ impl Develop {
 
     /// Changes the live settings (a gesture in progress) and redraws.
     pub fn edit(&mut self, f: impl FnOnce(&mut lf_settings::EditSettings)) {
-        if let Some(edit) = self.edit.as_mut() {
+        if let Some(edit) = self.session.edit_mut() {
             edit.set(f);
             self.settings_changed();
         }
@@ -279,7 +186,7 @@ impl Develop {
 
     /// Commits a gesture still in progress (leaving the photo, quitting).
     pub fn finish_edit(&mut self, toasts: &mut Toasts) {
-        if self.edit.as_ref().is_some_and(|e| e.dirty) {
+        if self.session.edit().is_some_and(|e| e.dirty) {
             self.run_edit(EditOp::Commit, toasts);
         }
     }
@@ -298,11 +205,11 @@ impl Develop {
     }
 
     pub fn can_undo(&self) -> bool {
-        self.edit.as_ref().is_some_and(EditState::can_undo)
+        self.session.edit().is_some_and(EditState::can_undo)
     }
 
     pub fn can_redo(&self) -> bool {
-        self.edit.as_ref().is_some_and(EditState::can_redo)
+        self.session.edit().is_some_and(EditState::can_redo)
     }
 
     /// The photo's RAW develop settings changed: it must be opened again (the library asks).
@@ -311,71 +218,22 @@ impl Develop {
     }
 
     fn run_edit(&mut self, op: EditOp, toasts: &mut Toasts) {
-        let Some(edit) = self.edit.as_mut() else {
-            return;
-        };
-        let catalog = match connect(&mut self.catalog, self.catalog_root.as_deref()) {
-            Ok(catalog) => catalog,
-            Err(e) => {
-                log::error!("could not open the catalogue for an edit: {e}");
-                toasts.push(
-                    Level::Error,
-                    format!("The edit could not be saved in the catalogue. {e}"),
-                );
-                return;
-            }
-        };
-        let result = match op {
-            EditOp::Commit => edit.commit(catalog),
-            EditOp::Undo => edit.undo(catalog),
-            EditOp::Redo => edit.redo(catalog),
-            EditOp::Reset(groups) => edit.reset_groups(groups, catalog),
-        };
+        let damaged = matches!(&self.state, State::Ready(o, _) if o.sidecar_error.is_some());
+        let committed = self
+            .session
+            .run(op, self.photo_path.as_deref(), damaged, toasts);
         if op != EditOp::Commit {
             self.settings_changed();
         }
-        match result {
-            Ok(Some(sidecar)) => {
-                self.save_sidecar(sidecar);
-                self.check_develop_change();
-            }
-            Ok(None) => {}
-            Err(e) => {
-                log::error!("could not record an edit ({op:?}): {e}");
-                toasts.push(
-                    Level::Error,
-                    format!("The edit could not be saved in the catalogue. {e}"),
-                );
-            }
+        if committed {
+            self.check_develop_change();
         }
-    }
-
-    /// Hands a committed sidecar to the debounced writer, unless the photo's sidecar could
-    /// not be read: that file is left alone until it has been fixed (the edit is in the
-    /// catalogue either way).
-    fn save_sidecar(&mut self, sidecar: Sidecar) {
-        let (Some(edit), Some(path)) = (&self.edit, &self.photo_path) else {
-            return;
-        };
-        if let State::Ready(opened, _) = &self.state
-            && opened.sidecar_error.is_some()
-        {
-            log::debug!(
-                "photo {}: its sidecar is damaged; not writing",
-                edit.photo_id
-            );
-            return;
-        }
-        self.saver.push(
-            PendingWrite::new(edit.photo_id, path, sidecar),
-            Instant::now(),
-        );
     }
 
     /// A RAW whose develop settings (profile, highlights) no longer match what it was
     /// decoded with is opened again.
     fn check_develop_change(&mut self) {
-        if let (State::Ready(opened, _), Some(edit)) = (&self.state, &self.edit)
+        if let (State::Ready(opened, _), Some(edit)) = (&self.state, self.session.edit())
             && opened.kind == Kind::Raw
             && DevelopSettings::from_settings(&edit.settings) != opened.develop
         {
@@ -386,23 +244,14 @@ impl Develop {
     /// Puts due sidecar writes on the `Io` lane and wakes the UI when the next falls due.
     pub fn tick(&mut self, ctx: &egui::Context, jobs: &Jobs) {
         let now = Instant::now();
-        self.saver.pump(now, jobs);
-        if let Some(due) = self.saver.next_due() {
+        if let Some(due) = self.session.pump(now, jobs) {
             ctx.request_repaint_after(due.saturating_duration_since(now));
         }
     }
 
     /// The `Io` lane wrote the waiting sidecars.
     pub fn sidecar_written(&mut self, result: Result<(), String>, toasts: &mut Toasts) {
-        match result {
-            Ok(()) => self.write_failed = false,
-            Err(e) => {
-                if !self.write_failed {
-                    toasts.push(Level::Warning, write_failed_text(&e));
-                }
-                self.write_failed = true;
-            }
-        }
+        self.session.sidecar_written(result, toasts);
     }
 
     /// egui's renderer, to register the preview canvas with (none in headless tests).
@@ -469,18 +318,14 @@ impl Develop {
         self.reopen = false;
         if !reopening {
             self.finish_edit(toasts);
-            self.edit = None;
-            self.damaged = None;
+            self.session.clear();
             self.state = State::Opening(photo.id);
             self.preview = None;
             self.histogram = None;
             self.viewport = Viewport::default();
             self.before_toggled = false;
         }
-        if self.catalog_root.as_deref() != Some(root) {
-            self.catalog = None;
-            self.catalog_root = Some(root.to_path_buf());
-        }
+        self.session.set_root(root);
         self.photo_path = Some(photo.path.clone());
         let generation = self.latest.fetch_add(1, Ordering::SeqCst) + 1;
         let req = open::Request {
@@ -529,8 +374,7 @@ impl Develop {
     /// freed; queued opens are skipped.
     pub fn close(&mut self, toasts: &mut Toasts) {
         self.finish_edit(toasts);
-        self.edit = None;
-        self.damaged = None;
+        self.session.clear();
         self.reopen = false;
         self.latest.fetch_add(1, Ordering::SeqCst);
         self.preview = None;
@@ -559,23 +403,14 @@ impl Develop {
         match result {
             Ok(photo) => {
                 let reopened = matches!(&self.state, State::Ready(_, id) if *id == photo_id)
-                    && self.edit.as_ref().is_some_and(|e| e.photo_id == photo_id);
+                    && self.session.edit().is_some_and(|e| e.photo_id == photo_id);
                 if !reopened {
-                    let mut edit = EditState::new(photo_id, photo.settings.clone());
-                    match connect(&mut self.catalog, self.catalog_root.as_deref()) {
-                        Ok(catalog) => edit.refresh_steps(catalog),
-                        Err(e) => log::warn!("could not open the catalogue for edits: {e}"),
-                    }
-                    self.edit = Some(edit);
+                    self.session.start(photo_id, photo.settings.clone());
                     self.viewport = Viewport::default();
                     self.histogram = None;
-                    if photo.sidecar_error.is_some() && self.warned.insert(photo_id) {
+                    if photo.sidecar_error.is_some() {
                         let path = self.photo_path.clone().unwrap_or_default();
-                        self.damaged = Some(Damaged {
-                            photo_id,
-                            name: photo.file_name.clone(),
-                            sidecar: lf_catalog::sidecar::path_for(&path),
-                        });
+                        self.session.warn_damaged(photo_id, &photo.file_name, &path);
                     }
                 }
                 self.state = State::Ready(photo, photo_id);
@@ -669,7 +504,7 @@ impl Develop {
 
     /// The damaged-sidecar warning, once per photo per session, until dismissed.
     fn damaged_ui(&mut self, ui: &mut egui::Ui, toasts: &mut Toasts) {
-        let Some(damaged) = self.damaged.clone() else {
+        let Some(damaged) = self.session.damaged().cloned() else {
             return;
         };
         if self.photo_id() != Some(damaged.photo_id) {
@@ -686,7 +521,7 @@ impl Develop {
                 ui.label(RichText::new(damaged_text(&damaged.name)).color(theme::WARNING));
                 ui.horizontal(|ui| {
                     if ui.button(SHOW_FILE).clicked()
-                        && let Err(e) = show_in_folder(&damaged.sidecar)
+                        && let Err(e) = crate::platform::show_in_folder(&damaged.sidecar)
                     {
                         toasts.push(Level::Error, format!("The file could not be shown. {e}"));
                     }
@@ -696,13 +531,13 @@ impl Develop {
                 });
             });
         if dismiss {
-            self.damaged = None;
+            self.session.dismiss_damaged();
         }
     }
 
     /// The adjust panels for the open photo; a gesture's end commits it.
     fn panels_ui(&mut self, ui: &mut egui::Ui, toasts: &mut Toasts) {
-        let (State::Ready(opened, _), Some(edit)) = (&self.state, self.edit.as_mut()) else {
+        let (State::Ready(opened, _), Some(edit)) = (&self.state, self.session.edit_mut()) else {
             return;
         };
         let ctx = PanelContext {
@@ -766,7 +601,7 @@ impl Develop {
         }
         let output = match &self.state {
             State::Ready(photo, _) => {
-                let settings = self.edit.as_ref().map_or(&photo.settings, |e| &e.settings);
+                let settings = self.session.edit().map_or(&photo.settings, |e| &e.settings);
                 let (w, h) = photo.renderer.output_size(settings);
                 (f64::from(w), f64::from(h))
             }
@@ -808,7 +643,7 @@ impl Develop {
                     crop: None,
                     view: placement.view,
                 };
-                let settings = self.edit.as_ref().map_or(&photo.settings, |e| &e.settings);
+                let settings = self.session.edit().map_or(&photo.settings, |e| &e.settings);
                 if let Err(e) = photo.renderer.draw(settings, &opts, canvas) {
                     failed = Some(e);
                 }
@@ -900,7 +735,7 @@ impl Develop {
         let State::Ready(photo, _) = &mut self.state else {
             return;
         };
-        let settings = self.edit.as_ref().map_or(&photo.settings, |e| &e.settings);
+        let settings = self.session.edit().map_or(&photo.settings, |e| &e.settings);
         match photo.renderer.histogram(settings) {
             Ok(h) => {
                 self.histogram = Some(h);
