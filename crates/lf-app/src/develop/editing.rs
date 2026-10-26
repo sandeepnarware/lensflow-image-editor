@@ -12,7 +12,7 @@ use crate::jobs::Jobs;
 use crate::toast::{Level, Toasts};
 use lf_catalog::{Catalog, Sidecar};
 use lf_settings::groups::GroupKey;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -26,6 +26,9 @@ pub const BUSY_TOASTS_AFTER: u32 = 3;
 /// How long leaving a photo waits for the write lock to save its last gesture: there is no
 /// retry after the photo is gone, so this waits as long as the catalogue's own default.
 pub const FINISH_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the open photo's edits stay quiet before the library remakes its thumbnail and
+/// re-reads its row (a photo that was left is done at once).
+pub const THUMB_QUIET: Duration = Duration::from_secs(1);
 
 /// The warning for a photo whose edit file cannot be read: `name` is the photo's file name.
 pub fn damaged_text(name: &str) -> String {
@@ -102,6 +105,9 @@ pub struct EditSession {
     busy: u32,
     /// When a commit refused as busy is tried again.
     retry_at: Option<Instant>,
+    /// Photos whose edits changed in the catalogue here, with the last change's time: the
+    /// library remakes their thumbnails ([`EditSession::take_edited`]).
+    edited: HashMap<i64, Instant>,
 }
 
 impl EditSession {
@@ -323,6 +329,9 @@ impl EditSession {
     /// not be read: that file is left alone until it has been fixed (the edit is in the
     /// catalogue either way).
     fn save_sidecar(&mut self, sidecar: Sidecar, photo: Option<&Path>, sidecar_damaged: bool) {
+        if let Some(edit) = &self.edit {
+            self.edited.insert(edit.photo_id, Instant::now());
+        }
         let (Some(edit), Some(path)) = (&self.edit, photo) else {
             return;
         };
@@ -337,6 +346,26 @@ impl EditSession {
             PendingWrite::new(edit.photo_id, path, sidecar),
             Instant::now(),
         );
+    }
+
+    /// The photos whose thumbnails are due to be remade: every photo edited here that is no
+    /// longer `open`, and the open one once its edits have been quiet for [`THUMB_QUIET`].
+    pub fn take_edited(&mut self, open: Option<i64>, now: Instant) -> Vec<i64> {
+        let due: Vec<i64> = self
+            .edited
+            .iter()
+            .filter(|(id, at)| Some(**id) != open || now >= **at + THUMB_QUIET)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &due {
+            self.edited.remove(id);
+        }
+        due
+    }
+
+    /// When the open photo's thumbnail falls due (to wake the UI then).
+    pub fn edited_due(&self) -> Option<Instant> {
+        self.edited.values().map(|at| *at + THUMB_QUIET).min()
     }
 
     /// When a commit refused as busy is tried again.

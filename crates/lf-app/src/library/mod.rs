@@ -278,6 +278,11 @@ impl Library {
         self.index.get(&id).map(|&i| &self.photos[i])
     }
 
+    /// The folder shown, if any.
+    pub fn current_folder(&self) -> Option<i64> {
+        self.current_folder
+    }
+
     /// The photos of the current folder, in display order.
     pub fn photos(&self) -> &[PhotoRow] {
         &self.photos
@@ -917,6 +922,10 @@ impl Library {
         }
         self.sync_develop(env);
         self.develop.tick(ui.ctx(), env.jobs, env.toasts);
+        let edited = self.develop.take_edited(Instant::now());
+        if !edited.is_empty() {
+            self.refresh_photos(&edited, env);
+        }
 
         if self.thumbs.stopped() && !self.gpu.is_lost() {
             egui::Panel::top("library-device").show(ui, |ui| {
@@ -1468,15 +1477,27 @@ impl Library {
     /// Photos edited outside the open photo's edit (a paste, a batch): new thumbnails, the
     /// edited badges, and the open photo takes its new settings.
     fn edited(&mut self, ids: &[i64], env: &mut Env) {
-        for id in ids {
-            self.thumbs.forget(*id);
-        }
-        self.thumbs.background(&self.order);
         if let Mode::Develop(open) = self.mode
             && ids.contains(&open)
         {
             self.develop.reload_edit(env.toasts);
         }
+        self.refresh_photos(ids, env);
+    }
+
+    /// Photos whose edits changed in the catalogue: their thumbnails are made again (asked
+    /// for at `High`) and the folder's rows are read again (the edited badge).
+    fn refresh_photos(&mut self, ids: &[i64], env: &mut Env) {
+        for id in ids {
+            self.thumbs.forget(*id);
+        }
+        let shown: Vec<i64> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.index.contains_key(id))
+            .collect();
+        self.thumbs.strip(&shown);
+        self.thumbs.background(&self.order);
         if let (Some(folder_id), Some(root)) = (self.current_folder, self.root.clone()) {
             env.jobs.spawn(Lane::Query, "photos", move || {
                 let result = catalog_ext::photos_in(&root, folder_id);
