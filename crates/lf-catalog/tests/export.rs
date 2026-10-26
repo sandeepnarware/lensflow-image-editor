@@ -622,10 +622,10 @@ fn overwrite_replaces_through_a_temp_file_and_leaves_nothing_else() {
     assert_eq!(names, ["a.png"]);
 }
 
-/// A device lost mid-run stops the export at once and is the run's error: the photos after
-/// it are never tried (each would only fail the same way).
+/// A device lost mid-run stops the export at once: the photos after it are never tried (each
+/// would only fail the same way), and the report says how far it got.
 #[test]
-fn a_lost_device_stops_the_run_and_is_its_error() {
+fn a_lost_device_stops_the_run_and_reports_how_far_it_got() {
     // A device of its own: destroying the shared one would break the other tests.
     let Ok(gpu) = lf_pipeline::Gpu::new() else {
         return;
@@ -662,16 +662,101 @@ fn a_lost_device_stops_the_run_and_is_its_error() {
         },
     );
     assert!(gpu.is_lost());
-    match result {
-        Err(e @ CatalogError::DeviceLost) => {
-            assert!(e.to_string().contains("graphics device was reset"), "{e}");
-        }
-        other => panic!("expected DeviceLost, got {other:?}"),
-    }
+    // The run reports what it wrote before the loss, so the app can say how far it got.
+    let report = result.expect("a lost device ends the run with its partial report");
+    assert!(report.device_lost);
+    assert!(!report.cancelled, "the callback never asked to stop");
+    assert_eq!(report.exported.len(), 1);
+    assert!(
+        report.failed.is_empty(),
+        "the lost photo is not a photo failure"
+    );
+    assert!(
+        CatalogError::DeviceLost
+            .to_string()
+            .contains("graphics device was reset")
+    );
     assert_eq!(calls, [0, 1], "no photo is tried after the loss");
     let written: Vec<_> = std::fs::read_dir(out.path()).unwrap().collect();
     assert_eq!(written.len(), 1, "only the first photo was written");
     let job = export::last_job(&c).unwrap().unwrap();
     assert_eq!((job.status.as_str(), job.done), ("failed", 1));
     assert!(job.error.unwrap().contains("graphics device"));
+}
+
+fn jpeg_plain(path: &Path) {
+    image::RgbImage::from_fn(40, 30, |x, y| Rgb([(x * 5) as u8, (y * 7) as u8, 50]))
+        .save_with_format(path, image::ImageFormat::Jpeg)
+        .unwrap();
+}
+
+/// The desktop never rewrites a source file: an export whose output would land on a
+/// catalogued photo is refused before anything is written, even with overwrite on, and
+/// whatever the case of the extension.
+#[test]
+fn exporting_onto_a_source_photo_is_refused_even_when_replacing() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    jpeg_plain(&src.path().join("IMG_1.JPG"));
+    png(&src.path().join("other.png"), 24, 16);
+    let (c, ids) = catalogue(src.path());
+    let jpg = ids
+        .iter()
+        .copied()
+        .find(|id| c.photo(*id).unwrap().unwrap().path.ends_with("IMG_1.JPG"))
+        .unwrap();
+    let before = std::fs::read(src.path().join("IMG_1.JPG")).unwrap();
+    for overwrite in [false, true] {
+        let mut sp = spec(Format::Jpeg { quality: 90 }, src.path());
+        sp.overwrite = overwrite;
+        let e = export::run(gpu.clone(), &c, &[jpg], &sp, &mut |_, _| {
+            ControlFlow::Continue(())
+        })
+        .unwrap_err();
+        match &e {
+            CatalogError::WouldOverwriteOriginal(path) => {
+                assert!(
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case("IMG_1.jpg")
+                );
+            }
+            other => {
+                panic!("overwrite {overwrite}: expected WouldOverwriteOriginal, got {other:?}")
+            }
+        }
+        assert_eq!(
+            e.to_string(),
+            "IMG_1.jpg is one of your photos. Choose another folder or file name pattern."
+        );
+        assert_eq!(std::fs::read(src.path().join("IMG_1.JPG")).unwrap(), before);
+    }
+    let job = export::last_job(&c).unwrap().unwrap();
+    assert_eq!(job.status, "failed");
+}
+
+/// Every catalogued photo is protected, not only the ones being exported.
+#[test]
+fn a_catalogued_photo_outside_the_selection_is_protected_too() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    png(&src.path().join("a.png"), 24, 16);
+    png(&src.path().join("b.png"), 30, 20);
+    let (c, ids) = catalogue(src.path());
+    let a = ids
+        .iter()
+        .copied()
+        .find(|id| c.photo(*id).unwrap().unwrap().path.ends_with("a.png"))
+        .unwrap();
+    let before = std::fs::read(src.path().join("b.png")).unwrap();
+    let mut sp = spec(Format::Png, src.path());
+    sp.rename = Pattern("b".into());
+    sp.overwrite = true;
+    let e = export::run(gpu, &c, &[a], &sp, &mut |_, _| ControlFlow::Continue(())).unwrap_err();
+    assert!(
+        matches!(&e, CatalogError::WouldOverwriteOriginal(p) if p.ends_with("b.png")),
+        "{e:?}"
+    );
+    assert_eq!(std::fs::read(src.path().join("b.png")).unwrap(), before);
 }

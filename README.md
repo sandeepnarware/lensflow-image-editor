@@ -247,8 +247,13 @@ resolution through the GPU pipeline.
   callback returns `ControlFlow`; `Break` cancels after the current photo. The
   job is recorded in `export_jobs` as `done`, `failed` (with how many failed)
   or `cancelled`. A decoder panic fails only that photo.
-- A lost graphics device stops the run where it is: `run` returns
-  `DeviceLost` (the photos already written stay; the job is `failed`).
+- A lost graphics device stops the run where it is: the report comes back with
+  `device_lost` set and the photos already written (the job is `failed` with
+  `DeviceLost`'s message).
+- An export never writes over a source photo: an output path equal to any
+  catalogued photo (case-insensitive, after resolving the path) or a sidecar
+  name is `WouldOverwriteOriginal`, even with `overwrite: true`, before
+  anything is written.
 
 ## Supported files
 
