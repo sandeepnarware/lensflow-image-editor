@@ -25,6 +25,7 @@ pub mod info;
 pub mod open;
 pub mod panels;
 pub mod preview;
+pub mod tools;
 pub mod view;
 
 use crate::app::DEVICE_LOST_BANNER;
@@ -44,6 +45,7 @@ use lf_raw::cache::FrameCache;
 use lf_raw::demosaic::Quality;
 use lf_raw::open::Kind;
 use lf_settings::DevelopSettings;
+use lf_settings::geometry::{self, Geometry};
 use lf_settings::groups::GroupKey;
 use open::OpenedPhoto;
 use panels::{PanelContext, PanelOutput, PanelState};
@@ -128,6 +130,8 @@ pub struct Develop {
     panels: PanelState,
     /// The open photo must be decoded again (its RAW develop settings changed).
     reopen: bool,
+    /// The crop and spot tools.
+    tools: tools::Tools,
 }
 
 impl Develop {
@@ -151,6 +155,7 @@ impl Develop {
             photo_path: None,
             panels: PanelState::default(),
             reopen: false,
+            tools: tools::Tools::default(),
         }
     }
 
@@ -242,8 +247,9 @@ impl Develop {
             .run(op, self.photo_path.as_deref(), damaged, toasts);
         if op != EditOp::Commit {
             self.settings_changed();
-            // The points changed under the curve editor's selection.
+            // The points changed under the curve editor's selection (and the spot tool's).
             self.panels.curve.clear_selection();
+            self.tools.clear_selection();
         }
         if committed {
             self.check_develop_change();
@@ -345,6 +351,7 @@ impl Develop {
         self.reopen = false;
         if !reopening {
             self.finish_edit(toasts);
+            self.tools.active = None;
             self.session.clear();
             self.panels.curve.clear_selection();
             self.state = State::Opening(photo.id);
@@ -402,6 +409,7 @@ impl Develop {
     /// freed; queued opens are skipped.
     pub fn close(&mut self, toasts: &mut Toasts) {
         self.finish_edit(toasts);
+        self.tools.active = None;
         self.session.clear();
         self.panels.curve.clear_selection();
         self.reopen = false;
@@ -534,6 +542,7 @@ impl Develop {
             self.before_toggled = !self.before_toggled;
         }
         ui.separator();
+        self.tool_ui(ui, toasts);
         self.panels_ui(ui, toasts);
     }
 
@@ -634,15 +643,35 @@ impl Develop {
         if panel.0 < 1.0 || panel.1 < 1.0 {
             return;
         }
+        self.tool_keys(ui.ctx(), toasts);
+        let draw_crop = self.draw_crop();
         let output = match &self.state {
             State::Ready(photo, _) => {
                 let settings = self.session.edit().map_or(&photo.settings, |e| &e.settings);
-                let (w, h) = photo.renderer.output_size(settings);
+                let mut geometry = Geometry::from(settings);
+                if let Some(crop) = draw_crop {
+                    geometry.crop = crop;
+                }
+                let r = &photo.renderer;
+                let (w, h) = geometry::output_size(r.full_width, r.full_height, &geometry);
                 (f64::from(w), f64::from(h))
             }
             _ => return,
         };
-        self.interact(ui, rect, &response, output, panel);
+        let before = self.before();
+        let map = |viewport: &Viewport| {
+            let placement = viewport.placement(output, panel);
+            tools::ScreenMap {
+                shown: tools::shown_rect(rect, placement.rect, ppp),
+                view: placement.view,
+            }
+        };
+        let tool = if before {
+            tools::ToolInput::default()
+        } else {
+            self.tool_input(ui, &response, map(&self.viewport), output.0, toasts)
+        };
+        self.interact(ui, rect, &response, output, panel, tool);
 
         let Some(render_state) = self.render_state.clone() else {
             centred(ui, rect, |ui| {
@@ -651,9 +680,8 @@ impl Develop {
             return;
         };
         let placement = self.viewport.placement(output, panel);
-        let (rx, ry, rw, rh) = placement.rect;
+        let (_, _, rw, rh) = placement.rect;
         let size = ((rw.round() as u32).max(1), (rh.round() as u32).max(1));
-        let before = self.before();
         let key = DrawKey {
             size,
             view: placement.view,
@@ -675,7 +703,7 @@ impl Develop {
             if let State::Ready(photo, _) = &mut self.state {
                 let opts = DrawOptions {
                     before,
-                    crop: None,
+                    crop: draw_crop,
                     view: placement.view,
                 };
                 let settings = self.session.edit().map_or(&photo.settings, |e| &e.settings);
@@ -692,16 +720,16 @@ impl Develop {
                 return;
             }
         }
-        let shown = egui::Rect::from_min_size(
-            rect.min + egui::vec2((rx / f64::from(ppp)) as f32, (ry / f64::from(ppp)) as f32),
-            egui::vec2((rw / f64::from(ppp)) as f32, (rh / f64::from(ppp)) as f32),
-        );
+        let shown = tools::shown_rect(rect, placement.rect, ppp);
         ui.painter().image(
             texture,
             shown,
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
+        if !before {
+            self.tool_paint(ui, rect, map(&self.viewport), output.0);
+        }
         if before {
             let at = rect.left_top() + egui::vec2(12.0, 12.0);
             let galley = ui.painter().layout_no_wrap(
@@ -717,7 +745,8 @@ impl Develop {
     }
 
     /// Scroll zooms at the cursor, drag pans, double-click and `Space` toggle fit and 100 %,
-    /// `\` held shows the photo as it was.
+    /// `\` held shows the photo as it was. An open tool owns drags (and the wheel over a
+    /// spot).
     fn interact(
         &mut self,
         ui: &egui::Ui,
@@ -725,6 +754,7 @@ impl Develop {
         response: &egui::Response,
         output: (f64, f64),
         panel: (f64, f64),
+        tool: tools::ToolInput,
     ) {
         let ppp = ui.ctx().pixels_per_point();
         let keys_free = !ui.ctx().egui_wants_keyboard_input();
@@ -735,10 +765,12 @@ impl Develop {
             )
         });
         self.before_held = held;
-        if space || response.double_clicked() {
+        if space || (response.double_clicked() && !tool.owns_drag) {
             self.viewport.toggle_fit_100(output, panel);
         }
-        if let Some(pos) = response.hover_pos() {
+        if let Some(pos) = response.hover_pos()
+            && !tool.took_wheel
+        {
             let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta().y, i.zoom_delta()));
             let factor = f64::from(pinch) * (f64::from(scroll) * 0.0015).exp();
             if (factor - 1.0).abs() > 1e-6 {
@@ -749,7 +781,7 @@ impl Develop {
                 self.viewport.zoom_at(factor, cursor, output, panel);
             }
         }
-        if response.dragged() {
+        if response.dragged() && !tool.owns_drag {
             let d = response.drag_delta() * ppp;
             self.viewport
                 .pan(f64::from(d.x), f64::from(d.y), output, panel);
