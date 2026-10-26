@@ -12,12 +12,14 @@ pub mod selection;
 
 use crate::app::DEVICE_LOST_BANNER;
 use crate::catalog_ext::{self, count};
+use crate::develop::{self, Develop, Outcome};
 use crate::jobs::{Jobs, Lane, Msg};
 use crate::prefs::Prefs;
 use crate::theme;
 use crate::thumbs_ui::{ThumbEvent, Thumbs};
 use crate::toast::{Level, Toasts};
 use eframe::egui::{self, Key, Modifiers, RichText};
+use eframe::egui_wgpu::RenderState;
 use lf_catalog::{Folder, PhotoRow};
 use lf_pipeline::Gpu;
 use lf_raw::cache::FrameCache;
@@ -69,7 +71,7 @@ pub enum Stage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Library,
-    /// Develop (Task 4) with this photo.
+    /// Develop with this photo.
     Develop(i64),
 }
 
@@ -88,7 +90,9 @@ pub struct Library {
     index: HashMap<i64, usize>,
     pub selection: Selection,
     thumbs: Thumbs,
-    frames: Option<FrameCache>,
+    frames: Option<Arc<FrameCache>>,
+    /// The Develop view (its renderer lives only while a photo is open in it).
+    develop: Develop,
     /// The "Add folder" picker or a scan is running; the text says which.
     busy: Option<&'static str>,
     importing: Option<import_ui::Importing>,
@@ -117,7 +121,7 @@ impl Library {
     pub fn new(gpu: Arc<Gpu>, frames_dir: PathBuf, prefs: &Prefs) -> Library {
         let root = prefs.catalogue_root.clone();
         Library {
-            gpu,
+            gpu: gpu.clone(),
             frames_dir,
             stage: if root.is_some() {
                 Stage::Closed
@@ -134,6 +138,7 @@ impl Library {
             selection: Selection::default(),
             thumbs: Thumbs::default(),
             frames: None,
+            develop: Develop::new(gpu),
             busy: None,
             importing: None,
             stop_import: Arc::new(AtomicBool::new(false)),
@@ -149,6 +154,16 @@ impl Library {
         }
     }
 
+    /// egui's renderer, for the Develop preview's shared texture (none in headless tests).
+    pub fn set_render_state(&mut self, render_state: Option<RenderState>) {
+        self.develop.set_render_state(render_state);
+    }
+
+    /// The Develop view.
+    pub fn develop(&self) -> &Develop {
+        &self.develop
+    }
+
     /// The catalogue root in use.
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()
@@ -156,7 +171,7 @@ impl Library {
 
     /// The decoded-frame cache, once the catalogue is open (Develop uses it).
     pub fn frames(&self) -> Option<&FrameCache> {
-        self.frames.as_ref()
+        self.frames.as_deref()
     }
 
     /// The photo with this id in the current folder.
@@ -249,9 +264,25 @@ impl Library {
                     format!("Could not remove the folder from the catalogue. {e}"),
                 ),
             },
+            Msg::Opened {
+                photo_id,
+                generation,
+                result,
+            } => {
+                let outcome = self
+                    .develop
+                    .handle_opened(photo_id, generation, result, env.toasts);
+                self.opened_in_develop(outcome, env);
+            }
+            Msg::Preopened { photo_id, result } => match result {
+                Ok(true) => log::debug!("photo {photo_id} pre-opened into the frame cache"),
+                Ok(false) => log::debug!("pre-opening photo {photo_id} skipped"),
+                Err(e) => log::info!("could not pre-open photo {photo_id}: {e}"),
+            },
             Msg::JobFailed { name, message } => {
                 // A panicking library job must not leave the library waiting for it.
                 match name.as_str() {
+                    "open photo" => self.develop.open_failed(&message),
                     "add folder" | "rescan" => self.busy = None,
                     "photos" => self.loading = None,
                     "import" => self.importing = None,
@@ -285,7 +316,7 @@ impl Library {
                 );
                 self.thumbs = Thumbs::default();
                 self.thumbs.set_pool(opened.thumbs);
-                self.frames = Some(opened.frames);
+                self.frames = Some(Arc::new(opened.frames));
                 self.stage = Stage::Ready;
                 self.folders_loaded(opened.folders, env);
             }
@@ -401,6 +432,64 @@ impl Library {
             return;
         }
         self.mode = Mode::Develop(id);
+        self.request_develop(id, env);
+    }
+
+    /// Asks the Develop view to open photo `id` (the photo is in this folder and present).
+    fn request_develop(&mut self, id: i64, env: &mut Env) {
+        let (Some(photo), Some(root)) = (self.photo(id).cloned(), self.root.clone()) else {
+            return;
+        };
+        let quality = develop::open::quality(env.prefs.develop_quality);
+        self.develop
+            .request(&photo, &root, self.frames.clone(), quality, env.jobs);
+    }
+
+    /// After an open answer: pre-open the neighbours of a shown photo; badge one that
+    /// cannot be opened.
+    fn opened_in_develop(&mut self, outcome: Outcome, env: &mut Env) {
+        match outcome {
+            Outcome::Shown(id) => {
+                let Some(&at) = self.index.get(&id) else {
+                    return;
+                };
+                let neighbours: Vec<&PhotoRow> = [at.checked_sub(1), Some(at + 1)]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|i| self.photos.get(i))
+                    .collect();
+                if let Some(root) = self.root.as_deref() {
+                    let quality = develop::open::quality(env.prefs.develop_quality);
+                    self.develop
+                        .preopen(&neighbours, root, self.frames.clone(), quality, env.jobs);
+                }
+            }
+            Outcome::Failed(id, message) => {
+                self.thumbs.absorb_failures(vec![(id, message)]);
+            }
+            Outcome::Dropped => {}
+        }
+    }
+
+    /// Keeps the Develop view in step with the mode: closed in the library, following the
+    /// active photo in Develop.
+    fn sync_develop(&mut self, env: &mut Env) {
+        match self.mode {
+            Mode::Library => {
+                if self.develop.photo_id().is_some() {
+                    self.develop.close();
+                }
+            }
+            Mode::Develop(id) => {
+                if self.photo(id).is_none() {
+                    // The photo left the folder (a folder change, a rescan).
+                    self.mode = Mode::Library;
+                    self.develop.close();
+                } else if self.develop.photo_id() != Some(id) && !self.develop.is_lost() {
+                    self.request_develop(id, env);
+                }
+            }
+        }
     }
 
     /// Draws the library (or the root screens) inside the signed-in chrome.
@@ -424,6 +513,7 @@ impl Library {
             }
         }
         self.keys(ui.ctx(), env);
+        self.sync_develop(env);
 
         if self.thumbs.stopped() && !self.gpu.is_lost() {
             egui::Panel::top("library-device").show(ui, |ui| {
@@ -454,10 +544,23 @@ impl Library {
             .default_size(220.0)
             .resizable(true)
             .show(ui, |ui| self.sidebar(ui, env));
-        egui::CentralPanel::default_margins().show(ui, |ui| match self.mode {
-            Mode::Library => self.grid(ui, env),
-            Mode::Develop(id) => self.develop_placeholder(ui, id),
-        });
+        if let Mode::Develop(id) = self.mode {
+            let photo = self.index.get(&id).map(|&i| &self.photos[i]);
+            let develop = &mut self.develop;
+            egui::Panel::right("develop-side")
+                .exact_size(histogram_panel_width())
+                .show(ui, |ui| develop.side_ui(ui, photo));
+        }
+        match self.mode {
+            Mode::Library => {
+                egui::CentralPanel::default_margins().show(ui, |ui| self.grid(ui, env));
+            }
+            Mode::Develop(_) => {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new().fill(theme::BG))
+                    .show(ui, |ui| self.develop.preview_ui(ui, env.toasts));
+            }
+        }
         self.confirm_remove_dialog(ui.ctx(), env);
         self.add_folder_dialog(ui.ctx(), env);
         self.confirm_missing_dialog(ui.ctx(), env);
@@ -491,14 +594,21 @@ impl Library {
             (down && in_grid, Dir::Down),
         ];
         for (pressed, dir) in moves {
-            if pressed {
-                self.selection.arrow(dir, self.columns, &self.order);
-                self.reveal_active = true;
-                if let Mode::Develop(_) = self.mode
-                    && let Some(id) = self.selection.active()
-                {
+            if !pressed {
+                continue;
+            }
+            if let Mode::Develop(current) = self.mode {
+                // Develop steps over missing photos to the next one it can open.
+                let step = if dir == Dir::Left { -1 } else { 1 };
+                let missing = |id: i64| self.photo(id).is_none_or(|p| p.missing);
+                if let Some(id) = next_openable(&self.order, current, step, missing) {
+                    self.selection.click(id);
+                    self.reveal_active = true;
                     self.open_photo(id, env);
                 }
+            } else {
+                self.selection.arrow(dir, self.columns, &self.order);
+                self.reveal_active = true;
             }
         }
         if all && in_grid {
@@ -673,24 +783,6 @@ impl Library {
         }
     }
 
-    fn develop_placeholder(&mut self, ui: &mut egui::Ui, id: i64) {
-        ui.vertical_centered(|ui| {
-            ui.add_space(ui.available_height() / 4.0);
-            if let Some((texture, size)) = self.thumbs.texture(id) {
-                let scale = (512.0 / size.x.max(size.y)).max(1.0);
-                ui.image(egui::load::SizedTexture::new(texture, size * scale));
-                ui.add_space(12.0);
-            }
-            if let Some(photo) = self.photo(id) {
-                ui.label(photo.path.display().to_string());
-            }
-            ui.label(
-                RichText::new("Editing arrives in the next version. Press G for the library.")
-                    .color(theme::MUTED),
-            );
-        });
-    }
-
     fn filmstrip(&mut self, ui: &mut egui::Ui, env: &mut Env) {
         if let Some(id) = filmstrip::show(ui, self) {
             self.selection.click(id);
@@ -705,6 +797,29 @@ impl Library {
     fn can_add(&self) -> bool {
         self.busy.is_none() && self.importing.is_none()
     }
+}
+
+/// The side panel's width in Develop: the histogram and a margin.
+fn histogram_panel_width() -> f32 {
+    develop::histogram::WIDTH + 24.0
+}
+
+/// The next photo from `from` in the direction of `step` (+1 or -1) that is not `missing`.
+pub fn next_openable(
+    order: &[i64],
+    from: i64,
+    step: isize,
+    missing: impl Fn(i64) -> bool,
+) -> Option<i64> {
+    let at = order.iter().position(|&id| id == from)?;
+    let mut i = at as isize + step;
+    while let Some(&id) = usize::try_from(i).ok().and_then(|i| order.get(i)) {
+        if !missing(id) {
+            return Some(id);
+        }
+        i += step;
+    }
+    None
 }
 
 /// "1,200 photos · 3 selected" (the selection part only when something is selected).
@@ -737,5 +852,119 @@ mod tests {
         assert_eq!(status_text(1_200, 0), "1,200 photos");
         assert_eq!(status_text(1, 1), "1 photo · 1 selected");
         assert!(remove_folder_text(2).contains("No files are deleted"));
+    }
+
+    #[test]
+    fn develop_arrows_step_over_missing_photos() {
+        let order = [1, 2, 3, 4, 5];
+        let missing = |id: i64| id == 2 || id == 4;
+        assert_eq!(next_openable(&order, 3, 1, missing), Some(5));
+        assert_eq!(next_openable(&order, 3, -1, missing), Some(1));
+        assert_eq!(
+            next_openable(&order, 5, 1, missing),
+            None,
+            "nothing after the last"
+        );
+        assert_eq!(next_openable(&order, 1, -1, missing), None);
+        assert_eq!(next_openable(&order, 1, 1, |id| id != 5), Some(5));
+        assert_eq!(
+            next_openable(&order, 9, 1, missing),
+            None,
+            "not in the folder"
+        );
+    }
+
+    /// Every library message is consumed by `Library::handle` when a library exists (the
+    /// session flow's test lists who owns each variant, exhaustively); `JobFailed` is shared
+    /// and comes back for the app's toast.
+    #[test]
+    fn handle_consumes_every_library_message() {
+        use crate::jobs::Jobs;
+        use crate::library::import_ui::Purpose;
+        use crate::toast::Toasts;
+        use lf_catalog::import::{Progress, Scan};
+        let Some(gpu) = lf_pipeline::test_support::try_shared_gpu() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut prefs = Prefs::default();
+        let mut lib = Library::new(gpu, dir.path().join("frames"), &prefs);
+        let jobs = Jobs::new(egui::Context::default());
+        let mut toasts = Toasts::default();
+        let config = dir.path().join("config");
+        let mut env = Env {
+            jobs: &jobs,
+            toasts: &mut toasts,
+            prefs: &mut prefs,
+            config_dir: &config,
+        };
+        let messages = vec![
+            Msg::FolderChosen {
+                purpose: Purpose::AddFolder,
+                ticket: 99,
+                result: Ok(None),
+            },
+            Msg::CatalogueOpened {
+                root: dir.path().join("elsewhere"),
+                result: Err("no".into()),
+            },
+            Msg::PoolReady(Err("no".into())),
+            Msg::MarkedMissing {
+                folder_id: 1,
+                result: Err("no".into()),
+            },
+            Msg::Scanned {
+                folder: dir.path().join("gone"),
+                scan: Scan {
+                    candidates: Vec::new(),
+                    root_readable: false,
+                },
+            },
+            Msg::ImportProgress(Progress { done: 0, total: 1 }),
+            Msg::ImportDone(Err("no".into())),
+            Msg::Folders(Err("no".into())),
+            Msg::Photos {
+                folder_id: 1,
+                result: Err("no".into()),
+            },
+            Msg::FolderRemoved {
+                folder_id: 1,
+                result: Err("no".into()),
+            },
+            Msg::Opened {
+                photo_id: 1,
+                generation: 99,
+                result: Err("stale".into()),
+            },
+            Msg::Opened {
+                photo_id: 1,
+                generation: 0,
+                result: Err("current".into()),
+            },
+            Msg::Preopened {
+                photo_id: 1,
+                result: Ok(false),
+            },
+        ];
+        for msg in messages {
+            let shown = format!("{msg:?}");
+            assert!(
+                lib.handle(msg, &mut env).is_none(),
+                "{shown} was handed back"
+            );
+        }
+        let failed = Msg::JobFailed {
+            name: "open photo".into(),
+            message: "boom".into(),
+        };
+        assert!(matches!(
+            lib.handle(failed, &mut env),
+            Some(Msg::JobFailed { .. })
+        ));
+        assert!(matches!(
+            lib.handle(Msg::Cleared, &mut env),
+            Some(Msg::Cleared)
+        ));
     }
 }

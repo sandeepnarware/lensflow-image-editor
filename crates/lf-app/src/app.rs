@@ -9,11 +9,12 @@ use crate::screens::{self, View};
 use crate::session::Session;
 use crate::session_flow::{self, SessionFlow};
 use crate::toast::Toasts;
-use crate::{gpu, theme};
+use crate::{device_reset, gpu, theme};
 use eframe::egui::{self, RichText};
 use lf_account::entitlement::Decision;
 use lf_pipeline::Gpu;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 pub const SOFTWARE_BANNER: &str = "No graphics driver found: previews will be slow.";
@@ -44,6 +45,8 @@ pub struct App {
     toasts: Toasts,
     logo: Option<egui::TextureHandle>,
     lost_logged: bool,
+    /// Set once the window starts closing (the device-reset dialog's thread watches it).
+    closing: Arc<AtomicBool>,
     ctx: egui::Context,
     flow: SessionFlow,
     /// The catalogue, grid and filmstrip (none without a graphics device).
@@ -70,10 +73,12 @@ impl App {
         }
         let prefs = Prefs::load(&dirs.config);
         let flow = SessionFlow::new(&prefs, &dirs.config);
-        let library = gpu
-            .as_ref()
-            .ok()
-            .map(|gpu| Library::new(gpu.clone(), dirs.cache.join("frames"), &prefs));
+        let library = gpu.as_ref().ok().map(|gpu| {
+            let mut library = Library::new(gpu.clone(), dirs.cache.join("frames"), &prefs);
+            // The Develop preview registers its canvas with egui's renderer.
+            library.set_render_state(cc.wgpu_render_state.clone());
+            library
+        });
         let mut app = App {
             library,
             gpu,
@@ -82,6 +87,7 @@ impl App {
             toasts: Toasts::default(),
             logo: load_logo(&cc.egui_ctx),
             lost_logged: false,
+            closing: Arc::new(AtomicBool::new(false)),
             ctx: cc.egui_ctx.clone(),
             flow,
             dirs,
@@ -97,6 +103,10 @@ impl App {
     }
 
     fn handle(&mut self, msg: Msg) {
+        if let Msg::DeviceReset(choice) = msg {
+            self.device_reset(choice);
+            return;
+        }
         let mut env = library::Env {
             jobs: &self.jobs,
             toasts: &mut self.toasts,
@@ -110,9 +120,27 @@ impl App {
             },
             None => msg,
         };
-        // The library's own messages that reach here (no library) are ignored.
         let mut env = flow_env!(self);
-        self.flow.handle(msg, &mut env);
+        if let Some(msg) = self.flow.handle(msg, &mut env) {
+            // The library's own messages reach here only when there is no library.
+            log::debug!("message left unhandled: {msg:?}");
+        }
+    }
+
+    /// The device-reset dialog (or the banner's button) answered.
+    fn device_reset(&mut self, choice: device_reset::Choice) {
+        if choice == device_reset::Choice::Restart
+            && let Err(e) = device_reset::restart()
+        {
+            log::error!("could not restart lensflow-ImageEditor: {e}");
+            self.toasts.push(
+                crate::toast::Level::Error,
+                format!("lensflow-ImageEditor could not restart itself. Start it again. {e}"),
+            );
+            return;
+        }
+        self.closing.store(true, Ordering::SeqCst);
+        self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
     fn view(&self) -> View {
@@ -204,8 +232,11 @@ impl eframe::App for App {
                 log::error!("graphics error: {error}");
             }
             if gpu.is_lost() && !self.lost_logged {
+                // egui's own drawing may fail from here on, so the banner may never show:
+                // ask through a native message box as well.
                 log::error!("the graphics device was lost");
                 self.lost_logged = true;
+                device_reset::ask(self.jobs.reporter(), self.closing.clone());
             }
         }
     }
@@ -227,7 +258,24 @@ impl eframe::App for App {
             }
             Ok(gpu) => {
                 if gpu.is_lost() {
-                    banner(ui, "device-lost", DEVICE_LOST_BANNER, theme::DANGER);
+                    let restart = egui::Panel::top("device-lost")
+                        .show(ui, |ui| {
+                            ui.add_space(4.0);
+                            let clicked = ui
+                                .horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(DEVICE_LOST_BANNER).color(theme::DANGER),
+                                    );
+                                    ui.button(device_reset::RESTART).clicked()
+                                })
+                                .inner;
+                            ui.add_space(4.0);
+                            clicked
+                        })
+                        .inner;
+                    if restart {
+                        self.device_reset(device_reset::Choice::Restart);
+                    }
                 } else if gpu.is_software() {
                     banner(ui, "software", SOFTWARE_BANNER, theme::WARNING);
                 }
@@ -238,6 +286,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        self.closing.store(true, Ordering::SeqCst);
         if let Some(lib) = &self.library {
             // A running import stops after the batch in progress (each batch commits).
             lib.stop_import();

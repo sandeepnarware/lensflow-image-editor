@@ -4,6 +4,8 @@
 pub mod account;
 pub mod app;
 pub mod catalog_ext;
+pub mod develop;
+pub mod device_reset;
 pub mod gpu;
 pub mod jobs;
 pub mod library;

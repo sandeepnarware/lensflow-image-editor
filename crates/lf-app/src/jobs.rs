@@ -3,6 +3,8 @@
 
 use crate::account::{Generation, Token};
 use crate::catalog_ext::{Imported, Opened, Pool};
+use crate::develop::open::OpenedPhoto;
+use crate::device_reset;
 use crate::library::import_ui::{Chosen, Purpose};
 use crate::update::DownloadProgress;
 use eframe::egui;
@@ -103,6 +105,20 @@ pub enum Msg {
         folder_id: i64,
         result: Result<(), String>,
     },
+    /// A photo opened for Develop (or why it cannot be), for the request of `generation`;
+    /// answers from an older request are dropped.
+    Opened {
+        photo_id: i64,
+        generation: u64,
+        result: Result<Box<OpenedPhoto>, String>,
+    },
+    /// A neighbour was decoded into the frame cache (`Ok(false)`: skipped).
+    Preopened {
+        photo_id: i64,
+        result: Result<bool, String>,
+    },
+    /// The answer to the device-reset message box.
+    DeviceReset(device_reset::Choice),
     #[cfg(test)]
     Probe(&'static str),
 }
