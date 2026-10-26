@@ -46,6 +46,11 @@ impl Toasts {
         self.toasts.len()
     }
 
+    /// Every toast's text, oldest first (errors stay until closed; the rest expire).
+    pub fn texts(&self) -> impl Iterator<Item = &str> {
+        self.toasts.iter().map(|t| t.text.as_str())
+    }
+
     /// The newest toast's text.
     pub fn last_text(&self) -> Option<&str> {
         self.toasts.last().map(|t| t.text.as_str())

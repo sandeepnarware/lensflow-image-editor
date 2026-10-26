@@ -745,7 +745,6 @@ fn changing_photo_mid_gesture_saves_it_past_a_busy_catalogue() {
         other.execute_batch("ROLLBACK").unwrap();
     });
     locked.recv().unwrap();
-    let toasts_before = h.state().toasts.count();
     h.key_press(Key::ArrowRight);
     h.step();
     holder.join().unwrap();
@@ -760,10 +759,12 @@ fn changing_photo_mid_gesture_saves_it_past_a_busy_catalogue() {
             .exposure,
         dragged
     );
-    assert_eq!(
-        h.state().toasts.count(),
-        toasts_before,
-        "no error: {:?}",
-        h.state().toasts.last_text()
-    );
+    // An error toast stays until closed, so a failed save would still be listed.
+    let errors: Vec<&str> = h
+        .state()
+        .toasts
+        .texts()
+        .filter(|t| t.contains("could not be saved"))
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
 }
