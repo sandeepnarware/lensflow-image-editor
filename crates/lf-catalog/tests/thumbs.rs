@@ -279,3 +279,39 @@ fn a_success_clears_error_but_not_sidecar_error() {
     assert_eq!(row.error, None, "the photo is fine now");
     assert!(row.sidecar_error.is_some(), "the sidecar is still damaged");
 }
+
+/// An edit that lands while a thumbnail is being made: the older picture is neither stored
+/// nor delivered; the thumbnail is made again for the new edit.
+#[test]
+fn a_thumbnail_made_while_the_photo_was_edited_is_made_again() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let d = tempfile::tempdir().unwrap();
+    image::RgbaImage::from_pixel(60, 40, image::Rgba([90, 90, 90, 255]))
+        .save(d.path().join("lf-test-edit-while-made.png"))
+        .unwrap();
+    let c = Catalog::open(d.path()).unwrap();
+    let f = c.add_folder("f").unwrap();
+    import::run(&c, f, &import::scan(d.path()).candidates, 200, &mut |_| {
+        Ok(())
+    })
+    .unwrap();
+    let id = c.photo_ids().unwrap()[0];
+    let t = Thumbnailer::new(gpu, d.path(), 1, Quality::Fast).unwrap();
+    t.request(id, Priority::High);
+    let ready = wait_for(&t, 1);
+    assert_eq!(ready.len(), 1);
+    assert_eq!(
+        t.decoded_count(),
+        2,
+        "made once, then again for the new edit"
+    );
+    assert!(
+        c.fresh_thumbnail(id, Quality::Fast).unwrap().is_some(),
+        "the stored thumbnail is the new edit's"
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        t.take_ready().is_empty(),
+        "the older picture was never delivered"
+    );
+}
