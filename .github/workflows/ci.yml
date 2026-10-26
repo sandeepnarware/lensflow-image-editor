@@ -21,7 +21,7 @@ jobs:
       - name: Install software Vulkan
         run: |
           sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 gdb
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Cache RAW sample corpus
@@ -42,7 +42,12 @@ jobs:
           if [ "$n" -lt "$total" ]; then echo "::warning::RAW samples present: $n of $total (the sample tests will skip the rest)"; fi
           if [ "$n" -eq "$total" ]; then echo "require=1" >> "$GITHUB_OUTPUT"; else echo "require=0" >> "$GITHUB_OUTPUT"; fi
       # --nocapture so the parity tests print their worst figures on success (nothing else prints).
+      # A software-Vulkan hang once burned the whole job limit (28 min) with no clue where.
+      # scripts/ci-test-watchdog.sh runs the tests and, if the output stalls for 4 minutes, dumps
+      # every thread's stack (gdb) of each running test binary and fails; the step limit is a
+      # backstop for anything else.
       - name: Test
+        timeout-minutes: 10
         env:
           LF_REQUIRE_SAMPLES: ${{ steps.samples.outputs.require }}
-        run: cargo test --workspace -- --nocapture
+        run: bash scripts/ci-test-watchdog.sh cargo test --workspace -- --nocapture

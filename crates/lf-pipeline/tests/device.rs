@@ -147,7 +147,10 @@ fn a_destroyed_device_is_lost() {
     // wgpu loses a destroyed device (calling the callback) at the first poll that finds
     // its queue empty.
     gpu.device
-        .poll(wgpu::PollType::wait_indefinitely())
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(30)),
+        })
         .unwrap();
     gpu.device.destroy();
     let _ = gpu.device.poll(wgpu::PollType::Poll);
@@ -155,6 +158,30 @@ fn a_destroyed_device_is_lost() {
     assert!(matches!(r.render(&s), Err(PipelineError::DeviceLost)));
     assert!(matches!(r.pixels(&s, 20), Err(PipelineError::DeviceLost)));
     assert!(matches!(r.histogram(&s), Err(PipelineError::DeviceLost)));
+}
+
+#[test]
+fn waiting_for_an_answer_that_never_comes_times_out() {
+    let _guard = one_at_a_time();
+    let gpu = Gpu::new().unwrap();
+    let (_keep, rx) = std::sync::mpsc::channel::<()>();
+    let t = std::time::Instant::now();
+    let r = gpu.wait_for(&rx, std::time::Duration::from_millis(300));
+    assert!(matches!(r, Err(PipelineError::Timeout(_))), "{r:?}");
+    assert!(t.elapsed() < std::time::Duration::from_secs(5));
+}
+
+#[test]
+fn waiting_on_a_destroyed_device_reports_it_lost() {
+    let _guard = one_at_a_time();
+    let gpu = Gpu::new().unwrap();
+    let (_keep, rx) = std::sync::mpsc::channel::<()>();
+    gpu.device.destroy();
+    let _ = gpu.device.poll(wgpu::PollType::Poll);
+    let t = std::time::Instant::now();
+    let r = gpu.wait_for(&rx, std::time::Duration::from_secs(20));
+    assert!(matches!(r, Err(PipelineError::DeviceLost)), "{r:?}");
+    assert!(t.elapsed() < std::time::Duration::from_secs(5));
 }
 
 /// A bind group whose texture binding is given a sampler.
