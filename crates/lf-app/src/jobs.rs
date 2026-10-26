@@ -369,6 +369,36 @@ fn start_lane(
     }
 }
 
+/// What the photographer reads when the job named `name` panicked: the plain action and a
+/// pointer to the log (the panic's own text is logged by the lane, never shown).
+pub fn failed_text(name: &str) -> String {
+    let action = match name {
+        "open photo" => "opening the photo",
+        "pre-open photo" => "preparing the next photo",
+        "match" => "matching the reference",
+        "match apply" => "applying the match",
+        "export" => "exporting",
+        "batch" => "applying the edits",
+        "import" => "importing the folder",
+        "add folder" | "rescan" => "reading the folder",
+        "open catalogue" => "opening the catalogue",
+        "thumbnail pool" => "restarting the thumbnails",
+        "photos" => "listing the photos",
+        "folders" => "listing the folders",
+        "remove folder" => "removing the folder",
+        "mark missing" => "marking the photos missing",
+        "write sidecar" => "saving an edit file",
+        "update" => "downloading the update",
+        "sign in" => "signing in",
+        "sign out" | "forget" => "signing out",
+        "resume" | "me" => "checking your account",
+        "entitlement" | "forget entitlement" => "checking your studio",
+        "sync presets" => "syncing the studio presets",
+        _ => "working in the background",
+    };
+    format!("Something went wrong while {action}. Details are in the log.")
+}
+
 fn panic_message(panic: &(dyn Any + Send)) -> String {
     if let Some(text) = panic.downcast_ref::<&str>() {
         (*text).to_owned()
@@ -399,6 +429,22 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         got
+    }
+
+    #[test]
+    fn a_failed_job_reads_as_a_plain_sentence() {
+        assert_eq!(
+            failed_text("export"),
+            "Something went wrong while exporting. Details are in the log."
+        );
+        assert_eq!(
+            failed_text("open photo"),
+            "Something went wrong while opening the photo. Details are in the log."
+        );
+        assert_eq!(
+            failed_text("something new"),
+            "Something went wrong while working in the background. Details are in the log."
+        );
     }
 
     #[test]

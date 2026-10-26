@@ -509,8 +509,9 @@ impl MatchDialog {
     }
 
     /// The fit or apply job panicked.
+    /// The fit or apply job panicked: `message` is the plain sentence to show.
     pub fn job_failed(&mut self, message: &str) {
-        self.phase = Phase::Failed(format!("Something went wrong. {message}"));
+        self.phase = Phase::Failed(message.to_owned());
     }
 
     /// Closing: a running fit or apply stops at its next step.

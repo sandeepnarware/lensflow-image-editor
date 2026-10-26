@@ -361,10 +361,10 @@ impl SessionFlow {
                 if let Session::SigningIn { busy, .. } = &mut self.session {
                     *busy = false;
                 }
-                env.toasts.push(
-                    Level::Error,
-                    format!("Something went wrong ({name}). {message}"),
-                );
+                // The lane has logged the panic's own text.
+                log::debug!("job {name} failed: {message}");
+                env.toasts
+                    .push(Level::Error, crate::jobs::failed_text(&name));
             }
             Msg::Resumed(generation, token) if self.is_current(generation) => {
                 self.account.checking = None;
@@ -977,6 +977,13 @@ mod tests {
                 );
             }
         }
+        // A panicked job reads as a plain sentence; its own text stays in the log.
+        assert!(env.toasts.texts().all(|t| !t.contains("boom")));
+        assert!(
+            env.toasts
+                .texts()
+                .any(|t| t.ends_with("Details are in the log."))
+        );
         // Everything else is handed back.
         for msg in messages_owned_by(&[Owner::Library, Owner::App, Owner::Test], 3, dir.path()) {
             let shown = format!("{msg:?}");

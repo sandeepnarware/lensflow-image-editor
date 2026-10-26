@@ -693,22 +693,24 @@ impl Library {
                 return Some(msg);
             }
             Msg::JobFailed { name, message } => {
-                // A panicking library job must not leave the library waiting for it.
+                // A panicking library job must not leave the library waiting for it. The
+                // panic's own text is in the log; the screens say what was being done.
+                let plain = crate::jobs::failed_text(&name);
                 match name.as_str() {
-                    "open photo" => self.develop.open_failed(&message),
+                    "open photo" => self.develop.open_failed(&plain),
                     "add folder" | "rescan" => self.busy = None,
                     "photos" => self.loading = None,
                     "import" => self.importing = None,
-                    "open catalogue" => self.stage = Stage::Failed(message.clone()),
+                    "open catalogue" => self.stage = Stage::Failed(plain),
                     "thumbnail pool" => self.reviving = false,
                     "match" | "match apply" => {
                         if let Some(m) = &mut self.matching {
-                            m.job_failed(&message);
+                            m.job_failed(&plain);
                         }
                     }
                     "export" => {
                         if self.export.as_ref().is_some_and(ExportDialog::running) {
-                            self.export_done(Err(message.clone()), env);
+                            self.export_done(Err(plain), env);
                         }
                     }
                     "batch" => {

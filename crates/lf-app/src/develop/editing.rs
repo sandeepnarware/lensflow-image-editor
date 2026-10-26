@@ -48,7 +48,12 @@ pub fn write_failed_text(message: &str) -> String {
 
 /// The toast when the open photo's last gesture could not be saved as the photo was left.
 pub fn last_change_failed_text(name: &str, reason: &str) -> String {
-    format!("Your last change to {name} could not be saved: {reason}")
+    let stop = if reason.ends_with(['.', '!', '?']) {
+        ""
+    } else {
+        "."
+    };
+    format!("Your last change to {name} could not be saved: {reason}{stop}")
 }
 
 /// The damaged-sidecar warning showing now.
@@ -517,6 +522,11 @@ mod tests {
         assert!(
             text.starts_with("Your last change to a.jpg could not be saved: "),
             "{text}"
+        );
+        assert!(text.ends_with('.'), "{text}");
+        assert_eq!(
+            last_change_failed_text("a.jpg", "disk full"),
+            "Your last change to a.jpg could not be saved: disk full."
         );
         let _ = id;
     }
