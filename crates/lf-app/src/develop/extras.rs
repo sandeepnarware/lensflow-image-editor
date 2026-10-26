@@ -77,6 +77,34 @@ impl Develop {
         p.rows.clone()
     }
 
+    /// Saves `partial` as the studio's preset `name` (and asks for a sync): `Ok(false)` when
+    /// a live preset already has that name. `studio` is the one signed in to.
+    pub fn save_preset(
+        &mut self,
+        studio: i64,
+        name: &str,
+        partial: &serde_json::Value,
+    ) -> Result<bool, String> {
+        let saved = self.session.catalog().and_then(|c| {
+            match local::find(c, studio, name).map_err(|e| e.to_string())? {
+                Some(row) if row.deleted_at.is_none() => Ok(false),
+                _ => local::save(c, studio, name, partial)
+                    .map(|_| true)
+                    .map_err(|e| e.to_string()),
+            }
+        })?;
+        if saved {
+            self.extras.presets.stale = true;
+            self.extras.presets.changed = true;
+        }
+        Ok(saved)
+    }
+
+    /// The studio whose presets are shown (signed in to), if any.
+    pub fn studio(&self) -> Option<i64> {
+        self.extras.presets.studio
+    }
+
     /// Replaces the open photo's settings with `next` and records it (one history step).
     pub fn replace_settings(&mut self, next: EditSettings, toasts: &mut Toasts) {
         self.edit(|s| *s = next);
@@ -245,19 +273,9 @@ impl Develop {
                     return;
                 };
                 let partial = pick_groups(&settings, &groups);
-                let result = self.session.catalog().and_then(|c| {
-                    match local::find(c, studio, &name).map_err(|e| e.to_string())? {
-                        Some(row) if row.deleted_at.is_none() => Ok(false),
-                        _ => local::save(c, studio, &name, &partial)
-                            .map(|_| true)
-                            .map_err(|e| e.to_string()),
-                    }
-                });
-                match result {
+                match self.save_preset(studio, &name, &partial) {
                     Ok(true) => {
                         self.extras.presets.saving = None;
-                        self.extras.presets.stale = true;
-                        self.extras.presets.changed = true;
                         toasts.push(Level::Success, format!("Preset “{name}” saved."));
                     }
                     Ok(false) => {

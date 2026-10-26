@@ -6,6 +6,7 @@ use crate::catalog_ext::{Imported, Opened, Pool};
 use crate::develop::open::OpenedPhoto;
 use crate::device_reset;
 use crate::dialogs::batch::BatchProgress;
+use crate::dialogs::match_reference::MatchStep;
 use crate::export_job::ExportOutcome;
 use crate::library::import_ui::{Chosen, Purpose};
 use crate::presets_sync::{SyncError, SyncReport};
@@ -134,6 +135,9 @@ pub enum Msg {
     PresetsSynced(Generation, Result<SyncReport, SyncError>),
     /// "Apply to N photos" moved on (or ended: `finished`).
     BatchProgress(BatchProgress),
+    /// "Match a reference…": the picker, the fit's progress and answer, the apply's. A
+    /// sign-out found during a fit (`MatchStep::SignedOut`) goes on to the session.
+    Match(MatchStep),
     /// An export to disk moved on: `done` photos handled of `total`.
     ExportProgress { done: usize, total: usize },
     /// An export to disk ended (finished or stopped), or why it was refused (the sentence to
@@ -178,6 +182,32 @@ impl Reporter {
     pub fn send(&self, msg: Msg) {
         if self.results.send(msg).is_ok() {
             self.ctx.request_repaint();
+        }
+    }
+}
+
+/// Lets a running job queue work on another lane (a match's AI step asks the account lane
+/// for a fresh entitlement and waits for the answer). It holds the lanes' queues open, so a
+/// job keeps it only while it runs; after shutdown it queues nothing.
+#[derive(Clone)]
+pub struct Spawner {
+    queues: Vec<(Lane, Sender<Job>)>,
+    stopping: Arc<AtomicBool>,
+}
+
+impl Spawner {
+    /// Queues `f` on `lane`, as [`Jobs::spawn`].
+    pub fn spawn(&self, lane: Lane, name: &str, f: impl FnOnce() -> Msg + Send + 'static) {
+        let queue = self.queues.iter().find(|(l, _)| *l == lane).map(|(_, q)| q);
+        let job = Job {
+            name: name.to_owned(),
+            work: Box::new(f),
+        };
+        if self.stopping.load(Ordering::SeqCst) || queue.is_none_or(|q| q.send(job).is_err()) {
+            log::warn!(
+                "the {} worker has stopped; job \"{name}\" was dropped",
+                lane.thread_name()
+            );
         }
     }
 }
@@ -231,6 +261,18 @@ impl Jobs {
     /// A handle a job can capture to report progress while it runs.
     pub fn reporter(&self) -> Reporter {
         self.reporter.clone()
+    }
+
+    /// A handle a job can capture to queue work on another lane.
+    pub fn spawner(&self) -> Spawner {
+        Spawner {
+            queues: self
+                .lanes
+                .iter()
+                .filter_map(|w| w.queue.clone().map(|q| (w.lane, q)))
+                .collect(),
+            stopping: self.stopping.clone(),
+        }
     }
 
     /// Every message sent since the last call, without waiting.
@@ -371,6 +413,26 @@ mod tests {
     }
 
     #[test]
+    fn a_job_can_queue_work_on_another_lane_and_wait_for_it() {
+        let jobs = Jobs::new(egui::Context::default());
+        let spawner = jobs.spawner();
+        jobs.spawn(Lane::Open, "asks", move || {
+            let (tx, rx) = mpsc::channel();
+            spawner.spawn(Lane::Account, "answers", move || {
+                tx.send(std::thread::current().name().map(str::to_owned))
+                    .unwrap();
+                Msg::Probe("answered")
+            });
+            let from = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert_eq!(from.as_deref(), Some("lf-account"));
+            Msg::Probe("asked")
+        });
+        let mut got = drain_until(&jobs, 2);
+        got.sort();
+        assert_eq!(got, ["answered", "asked"]);
+    }
+
+    #[test]
     fn each_lane_runs_on_its_own_named_thread() {
         let jobs = Jobs::new(egui::Context::default());
         for lane in [Lane::Account, Lane::Open, Lane::Io, Lane::Query] {
@@ -484,6 +546,7 @@ pub(crate) mod owners {
     pub fn owner(msg: &Msg) -> Owner {
         match msg {
             Msg::JobFailed { .. } | Msg::PresetsSynced(..) => Owner::Shared,
+            Msg::Match(MatchStep::SignedOut(..)) => Owner::Session,
             Msg::Resumed(..)
             | Msg::SignedIn(..)
             | Msg::Me(..)
@@ -504,6 +567,7 @@ pub(crate) mod owners {
             | Msg::Preopened { .. }
             | Msg::SidecarWritten(..)
             | Msg::BatchProgress(..)
+            | Msg::Match(..)
             | Msg::ExportProgress { .. }
             | Msg::ExportDone(..) => Owner::Library,
             Msg::DeviceReset(..) => Owner::App,
@@ -579,6 +643,10 @@ pub(crate) mod owners {
                 total: 2,
                 failed: Vec::new(),
                 finished: true,
+            }),
+            Msg::Match(MatchStep::Progress {
+                run: 99,
+                text: "stale".into(),
             }),
             Msg::ExportProgress { done: 1, total: 2 },
             Msg::ExportDone(Err("no".into())),

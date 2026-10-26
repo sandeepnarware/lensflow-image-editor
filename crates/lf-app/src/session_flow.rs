@@ -5,6 +5,8 @@
 
 use crate::account::{self, Credentials, Generation, Token};
 use crate::app::VERSION;
+use crate::dialogs::match_reference::MatchStep;
+use crate::dialogs::match_reference::steps::{self, AiLink};
 use crate::jobs::{Jobs, Lane, Msg};
 use crate::prefs::{Dirs, InstanceChoice, Prefs};
 use crate::presets_sync::{self, SyncError, SyncReport};
@@ -134,6 +136,40 @@ impl SessionFlow {
     pub fn refresh_now(&mut self, jobs: &Jobs, reason: &str) {
         log::info!("checking the entitlement before {reason}");
         self.spawn_gate(jobs);
+    }
+
+    /// What a match's AI steps need: the studio's client, the decision its cost line is
+    /// shown under, and a fresh check before each request. The check is the one
+    /// [`SessionFlow::refresh_now`] queues (the entitlement on the account lane, in order with
+    /// the other account work, its answer a `Msg::Gate` for this generation); the AI step
+    /// waits for the decision it carries. `None` when not signed in to a studio.
+    pub fn ai_link(&self, jobs: &Jobs) -> Option<AiLink> {
+        let decision = self.account.decision.clone()?;
+        let client = self.account.studio_client()?;
+        let studio_id = self.account.studio.as_ref()?.id;
+        let generation = self.account.generation;
+        let creds = Arc::clone(&self.account.creds);
+        let spawner = jobs.spawner();
+        let gate_client = client.clone();
+        let refresh: steps::Refresh = Box::new(move |cancel| {
+            log::info!("checking the entitlement before an AI request");
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (client, creds) = (gate_client.clone(), Arc::clone(&creds));
+            spawner.spawn(Lane::Account, "entitlement", move || {
+                let msg = account::gate(generation, &client, &creds, studio_id);
+                if let Msg::Gate(_, decision) = &msg {
+                    let _ = tx.send(decision.clone());
+                }
+                msg
+            });
+            steps::wait_for(&rx, cancel)
+        });
+        Some(AiLink {
+            client,
+            decision,
+            refresh,
+            generation,
+        })
     }
 
     /// The studio signed in to (its id keys the presets kept in the catalogue).
@@ -345,6 +381,11 @@ impl SessionFlow {
             | Msg::PresetsSynced(..)
             | Msg::Cleared => {}
             Msg::Download(progress) => self.download(progress, env),
+            Msg::Match(MatchStep::SignedOut(generation)) => {
+                if self.is_current(generation) {
+                    self.signed_out_by(&AccountError::Unauthorized, env.jobs);
+                }
+            }
             other => return Some(other),
         }
         None
@@ -708,6 +749,44 @@ mod tests {
         );
         // Signed out: no sync is asked for.
         assert!(flow.sync_target(Some(dir.path())).is_none());
+    }
+
+    #[test]
+    fn a_revoked_token_during_a_match_signs_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut flow = flow(dir.path());
+        flow.account.token = Some("secret".into());
+        let jobs = Jobs::new(egui::Context::default());
+        let mut toasts = Toasts::default();
+        let mut prefs = Prefs::default();
+        let dirs = Dirs {
+            config: dir.path().join("config"),
+            data: dir.path().join("data"),
+            cache: dir.path().join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let mut env = Env {
+            jobs: &jobs,
+            toasts: &mut toasts,
+            prefs: &mut prefs,
+            dirs: &dirs,
+            ctx: &ctx,
+        };
+        assert!(
+            flow.handle(Msg::Match(MatchStep::SignedOut(2)), &mut env)
+                .is_none()
+        );
+        assert!(
+            flow.account.token.is_some(),
+            "an older session's 401 is dropped"
+        );
+        assert!(
+            flow.handle(Msg::Match(MatchStep::SignedOut(3)), &mut env)
+                .is_none()
+        );
+        assert!(flow.account.token.is_none(), "signed out");
+        assert!(matches!(flow.session, Session::SigningIn { .. }));
+        assert!(flow.ai_link(&jobs).is_none(), "no AI without a session");
     }
 
     #[test]
