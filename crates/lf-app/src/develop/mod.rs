@@ -191,8 +191,21 @@ impl Develop {
 
     /// Commits a gesture still in progress (leaving the photo, quitting).
     pub fn finish_edit(&mut self, toasts: &mut Toasts) {
-        if self.session.edit().is_some_and(|e| e.dirty) {
-            self.run_edit(EditOp::Commit, toasts);
+        let (name, damaged) = match &self.state {
+            State::Ready(o, _) => (o.file_name.clone(), o.sidecar_error.is_some()),
+            _ => (
+                self.photo_path
+                    .as_deref()
+                    .map(open::file_name)
+                    .unwrap_or_default(),
+                false,
+            ),
+        };
+        let committed = self
+            .session
+            .finish(self.photo_path.as_deref(), damaged, &name, toasts);
+        if committed {
+            self.check_develop_change();
         }
     }
 
