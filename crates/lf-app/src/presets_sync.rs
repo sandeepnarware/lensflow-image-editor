@@ -102,19 +102,95 @@ pub fn run(client: &Client, catalog: &Catalog, studio_id: i64) -> Result<SyncRep
     }
     for r in &plan.pull {
         let at = server_time(r);
-        local::upsert(
-            catalog,
-            studio_id,
-            &r.name,
-            &r.settings,
-            &at,
-            Some(r.id),
-            Some(&at),
-        )?;
+        let pull = || {
+            local::upsert(
+                catalog,
+                studio_id,
+                &r.name,
+                &r.settings,
+                &at,
+                Some(r.id),
+                Some(&at),
+            )
+        };
+        match pull() {
+            Err(lf_catalog::CatalogError::PresetNameTaken(_)) => {
+                // Another row here still has the name (names changed on the server).
+                make_room(
+                    client,
+                    catalog,
+                    studio_id,
+                    &r.name,
+                    &plan.pull,
+                    &remote,
+                    &mut report,
+                )?;
+                pull()?;
+            }
+            other => {
+                other?;
+            }
+        }
         report.pulled += 1;
     }
     log::info!("studio presets synced: {report:?}");
     Ok(report)
+}
+
+/// Frees `name` for a pull. The row holding it is renamed: to a passing name when its own
+/// pull comes later in this sync (names swapped on the server), else to `<name> (desktop)`,
+/// pushed as a new preset (both kept, a conflict).
+fn make_room(
+    client: &Client,
+    catalog: &Catalog,
+    studio_id: i64,
+    name: &str,
+    pulls: &[Preset],
+    remote: &[Preset],
+    report: &mut SyncReport,
+) -> Result<(), SyncError> {
+    let Some(other) = local::find(catalog, studio_id, name)? else {
+        return Ok(());
+    };
+    let taken = |n: &str| -> Result<bool, SyncError> {
+        Ok(local::find(catalog, studio_id, n)?.is_some() || remote.iter().any(|r| r.name == n))
+    };
+    let free = |stem: &str| -> Result<String, SyncError> {
+        let first = format!("{name} ({stem})");
+        if !taken(&first)? {
+            return Ok(first);
+        }
+        for i in 2.. {
+            let next = format!("{name} ({stem} {i})");
+            if !taken(&next)? {
+                return Ok(next);
+            }
+        }
+        unreachable!("an unbounded range")
+    };
+    let pulled_later = other
+        .remote_id
+        .is_some_and(|id| pulls.iter().any(|p| p.id == id));
+    if pulled_later {
+        local::rename(catalog, other.id, &free("renaming")?)?;
+        return Ok(());
+    }
+    let copy = free("desktop")?;
+    let saved = presets::create(client, &copy, &other.settings)?;
+    let at = server_time(&saved);
+    local::rename(catalog, other.id, &copy)?;
+    local::upsert(
+        catalog,
+        studio_id,
+        &copy,
+        &other.settings,
+        &at,
+        Some(saved.id),
+        Some(&at),
+    )?;
+    report.pushed += 1;
+    report.conflicts += 1;
+    Ok(())
 }
 
 fn as_local(rows: &[LocalPresetRow]) -> Vec<LocalPreset> {
@@ -278,6 +354,127 @@ mod tests {
         assert_eq!(report.deleted, 1);
         assert!(local::list(&c, STUDIO).unwrap().is_empty());
         assert!(local::tombstones(&c, STUDIO).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_server_rename_onto_a_local_name_keeps_both_and_does_not_abort() {
+        let server = MockServer::start();
+        let (_d, c) = catalogue();
+        // "A" synced as 9; renamed "X" on the web. "X" was also made here, never synced.
+        local::upsert(
+            &c,
+            STUDIO,
+            "A",
+            &json!({"v": 2, "exposure": 1}),
+            T0,
+            Some(9),
+            Some(T0),
+        )
+        .unwrap();
+        local::save(&c, STUDIO, "X", &json!({"v": 2, "contrast": 30})).unwrap();
+        server.mock(|w, t| {
+            w.method(GET).path("/api/galleries/edit-presets");
+            t.status(200).json_body(json!({"data": [
+                {"id": 9, "name": "X", "settings": {"v": 2, "exposure": 1},
+                 "created_at": T0, "updated_at": "2026-10-12T00:00:00+00:00"}
+            ]}));
+        });
+        let post = server.mock(|w, t| {
+            w.method(POST)
+                .path("/api/galleries/edit-presets")
+                .json_body(json!({"name": "X (desktop)", "settings": {"v": 2, "contrast": 30}}));
+            t.status(201).json_body(json!({"data":
+                {"id": 10, "name": "X (desktop)", "settings": {"v": 2, "contrast": 30},
+                 "created_at": T0, "updated_at": "2026-10-13T00:00:00+00:00"}
+            }));
+        });
+        let report = run(&client(&server), &c, STUDIO).unwrap();
+        post.assert();
+        assert_eq!(report.conflicts, 1);
+        assert_eq!(
+            rows(&c),
+            [
+                ("X".into(), Some(9), json!({"v": 2, "exposure": 1})),
+                (
+                    "X (desktop)".into(),
+                    Some(10),
+                    json!({"v": 2, "contrast": 30})
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn names_swapped_on_the_server_are_pulled_without_a_clash() {
+        let server = MockServer::start();
+        let (_d, c) = catalogue();
+        local::upsert(
+            &c,
+            STUDIO,
+            "A",
+            &json!({"v": 2, "exposure": 1}),
+            T0,
+            Some(9),
+            Some(T0),
+        )
+        .unwrap();
+        local::upsert(
+            &c,
+            STUDIO,
+            "B",
+            &json!({"v": 2, "exposure": 2}),
+            T0,
+            Some(12),
+            Some(T0),
+        )
+        .unwrap();
+        server.mock(|w, t| {
+            w.method(GET).path("/api/galleries/edit-presets");
+            t.status(200).json_body(json!({"data": [
+                {"id": 9, "name": "B", "settings": {"v": 2, "exposure": 1},
+                 "created_at": T0, "updated_at": "2026-10-12T00:00:00+00:00"},
+                {"id": 12, "name": "A", "settings": {"v": 2, "exposure": 2},
+                 "created_at": T0, "updated_at": "2026-10-12T00:00:00+00:00"}
+            ]}));
+        });
+        let report = run(&client(&server), &c, STUDIO).unwrap();
+        assert_eq!((report.pulled, report.pushed, report.conflicts), (2, 0, 0));
+        assert_eq!(
+            rows(&c),
+            [
+                ("A".into(), Some(12), json!({"v": 2, "exposure": 2})),
+                ("B".into(), Some(9), json!({"v": 2, "exposure": 1})),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_preset_saved_again_after_a_web_delete_survives_the_sync() {
+        // Deleted here while offline, deleted on the web by a teammate, then saved again
+        // here: the new one is pushed, never purged.
+        let server = MockServer::start();
+        let (_d, c) = catalogue();
+        let id =
+            local::upsert(&c, STUDIO, "Warm", &json!({"v": 2}), T0, Some(9), Some(T0)).unwrap();
+        local::delete(&c, id).unwrap();
+        local::save(&c, STUDIO, "Warm", &json!({"v": 2, "temperature": 30})).unwrap();
+        server.mock(|w, t| {
+            w.method(GET).path("/api/galleries/edit-presets");
+            t.status(200).json_body(json!({"data": []}));
+        });
+        let post = server.mock(|w, t| {
+            w.method(POST).path("/api/galleries/edit-presets");
+            t.status(201).json_body(json!({"data":
+                {"id": 20, "name": "Warm", "settings": {"v": 2, "temperature": 30},
+                 "created_at": T0, "updated_at": "2026-10-13T00:00:00+00:00"}
+            }));
+        });
+        run(&client(&server), &c, STUDIO).unwrap();
+        post.assert();
+        assert_eq!(
+            rows(&c),
+            [("Warm".into(), Some(20), json!({"v": 2, "temperature": 30}))]
+        );
     }
 
     #[test]

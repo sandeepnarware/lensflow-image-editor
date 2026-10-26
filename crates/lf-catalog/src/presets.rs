@@ -145,10 +145,11 @@ pub fn upsert(
     Ok(id)
 }
 
-/// Saves a preset made on this computer, now: a row of that name (a tombstone too) is
-/// replaced and keeps its link to the server, so the sync updates it there.
+/// Saves a preset made on this computer, now. A live row of that name is replaced and keeps
+/// its link to the server, so the sync updates it there; a tombstone of that name comes back
+/// as a plainly new preset (no link), since its server copy is on its way out.
 pub fn save(catalog: &Catalog, studio_id: i64, name: &str, settings: &Value) -> Result<i64> {
-    let existing = find(catalog, studio_id, name)?;
+    let existing = find(catalog, studio_id, name)?.filter(|r| r.deleted_at.is_none());
     let (remote_id, synced_at) = existing.map_or((None, None), |r| (r.remote_id, r.synced_at));
     upsert(
         catalog,
@@ -161,9 +162,9 @@ pub fn save(catalog: &Catalog, studio_id: i64, name: &str, settings: &Value) -> 
     )
 }
 
-fn stamp(catalog: &Catalog, sql: &str, id: i64, name: Option<&str>) -> Result<()> {
+fn stamp(catalog: &Catalog, id: i64, sql: &str, params: impl rusqlite::Params) -> Result<()> {
     let tx = catalog.write_tx()?;
-    let n = tx.execute(sql, rusqlite::params![id, ts(now()), name])?;
+    let n = tx.execute(sql, params)?;
     tx.commit()?;
     if n == 0 {
         return Err(CatalogError::NotFound(format!("preset {id}")));
@@ -175,9 +176,9 @@ fn stamp(catalog: &Catalog, sql: &str, id: i64, name: Option<&str>) -> Result<()
 pub fn rename(catalog: &Catalog, id: i64, name: &str) -> Result<()> {
     stamp(
         catalog,
-        "UPDATE presets SET name = ?3, updated_at = ?2 WHERE id = ?1",
         id,
-        Some(name),
+        "UPDATE presets SET name = ?3, updated_at = ?2 WHERE id = ?1",
+        rusqlite::params![id, ts(now()), name],
     )
 }
 
@@ -185,9 +186,9 @@ pub fn rename(catalog: &Catalog, id: i64, name: &str) -> Result<()> {
 pub fn delete(catalog: &Catalog, id: i64) -> Result<()> {
     stamp(
         catalog,
-        "UPDATE presets SET deleted_at = ?2, updated_at = ?2 WHERE id = ?1 AND ?3 IS NULL",
         id,
-        None,
+        "UPDATE presets SET deleted_at = ?2, updated_at = ?2 WHERE id = ?1",
+        rusqlite::params![id, ts(now())],
     )
 }
 

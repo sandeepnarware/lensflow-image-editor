@@ -104,14 +104,14 @@ fn only_one_side_changed_the_newer_wins() {
     assert_eq!((plan.push.len(), plan.pull.len()), (1, 0));
     assert_eq!(plan.push[0].remote_id, Some(9));
 
-    let l = local("A", 1, "2026-10-09T00:00:00Z", Some(9), Some(SYNCED));
+    let l = local("A", 1, SYNCED, Some(9), Some(SYNCED));
     let plan = Sync::merge(&[l], &[], &[remote("A", 2, "2026-10-12T05:30:00+05:30")]);
     assert_eq!((plan.push.len(), plan.pull.len()), (0, 1));
 }
 
 #[test]
 fn unchanged_or_identical_does_nothing() {
-    let l = local("A", 1, "2026-10-09T00:00:00Z", Some(9), Some(SYNCED));
+    let l = local("A", 1, SYNCED, Some(9), Some(SYNCED));
     let plan = Sync::merge(&[l], &[], &[remote("A", 2, "2026-10-09T00:00:00Z")]);
     assert_eq!(plan, Default::default());
 }
@@ -157,7 +157,7 @@ fn conflict_copy_name_avoids_existing_names() {
 
 #[test]
 fn unreadable_timestamps_are_a_conflict() {
-    let l = local("A", 1, "garbage", Some(9), Some(SYNCED));
+    let l = local("A", 1, "garbage", Some(9), Some("garbage"));
     let plan = Sync::merge(&[l], &[], &[remote("A", 2, "2026-10-09T00:00:00Z")]);
     assert_eq!(plan.conflicts.len(), 1);
     let l = local("A", 1, "2026-10-12T00:00:00Z", Some(9), Some(SYNCED));
@@ -243,7 +243,7 @@ fn a_rename_follows_the_remote_id() {
     );
     assert!(plan.pull.is_empty() && plan.purge.is_empty());
     // Renamed on the web: pulled under the new name.
-    let l = local("A", 1, "2026-10-09T00:00:00Z", Some(9), Some(SYNCED));
+    let l = local("A", 1, SYNCED, Some(9), Some(SYNCED));
     let plan = Sync::merge(&[l], &[], &[remote("B", 1, "2026-10-12T00:00:00Z")]);
     assert_eq!(plan.pull.len(), 1);
     assert_eq!(plan.pull[0].name, "B");
@@ -263,4 +263,60 @@ fn an_identical_preset_never_linked_is_linked() {
         "pulled so the local row learns its remote id"
     );
     assert!(plan.push.is_empty() && plan.conflicts.is_empty());
+}
+
+#[test]
+fn a_local_change_is_seen_whatever_the_clocks_say() {
+    // Edited here a second after the sync, but this computer's clock is behind the
+    // server's: still a local change (the strings differ), pushed.
+    let l = local(
+        "A",
+        1,
+        "2026-10-09T23:59:59.500Z",
+        Some(9),
+        Some("2026-10-10T00:00:00.000Z"),
+    );
+    let plan = Sync::merge(&[l], &[], &[remote("A", 2, "2026-10-10T00:00:00+00:00")]);
+    assert_eq!(plan.push.len(), 1);
+    assert_eq!(plan.push[0].remote_id, Some(9));
+    // Within the same second as the sync: still a change.
+    let l = local(
+        "A",
+        1,
+        "2026-10-10T00:00:00.400Z",
+        Some(9),
+        Some("2026-10-10T00:00:00.000Z"),
+    );
+    let plan = Sync::merge(&[l], &[], &[remote("A", 2, "2026-10-10T00:00:00+00:00")]);
+    assert_eq!(plan.push.len(), 1);
+}
+
+#[test]
+fn a_preset_changed_here_but_deleted_on_the_web_is_pushed_as_new() {
+    let l = local("Warm", 1, "2026-10-12T00:00:00.000Z", Some(9), Some(SYNCED));
+    let plan = Sync::merge(&[l], &[], &[]);
+    assert!(plan.purge.is_empty(), "never purged: it changed here");
+    assert_eq!(plan.push.len(), 1);
+    assert_eq!(
+        plan.push[0].remote_id, None,
+        "a create, not an update of a gone id"
+    );
+}
+
+#[test]
+fn a_server_rename_onto_a_local_name_keeps_the_local_one_as_a_copy() {
+    // "A" (linked to 9, unchanged) was renamed "X" on the web; "X" is also a preset made
+    // here and never synced.
+    let a = local("A", 1, SYNCED, Some(9), Some(SYNCED));
+    let x = local("X", 2, "2026-10-11T00:00:00Z", None, None);
+    let plan = Sync::merge(&[a, x], &[], &[remote("X", 1, "2026-10-12T00:00:00Z")]);
+    assert_eq!(plan.purge, ["X"], "the local X frees its name");
+    assert_eq!(plan.push.len(), 1);
+    assert_eq!(
+        (plan.push[0].name.as_str(), plan.push[0].remote_id),
+        ("X (desktop)", None)
+    );
+    assert_eq!(plan.push[0].settings, json!({"v": 2}));
+    assert_eq!(plan.pull.len(), 1, "the web's X is pulled onto A's row");
+    assert_eq!(plan.conflicts.len(), 1);
 }

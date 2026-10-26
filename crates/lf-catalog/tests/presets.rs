@@ -116,8 +116,11 @@ fn presets_crud_round_trip() {
     assert!(gone[0].deleted_at.is_some());
     assert!(presets::tombstones(&c, OTHER).unwrap().is_empty());
 
-    // Saving the name again brings the row back.
+    // Saving the name again brings the row back, as a new preset: no link to the server
+    // copy that is being deleted.
     presets::save(&c, STUDIO, "Golden", &json!({"v": 2})).unwrap();
+    let back = presets::find(&c, STUDIO, "Golden").unwrap().unwrap();
+    assert_eq!((back.remote_id, back.synced_at), (None, None));
     assert_eq!(
         names(&presets::list(&c, STUDIO).unwrap()),
         ["Cool", "Golden"]
@@ -128,4 +131,41 @@ fn presets_crud_round_trip() {
     presets::purge(&c, warm).unwrap();
     assert_eq!(names(&presets::list(&c, STUDIO).unwrap()), ["Cool"]);
     assert!(presets::tombstones(&c, STUDIO).unwrap().is_empty());
+}
+
+#[test]
+fn migration_6_keeps_existing_presets_under_no_studio() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join(".lensflow");
+    std::fs::create_dir_all(&db).unwrap();
+    {
+        // A version-5 catalogue's presets table (the other tables do not matter here).
+        let conn = rusqlite::Connection::open(db.join("catalog.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_version (version INTEGER NOT NULL);
+             INSERT INTO schema_version (version) VALUES (1), (2), (3), (4), (5);
+             CREATE TABLE presets (
+                 id INTEGER PRIMARY KEY,
+                 name TEXT NOT NULL UNIQUE,
+                 settings TEXT NOT NULL,
+                 updated_at TEXT NOT NULL,
+                 remote_id INTEGER,
+                 synced_at TEXT
+             );
+             INSERT INTO presets (name, settings, updated_at, remote_id, synced_at)
+             VALUES ('Old', '{\"v\":2,\"exposure\":1}', '2026-10-01T00:00:00.000Z', 4,
+                     '2026-10-01T00:00:00.000Z');",
+        )
+        .unwrap();
+    }
+    let c = Catalog::open(dir.path()).unwrap();
+    assert_eq!(c.schema_version().unwrap(), 6);
+    let rows = presets::list(&c, 0).unwrap();
+    assert_eq!(names(&rows), ["Old"]);
+    assert_eq!(rows[0].remote_id, Some(4));
+    assert_eq!(rows[0].settings["exposure"], 1);
+    assert_eq!(rows[0].deleted_at, None);
+    // The same name is now free in a real studio.
+    presets::save(&c, STUDIO, "Old", &json!({})).unwrap();
+    assert_eq!(presets::list(&c, STUDIO).unwrap().len(), 1);
 }
