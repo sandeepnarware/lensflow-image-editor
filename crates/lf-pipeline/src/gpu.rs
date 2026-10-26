@@ -7,7 +7,9 @@
 //! default), for [`Gpu::take_error`]; a lost device sets a flag that every call checks.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::error::PipelineError;
 use crate::passes::Pipelines;
@@ -176,6 +178,39 @@ impl Gpu {
             return Err(PipelineError::DeviceLost);
         }
         Ok(())
+    }
+
+    /// Waits for `rx` (fed by a `map_async` callback) while driving the device, for at most
+    /// `limit`. Never blocks without bound: a lost device returns [`PipelineError::DeviceLost`]
+    /// and a device that does not answer in time returns [`PipelineError::Timeout`]
+    /// (an unbounded `poll(wait_indefinitely)` has hung on a software Vulkan device).
+    pub fn wait_for<T>(&self, rx: &Receiver<T>, limit: Duration) -> Result<T, PipelineError> {
+        let deadline = Instant::now() + limit;
+        loop {
+            let polled = self.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_millis(100)),
+            });
+            match rx.try_recv() {
+                Ok(v) => return Ok(v),
+                Err(TryRecvError::Disconnected) => {
+                    return Err(PipelineError::Readback("the answer was dropped".into()));
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+            if self.is_lost() {
+                return Err(PipelineError::DeviceLost);
+            }
+            match polled {
+                Ok(_) | Err(wgpu::PollError::Timeout) => {}
+                Err(e) => return Err(PipelineError::Readback(e.to_string())),
+            }
+            if Instant::now() >= deadline {
+                return Err(PipelineError::Timeout(limit.as_secs()));
+            }
+            // A poll that returned at once (nothing pending) must not spin.
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     /// The longest texture edge this device accepts.

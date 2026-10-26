@@ -466,11 +466,9 @@ fn copy_band(
             let _ = sender.send(r);
         },
     );
-    gpu.device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .map_err(|e| PipelineError::Readback(e.to_string()))?;
-    receiver
-        .recv()
-        .map_err(|e| PipelineError::Readback(e.to_string()))?
+    gpu.wait_for(&receiver, READBACK_LIMIT)?
         .map_err(|e| PipelineError::Readback(e.to_string()))
 }
+
+/// The longest a readback waits for the device.
+const READBACK_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);

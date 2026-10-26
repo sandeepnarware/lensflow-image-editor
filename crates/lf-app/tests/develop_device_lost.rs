@@ -47,8 +47,39 @@ fn step_until(h: &mut Harness<'static, State>, what: &str, done: impl Fn(&State)
     h.step();
 }
 
+/// Runs `body` on its own thread and fails after `limit` instead of hanging the whole run:
+/// on a stall it dumps every thread's stack (`gdb`, when installed) and panics with a plain
+/// message. For GPU tests that destroy a device, where a wait on the dead device could hang.
+fn with_timeout(limit: Duration, body: impl FnOnce() + Send + 'static) {
+    let (done, finished) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        body();
+        let _ = done.send(());
+    });
+    match finished.recv_timeout(limit) {
+        Ok(()) => worker.join().unwrap(),
+        // The sender is gone without a message: the body panicked; show its message.
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            std::panic::resume_unwind(worker.join().unwrap_err())
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            let pid = std::process::id().to_string();
+            let _ = std::process::Command::new("gdb")
+                .args(["-p", &pid, "-batch", "-ex", "thread apply all bt 30"])
+                .status();
+            panic!(
+                "the device-lost test stalled for {limit:?}: a wait on the lost device never returned"
+            );
+        }
+    }
+}
+
 #[test]
 fn losing_the_device_drops_the_renderer_and_never_panics() {
+    with_timeout(Duration::from_secs(120), device_is_lost_in_develop);
+}
+
+fn device_is_lost_in_develop() {
     let gpu = match Gpu::new() {
         Ok(gpu) => gpu,
         Err(PipelineError::NoAdapter) => {
@@ -106,9 +137,10 @@ fn losing_the_device_drops_the_renderer_and_never_panics() {
 
     // wgpu loses a destroyed device (calling the callback) at the first poll that finds its
     // queue empty; in the window, eframe polls every frame.
-    gpu.device
-        .poll(eframe::wgpu::PollType::wait_indefinitely())
-        .unwrap();
+    let _ = gpu.device.poll(eframe::wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: Some(Duration::from_secs(30)),
+    });
     gpu.device.destroy();
     let _ = gpu.device.poll(eframe::wgpu::PollType::Poll);
     step_until(&mut h, "the device-lost state", |s| {
