@@ -1,10 +1,14 @@
-//! Modal dialogs shared by Library and Develop: the group picker (copy edits), saving a
-//! preset, and applying edits to many photos.
+//! Modal dialogs: the group picker (copy settings), saving a preset, applying edits to many
+//! photos, export, match a reference, and the window's own (About, Preferences, Keyboard
+//! shortcuts).
 
+pub mod about;
 pub mod batch;
 pub mod export;
 pub mod group_picker;
+pub mod keys;
 pub mod match_reference;
+pub mod preferences;
 pub mod save_preset;
 
 use crate::theme;

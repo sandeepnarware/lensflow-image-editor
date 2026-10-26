@@ -1,0 +1,378 @@
+//! Everything the window can be asked to do from a menu or the keyboard ([`Action`]), and the
+//! one keyboard map ([`MAP`]) that binds keys to actions. The app reads the map once per frame
+//! in `logic()`; the menus show the same map's keys; Help → Keyboard shortcuts lists it.
+//!
+//! The keys follow Lightroom where it has a default. `Ctrl` reads as `Cmd` on macOS
+//! ([`Modifiers::COMMAND`]). Keys never fire while a text field (or any widget) has the
+//! keyboard, nor while a dialog is open; tool keys act only in Develop.
+
+use eframe::egui::{Event, InputState, Key, KeyboardShortcut, ModifierNames, Modifiers};
+
+/// What a menu item or a key asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Action {
+    // File
+    AddFolder,
+    Export,
+    Quit,
+    // Edit
+    Undo,
+    Redo,
+    CopySettings,
+    PasteSettings,
+    ApplyToSelected,
+    SelectAll,
+    Preferences,
+    // View
+    Library,
+    Develop,
+    BeforeAfter,
+    Fit,
+    ActualSize,
+    /// `Space`: fit ⇄ 100 %.
+    ToggleZoom,
+    // Photo
+    MatchReference,
+    AddVersion,
+    ResetAll,
+    // Account
+    SwitchStudio,
+    CheckEntitlement,
+    SignOut,
+    // Help
+    About,
+    ShowLogFolder,
+    KeyboardShortcuts,
+    // Keys only
+    CropTool,
+    SpotTool,
+    Previous,
+    Next,
+    Up,
+    Down,
+    LeaveTool,
+    ApplyCrop,
+    DeleteSpot,
+}
+
+impl Action {
+    /// The menu item's label (or what Help → Keyboard shortcuts calls it).
+    pub fn label(self) -> &'static str {
+        match self {
+            Action::AddFolder => "Add folder…",
+            Action::Export => "Export…",
+            Action::Quit => "Quit",
+            Action::Undo => "Undo",
+            Action::Redo => "Redo",
+            Action::CopySettings => "Copy settings…",
+            Action::PasteSettings => "Paste settings",
+            Action::ApplyToSelected => "Apply to selected…",
+            Action::SelectAll => "Select all",
+            Action::Preferences => "Preferences…",
+            Action::Library => "Library",
+            Action::Develop => "Develop",
+            Action::BeforeAfter => "Before/After",
+            Action::Fit => "Fit",
+            Action::ActualSize => "100 %",
+            Action::ToggleZoom => "Fit / 100 %",
+            Action::MatchReference => "Match a reference…",
+            Action::AddVersion => "Add version…",
+            Action::ResetAll => "Reset all edits",
+            Action::SwitchStudio => "Switch studio",
+            Action::CheckEntitlement => "Check entitlement now",
+            Action::SignOut => "Sign out",
+            Action::About => "About",
+            Action::ShowLogFolder => "Show log folder",
+            Action::KeyboardShortcuts => "Keyboard shortcuts",
+            Action::CropTool => "Crop and straighten",
+            Action::SpotTool => "Heal and clone spots",
+            Action::Previous => "Previous photo",
+            Action::Next => "Next photo",
+            Action::Up => "Up a row in the grid",
+            Action::Down => "Down a row in the grid",
+            Action::LeaveTool => "Leave the tool",
+            Action::ApplyCrop => "Apply the crop",
+            Action::DeleteSpot => "Remove the selected spot",
+        }
+    }
+
+    /// Shown while its key is held (`\`), not fired on a press.
+    pub fn held(self) -> bool {
+        self == Action::BeforeAfter
+    }
+}
+
+const fn key(k: Key) -> KeyboardShortcut {
+    KeyboardShortcut::new(Modifiers::NONE, k)
+}
+
+const fn cmd(k: Key) -> KeyboardShortcut {
+    KeyboardShortcut::new(Modifiers::COMMAND, k)
+}
+
+const fn cmd_shift(k: Key) -> KeyboardShortcut {
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), k)
+}
+
+/// A keyboard map: each entry binds one key to one action (an action may have two keys).
+pub struct Map(pub &'static [(Action, KeyboardShortcut)]);
+
+/// The window's keyboard map.
+pub const MAP: Map = Map(&[
+    (Action::Library, key(Key::G)),
+    (Action::Develop, key(Key::D)),
+    (Action::Export, cmd_shift(Key::E)),
+    (Action::CropTool, key(Key::R)),
+    (Action::SpotTool, key(Key::Q)),
+    (Action::BeforeAfter, key(Key::Backslash)),
+    (Action::Undo, cmd(Key::Z)),
+    (Action::Redo, cmd_shift(Key::Z)),
+    (Action::Redo, cmd(Key::Y)),
+    (Action::CopySettings, cmd_shift(Key::C)),
+    (Action::PasteSettings, cmd_shift(Key::V)),
+    (Action::SelectAll, cmd(Key::A)),
+    (Action::Previous, key(Key::ArrowLeft)),
+    (Action::Next, key(Key::ArrowRight)),
+    (Action::Up, key(Key::ArrowUp)),
+    (Action::Down, key(Key::ArrowDown)),
+    (Action::ToggleZoom, key(Key::Space)),
+    (Action::LeaveTool, key(Key::Escape)),
+    (Action::ApplyCrop, key(Key::Enter)),
+    (Action::DeleteSpot, key(Key::Delete)),
+    (Action::About, key(Key::F1)),
+]);
+
+impl Map {
+    /// Every entry, in the order Help lists them.
+    pub fn entries(&self) -> &'static [(Action, KeyboardShortcut)] {
+        self.0
+    }
+
+    /// The first key bound to `action` (the one a menu shows).
+    pub fn shortcut(&self, action: Action) -> Option<KeyboardShortcut> {
+        self.0.iter().find(|(a, _)| *a == action).map(|(_, s)| *s)
+    }
+
+    /// The action a press of `key` with `modifiers` means: the most specific entry whose
+    /// modifiers match (so `Ctrl+Shift+Z` is redo, never undo).
+    pub fn best(&self, key: Key, modifiers: Modifiers) -> Option<Action> {
+        self.0
+            .iter()
+            .filter(|(_, s)| s.logical_key == key && modifiers.matches_logically(s.modifiers))
+            .max_by_key(|(_, s)| modifier_count(s.modifiers))
+            .map(|(a, _)| *a)
+    }
+
+    /// Takes this frame's presses that mean an enabled action and returns those actions in
+    /// order (each once). A press whose action is disabled is left for the widgets (the
+    /// curve editor's `Delete`, say).
+    pub fn fired(&self, input: &mut InputState, enabled: impl Fn(Action) -> bool) -> Vec<Action> {
+        let mut fired = Vec::new();
+        input.events.retain(|event| {
+            let Event::Key {
+                key,
+                modifiers,
+                pressed: true,
+                ..
+            } = event
+            else {
+                return true;
+            };
+            match self.best(*key, *modifiers) {
+                Some(action) if !action.held() && enabled(action) => {
+                    if !fired.contains(&action) {
+                        fired.push(action);
+                    }
+                    false
+                }
+                _ => true,
+            }
+        });
+        fired
+    }
+
+    /// The key of a held action (`\` for Before/After) is down now.
+    pub fn is_held(&self, input: &InputState, action: Action) -> bool {
+        self.0.iter().any(|(a, s)| {
+            *a == action
+                && input.key_down(s.logical_key)
+                && input.modifiers.matches_logically(s.modifiers)
+        })
+    }
+
+    /// How Help shows an entry's key on this computer.
+    pub fn describe(shortcut: &KeyboardShortcut, mac: bool) -> String {
+        let names = if mac {
+            ModifierNames::SYMBOLS
+        } else {
+            ModifierNames::NAMES
+        };
+        shortcut.format(&names, mac)
+    }
+}
+
+/// The window's keys may fire: no widget has the keyboard (a text field being typed in, a
+/// slider stepped with the arrows) and no dialog is open.
+pub fn keys_free(ctx: &eframe::egui::Context) -> bool {
+    !ctx.egui_wants_keyboard_input() && !crate::dialogs::modal_open(ctx)
+}
+
+/// Reads [`MAP`] once per frame. `Esc` that just took the keyboard back from a field (egui
+/// lets go of the focus on `Esc` before anything reads the press) does not also leave the
+/// tool: it only cancelled the typing.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Keys {
+    was_free: bool,
+}
+
+impl Keys {
+    /// The actions this frame's presses fire; nothing while a widget has the keyboard, a
+    /// dialog is open or `blocked` (one of the caller's own dialogs).
+    pub fn read(
+        &mut self,
+        ctx: &eframe::egui::Context,
+        blocked: bool,
+        enabled: impl Fn(Action) -> bool,
+    ) -> Vec<Action> {
+        let free = keys_free(ctx) && !blocked;
+        let just_freed = free && !self.was_free;
+        self.was_free = free;
+        if !free {
+            return Vec::new();
+        }
+        ctx.input_mut(|i| MAP.fired(i, |a| !(just_freed && a == Action::LeaveTool) && enabled(a)))
+    }
+}
+
+fn modifier_count(m: Modifiers) -> u8 {
+    u8::from(m.alt) + u8::from(m.shift) + u8::from(m.ctrl || m.command || m.mac_cmd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// The plan's keyboard map (Global Constraints), entry by entry.
+    fn plan() -> Vec<(Action, KeyboardShortcut)> {
+        vec![
+            (Action::Library, key(Key::G)),
+            (Action::Develop, key(Key::D)),
+            (Action::Export, cmd_shift(Key::E)),
+            (Action::CropTool, key(Key::R)),
+            (Action::SpotTool, key(Key::Q)),
+            (Action::BeforeAfter, key(Key::Backslash)),
+            (Action::Undo, cmd(Key::Z)),
+            (Action::Redo, cmd_shift(Key::Z)),
+            (Action::Redo, cmd(Key::Y)),
+            (Action::CopySettings, cmd_shift(Key::C)),
+            (Action::PasteSettings, cmd_shift(Key::V)),
+            (Action::SelectAll, cmd(Key::A)),
+            (Action::Previous, key(Key::ArrowLeft)),
+            (Action::Next, key(Key::ArrowRight)),
+            (Action::ToggleZoom, key(Key::Space)),
+            (Action::LeaveTool, key(Key::Escape)),
+            (Action::DeleteSpot, key(Key::Delete)),
+            (Action::About, key(Key::F1)),
+        ]
+    }
+
+    /// What the keyboard sends for `Ctrl`/`Cmd` on each platform.
+    fn pressed(m: Modifiers, mac: bool) -> Modifiers {
+        let mut m = m;
+        if m.command {
+            if mac {
+                m.mac_cmd = true;
+            } else {
+                m.ctrl = true;
+            }
+        }
+        m
+    }
+
+    #[test]
+    fn every_planned_key_is_bound_exactly_once_on_every_platform() {
+        for (action, shortcut) in plan() {
+            let n = MAP
+                .entries()
+                .iter()
+                .filter(|(a, s)| *a == action && *s == shortcut)
+                .count();
+            assert_eq!(n, 1, "{action:?} on {shortcut:?} is bound {n} times");
+        }
+        for mac in [false, true] {
+            let mut seen = HashSet::new();
+            for (action, shortcut) in MAP.entries() {
+                let text = Map::describe(shortcut, mac);
+                assert!(
+                    seen.insert(text.clone()),
+                    "{text} is bound twice (mac: {mac})"
+                );
+                // A press of exactly this key means exactly this action, never a less
+                // specific one (Ctrl+Shift+Z is redo, not undo).
+                let modifiers = pressed(shortcut.modifiers, mac);
+                assert_eq!(
+                    MAP.best(shortcut.logical_key, modifiers),
+                    Some(*action),
+                    "{text} (mac: {mac})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn keys_never_fire_while_a_text_field_has_focus() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable as _;
+        let mut h = Harness::new_ui_state(
+            |ui, (keys, text, fired): &mut (Keys, String, Vec<Action>)| {
+                fired.extend(keys.read(ui.ctx(), false, |_| true));
+                let label = ui.label("Name");
+                ui.text_edit_singleline(text).labelled_by(label.id);
+            },
+            (Keys::default(), String::new(), Vec::new()),
+        );
+        h.run();
+        h.get_by_label("Name").click();
+        h.run();
+        h.key_press(Key::G);
+        h.run();
+        assert!(
+            h.state().2.is_empty(),
+            "G typed into the field fired nothing"
+        );
+        // Esc leaves the field and nothing else (not the crop tool, say).
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(h.state().2.is_empty(), "Esc only cancelled the typing");
+        h.key_press(Key::G);
+        h.run();
+        h.key_press(Key::Escape);
+        h.run();
+        assert_eq!(h.state().2, [Action::Library, Action::LeaveTool]);
+    }
+
+    #[test]
+    fn a_disabled_action_leaves_its_press_for_the_widgets() {
+        let mut input = InputState::default();
+        let press = |key, modifiers| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        input.events = vec![
+            press(
+                Key::Z,
+                pressed(Modifiers::COMMAND | Modifiers::SHIFT, false),
+            ),
+            press(Key::Delete, Modifiers::NONE),
+            press(Key::G, Modifiers::NONE),
+        ];
+        // Redo is not possible: Ctrl+Shift+Z must not fall through to undo.
+        let fired = MAP.fired(&mut input, |a| a != Action::Redo && a != Action::DeleteSpot);
+        assert_eq!(fired, vec![Action::Library]);
+        assert_eq!(input.events.len(), 2, "the redo and delete presses stay");
+    }
+}

@@ -214,6 +214,16 @@ impl Develop {
         }
     }
 
+    /// Photo → Add version…: asks for the version's name, as the section's button does.
+    pub fn ask_add_version(&mut self) {
+        if self.session.edit().is_none() {
+            return;
+        }
+        self.load_versions();
+        self.extras.versions.adding =
+            Some(versions::default_label(self.extras.versions.list.len()));
+    }
+
     /// Keeps the current settings as a version (a gesture in progress is committed first).
     pub fn add_version(&mut self, label: &str, toasts: &mut Toasts) {
         let damaged = self.sidecar_damaged();

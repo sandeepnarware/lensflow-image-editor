@@ -24,10 +24,11 @@ use crate::dialogs::match_reference::{
 };
 use crate::jobs::{Jobs, Lane, Msg};
 use crate::prefs::Prefs;
+use crate::shortcuts::{Action, Keys, MAP};
 use crate::theme;
 use crate::thumbs_ui::{ThumbEvent, Thumbs};
 use crate::toast::{Level, Toasts};
-use eframe::egui::{self, Key, Modifiers, RichText};
+use eframe::egui::{self, Key, RichText};
 use eframe::egui_wgpu::RenderState;
 use lf_catalog::{Folder, PhotoRow};
 use lf_pipeline::Gpu;
@@ -39,25 +40,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-/// The Edit menu's undo and redo, with their shortcuts (`Ctrl+Y` redoes too).
-pub const UNDO: &str = "Undo";
-pub const REDO: &str = "Redo";
-pub const UNDO_KEY: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
-pub const REDO_KEY: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z);
-/// Copy and paste of edits, and applying edits to the selection.
-pub const COPY: &str = "Copy edits…";
-pub const PASTE: &str = "Paste edits";
-pub const APPLY: &str = "Apply to selected…";
-pub const COPY_KEY: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::C);
-pub const PASTE_KEY: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::V);
-/// Export to disk.
-pub const EXPORT: &str = "Export…";
-pub const EXPORT_KEY: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::E);
 /// How long a paste waits for the system clipboard's text.
 const PASTE_WAIT: Duration = Duration::from_secs(1);
 
@@ -163,6 +145,11 @@ pub struct Library {
     match_wanted: Option<AiGate>,
     /// "Export N photos", while open or while its export runs (hidden).
     export: Option<ExportDialog>,
+    /// Preferences → Change…: the catalogue in use until another is chosen (the first-run
+    /// screen offers to keep it).
+    keep: Option<PathBuf>,
+    /// The keyboard map's reader.
+    keys: Keys,
 }
 
 impl Library {
@@ -208,7 +195,38 @@ impl Library {
             match_gate: AiGate::default(),
             match_wanted: None,
             export: None,
+            keep: None,
+            keys: Keys::default(),
         }
+    }
+
+    /// Why the catalogue cannot be changed now (an export or "Apply to N photos" is
+    /// running, or "Match a reference" is open), if it cannot.
+    pub fn restart_blocked(&self) -> Option<&'static str> {
+        if self.export.as_ref().is_some_and(ExportDialog::running) {
+            Some("Wait for the export to finish, then change the catalogue folder.")
+        } else if self.batch.as_ref().is_some_and(BatchDialog::running) {
+            Some("Wait for the edits to be applied, then change the catalogue folder.")
+        } else if self.matching.is_some() {
+            Some("Close “Match a reference” first, then change the catalogue folder.")
+        } else {
+            None
+        }
+    }
+
+    /// A fresh library asking for another catalogue folder (Preferences → Change…): the
+    /// first-run screen, with a way back to `keep`. `generation` is the old Develop view's,
+    /// so none of its open answers still on the way is shown here.
+    pub fn choose_another_root(&mut self, keep: Option<PathBuf>, generation: u64) {
+        self.root = None;
+        self.stage = Stage::NoRoot;
+        self.keep = keep;
+        self.develop.carry_generation(generation);
+    }
+
+    /// The catalogue folder offered back on the first-run screen after Change….
+    pub fn kept_root(&self) -> Option<&Path> {
+        self.keep.as_deref()
     }
 
     /// egui's renderer, for the Develop preview's shared texture (none in headless tests).
@@ -491,6 +509,23 @@ impl Library {
 
     /// Handles the library's messages; anything else is handed back.
     pub fn handle(&mut self, msg: Msg, env: &mut Env) -> Option<Msg> {
+        if self.stage != Stage::Ready
+            && matches!(
+                msg,
+                Msg::Photos { .. }
+                    | Msg::Scanned { .. }
+                    | Msg::ImportProgress(..)
+                    | Msg::ImportDone(..)
+                    | Msg::MarkedMissing { .. }
+                    | Msg::FolderRemoved { .. }
+                    | Msg::PoolReady(..)
+            )
+        {
+            // Work for a catalogue left behind (Preferences → Change…): the Io lane runs it
+            // before this library's catalogue opens.
+            log::debug!("library not open: dropped {msg:?}");
+            return None;
+        }
         match msg {
             Msg::FolderChosen {
                 purpose,
@@ -516,7 +551,9 @@ impl Library {
                 }
             }
             Msg::ImportDone(result) => self.import_done(result, env),
-            Msg::Folders(result) => match result {
+            Msg::Folders { root, result } => match result {
+                // A list from a catalogue left behind (Preferences → Change…).
+                _ if self.root.as_deref() != Some(root.as_path()) => {}
                 Ok(folders) => self.folders_loaded(folders, env),
                 Err(e) => env
                     .toasts
@@ -713,7 +750,8 @@ impl Library {
             return;
         };
         env.jobs.spawn(Lane::Query, "folders", move || {
-            Msg::Folders(catalog_ext::folders(&root))
+            let result = catalog_ext::folders(&root);
+            Msg::Folders { root, result }
         });
     }
 
@@ -835,7 +873,6 @@ impl Library {
                 }
             }
         }
-        self.keys(ui.ctx(), env);
         self.sync_develop(env);
         self.develop.tick(ui.ctx(), env.jobs, env.toasts);
 
@@ -846,82 +883,6 @@ impl Library {
                 ui.add_space(4.0);
             });
         }
-        egui::Panel::top("library-menu").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.menu_button("File", |ui| {
-                    if ui
-                        .add_enabled(self.can_add(), egui::Button::new("Add folder…"))
-                        .clicked()
-                    {
-                        self.add_folder(env);
-                    }
-                    let export = egui::Button::new(EXPORT)
-                        .shortcut_text(ui.ctx().format_shortcut(&EXPORT_KEY));
-                    if ui
-                        .add_enabled(
-                            !self.selection.current.is_empty() || self.export.is_some(),
-                            export,
-                        )
-                        .clicked()
-                    {
-                        self.open_export(env);
-                    }
-                });
-                ui.menu_button("Photo", |ui| {
-                    if ui
-                        .add_enabled(
-                            !self.selection.current.is_empty(),
-                            egui::Button::new(matching::MENU),
-                        )
-                        .clicked()
-                    {
-                        self.open_match();
-                    }
-                });
-                ui.menu_button("Edit", |ui| {
-                    let editing = matches!(self.mode, Mode::Develop(_));
-                    let undo =
-                        egui::Button::new(UNDO).shortcut_text(ui.ctx().format_shortcut(&UNDO_KEY));
-                    if ui
-                        .add_enabled(editing && self.develop.can_undo(), undo)
-                        .clicked()
-                    {
-                        self.develop.undo(env.toasts);
-                    }
-                    let redo =
-                        egui::Button::new(REDO).shortcut_text(ui.ctx().format_shortcut(&REDO_KEY));
-                    if ui
-                        .add_enabled(editing && self.develop.can_redo(), redo)
-                        .clicked()
-                    {
-                        self.develop.redo(env.toasts);
-                    }
-                    ui.separator();
-                    let copy =
-                        egui::Button::new(COPY).shortcut_text(ui.ctx().format_shortcut(&COPY_KEY));
-                    if ui.add_enabled(self.copy_source().is_some(), copy).clicked() {
-                        self.copying = true;
-                    }
-                    let paste = egui::Button::new(PASTE)
-                        .shortcut_text(ui.ctx().format_shortcut(&PASTE_KEY));
-                    if ui
-                        .add_enabled(!self.selection.current.is_empty(), paste)
-                        .clicked()
-                    {
-                        self.paste(ui.ctx(), env);
-                    }
-                    if ui
-                        .add_enabled(!self.selection.current.is_empty(), egui::Button::new(APPLY))
-                        .clicked()
-                    {
-                        self.open_batch(None);
-                    }
-                });
-            });
-        });
-        egui::Panel::bottom("library-status")
-            .exact_size(24.0)
-            .show(ui, |ui| self.status(ui));
         egui::Panel::bottom("filmstrip")
             .exact_size(filmstrip::HEIGHT)
             .show(ui, |ui| self.filmstrip(ui, env));
@@ -957,125 +918,172 @@ impl Library {
         self.reveal_active = false;
     }
 
-    fn keys(&mut self, ctx: &egui::Context, env: &mut Env) {
-        if ctx.egui_wants_keyboard_input()
-            || crate::dialogs::modal_open(ctx)
-            || self.confirm_remove.is_some()
+    /// A dialog of the library's is open: the window's keys wait until it closes.
+    fn dialog_open(&self) -> bool {
+        self.confirm_remove.is_some()
             || self.confirm_missing.is_some()
             || self.adding
             || self.copying
             || self.batch.is_some()
             || self.matching.is_some()
             || self.export.as_ref().is_some_and(|d| d.visible)
-        {
-            return;
+    }
+
+    /// Whether `action` (a menu item or a key) is possible now in the library or Develop.
+    pub fn enabled(&self, action: Action) -> bool {
+        if self.stage != Stage::Ready {
+            return false;
         }
-        let (copy, paste, export) = ctx.input_mut(|i| {
-            (
-                i.consume_shortcut(&COPY_KEY),
-                i.consume_shortcut(&PASTE_KEY),
-                i.consume_shortcut(&EXPORT_KEY),
-            )
-        });
-        if export {
-            self.open_export(env);
+        let develop = matches!(self.mode, Mode::Develop(_));
+        let selected = !self.selection.current.is_empty();
+        match action {
+            Action::AddFolder => self.can_add(),
+            Action::Export => selected || self.export.is_some(),
+            Action::Undo => develop && self.develop.can_undo(),
+            Action::Redo => develop && self.develop.can_redo(),
+            Action::CopySettings => self.copy_source().is_some(),
+            Action::PasteSettings | Action::ApplyToSelected | Action::MatchReference => selected,
+            Action::SelectAll | Action::Previous | Action::Next => !self.order.is_empty(),
+            Action::Library => develop,
+            Action::Develop => !develop && self.selection.active().is_some(),
+            Action::Up | Action::Down => !develop && !self.order.is_empty(),
+            Action::BeforeAfter
+            | Action::Fit
+            | Action::ActualSize
+            | Action::ToggleZoom
+            | Action::AddVersion
+            | Action::ResetAll => develop && self.develop.is_ready(),
+            Action::CropTool
+            | Action::SpotTool
+            | Action::LeaveTool
+            | Action::ApplyCrop
+            | Action::DeleteSpot => develop && self.develop.tool_enabled(action),
+            Action::Quit
+            | Action::Preferences
+            | Action::SwitchStudio
+            | Action::CheckEntitlement
+            | Action::SignOut
+            | Action::About
+            | Action::ShowLogFolder
+            | Action::KeyboardShortcuts => false,
         }
-        if copy && self.copy_source().is_some() {
-            self.copying = true;
+    }
+
+    /// Does `action` when it is the library's and possible now; false otherwise (the app's
+    /// own actions: Quit, Preferences, the Account and Help menus).
+    pub fn run(&mut self, action: Action, ctx: &egui::Context, env: &mut Env) -> bool {
+        if !self.enabled(action) {
+            return false;
         }
-        if paste {
-            self.paste(ctx, env);
-        }
-        if matches!(self.mode, Mode::Develop(_)) {
-            // Ctrl+Shift+Z first: Ctrl+Z also matches it.
-            let (redo, undo) = ctx.input_mut(|i| {
-                let redo =
-                    i.consume_shortcut(&REDO_KEY) || i.consume_key(Modifiers::COMMAND, Key::Y);
-                (redo, i.consume_shortcut(&UNDO_KEY))
-            });
-            if redo {
-                self.develop.redo(env.toasts);
-            }
-            if undo {
-                self.develop.undo(env.toasts);
-            }
-        }
-        let (left, right, up, down, all, develop, library) = ctx.input_mut(|i| {
-            (
-                i.consume_key(Modifiers::NONE, Key::ArrowLeft),
-                i.consume_key(Modifiers::NONE, Key::ArrowRight),
-                i.consume_key(Modifiers::NONE, Key::ArrowUp),
-                i.consume_key(Modifiers::NONE, Key::ArrowDown),
-                i.consume_key(Modifiers::COMMAND, Key::A),
-                i.consume_key(Modifiers::NONE, Key::D),
-                i.consume_key(Modifiers::NONE, Key::G),
-            )
-        });
-        let in_grid = self.mode == Mode::Library;
-        let moves = [
-            (left, Dir::Left),
-            (right, Dir::Right),
-            (up && in_grid, Dir::Up),
-            (down && in_grid, Dir::Down),
-        ];
-        for (pressed, dir) in moves {
-            if !pressed {
-                continue;
-            }
-            if let Mode::Develop(current) = self.mode {
-                // Develop steps over missing photos to the next one it can open.
-                let step = if dir == Dir::Left { -1 } else { 1 };
-                let missing = |id: i64| self.photo(id).is_none_or(|p| p.missing);
-                if let Some(id) = next_openable(&self.order, current, step, missing) {
-                    self.selection.click(id);
-                    self.reveal_active = true;
-                    self.open_photo(id, env);
-                }
-            } else {
-                self.selection.arrow(dir, self.columns, &self.order);
+        match action {
+            Action::AddFolder => self.add_folder(env),
+            Action::Export => self.open_export(env),
+            Action::Undo => self.develop.undo(env.toasts),
+            Action::Redo => self.develop.redo(env.toasts),
+            Action::CopySettings => self.copying = true,
+            Action::PasteSettings => self.paste(ctx, env),
+            Action::ApplyToSelected => self.open_batch(None),
+            // The filmstrip in Develop too: the open photo stays the active one.
+            Action::SelectAll => self.selection.select_all(&self.order),
+            Action::MatchReference => self.open_match(),
+            Action::Library => {
+                self.mode = Mode::Library;
                 self.reveal_active = true;
             }
+            Action::Develop => {
+                if let Some(id) = self.selection.active() {
+                    self.open_photo(id, env);
+                }
+            }
+            Action::Previous => self.step(Dir::Left, env),
+            Action::Next => self.step(Dir::Right, env),
+            Action::Up => self.step(Dir::Up, env),
+            Action::Down => self.step(Dir::Down, env),
+            Action::BeforeAfter => self.develop.toggle_before(),
+            Action::Fit | Action::ActualSize | Action::ToggleZoom => self.develop.zoom(action),
+            Action::AddVersion => self.develop.ask_add_version(),
+            Action::ResetAll => self.develop.reset_all(env.toasts),
+            Action::CropTool
+            | Action::SpotTool
+            | Action::LeaveTool
+            | Action::ApplyCrop
+            | Action::DeleteSpot => self.develop.tool_command(action, env.toasts),
+            _ => return false,
         }
-        if all {
-            // The filmstrip in Develop too: the open photo stays the active one.
-            self.selection.select_all(&self.order);
+        true
+    }
+
+    /// The keyboard map, once per frame before drawing: does the library's keys and returns
+    /// the presses meant for the app (`others` says which of its actions are possible).
+    /// Nothing fires while a widget has the keyboard or a dialog is open; the Before/After
+    /// key shows the photo as it was while held.
+    pub fn shortcuts(
+        &mut self,
+        ctx: &egui::Context,
+        env: &mut Env,
+        others: impl Fn(Action) -> bool,
+    ) -> Vec<Action> {
+        let blocked = self.dialog_open();
+        let held = !blocked
+            && crate::shortcuts::keys_free(ctx)
+            && matches!(self.mode, Mode::Develop(_))
+            && ctx.input(|i| MAP.is_held(i, Action::BeforeAfter));
+        self.develop.set_before_held(held);
+        let mut keys = self.keys;
+        let fired = keys.read(ctx, blocked, |a| self.enabled(a) || others(a));
+        self.keys = keys;
+        let mut rest = Vec::new();
+        for action in fired {
+            if !self.run(action, ctx, env) {
+                rest.push(action);
+            }
         }
-        if develop
-            && in_grid
-            && let Some(id) = self.selection.active()
-        {
-            self.open_photo(id, env);
-        }
-        if library {
-            self.mode = Mode::Library;
+        rest
+    }
+
+    /// An arrow key: moves the selection in the grid; in Develop, opens the previous or next
+    /// photo it can (stepping over missing ones).
+    fn step(&mut self, dir: Dir, env: &mut Env) {
+        if let Mode::Develop(current) = self.mode {
+            let step = match dir {
+                Dir::Left => -1,
+                Dir::Right => 1,
+                Dir::Up | Dir::Down => return,
+            };
+            let missing = |id: i64| self.photo(id).is_none_or(|p| p.missing);
+            if let Some(id) = next_openable(&self.order, current, step, missing) {
+                self.selection.click(id);
+                self.reveal_active = true;
+                self.open_photo(id, env);
+            }
+        } else {
+            self.selection.arrow(dir, self.columns, &self.order);
             self.reveal_active = true;
         }
     }
 
-    fn status(&self, ui: &mut egui::Ui) {
-        ui.horizontal_centered(|ui| {
-            ui.label(status_text(self.photos.len(), self.selection.current.len()));
-            if let Some(text) = self.busy {
-                ui.separator();
-                ui.label(RichText::new(text).color(theme::MUTED));
+    /// The library's half of the status bar: photos and selection, then whatever runs.
+    pub fn status_ui(&self, ui: &mut egui::Ui) {
+        if self.stage != Stage::Ready {
+            return;
+        }
+        ui.label(status_text(self.photos.len(), self.selection.current.len()));
+        if let Some(text) = self.busy {
+            ui.separator();
+            ui.label(RichText::new(text).color(theme::MUTED));
+        }
+        if let Some((done, total)) = self.export_status() {
+            ui.separator();
+            ui.label(crate::dialogs::export::status_text(done, total));
+            ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).desired_width(160.0));
+        }
+        if let Some(importing) = &self.importing {
+            ui.separator();
+            ui.label(importing.text());
+            if let Some(p) = importing.progress.filter(|p| p.total > 0) {
+                ui.add(egui::ProgressBar::new(p.done as f32 / p.total as f32).desired_width(160.0));
             }
-            if let Some((done, total)) = self.export_status() {
-                ui.separator();
-                ui.label(crate::dialogs::export::status_text(done, total));
-                ui.add(
-                    egui::ProgressBar::new(done as f32 / total.max(1) as f32).desired_width(160.0),
-                );
-            }
-            if let Some(importing) = &self.importing {
-                ui.separator();
-                ui.label(importing.text());
-                if let Some(p) = importing.progress.filter(|p| p.total > 0) {
-                    ui.add(
-                        egui::ProgressBar::new(p.done as f32 / p.total as f32).desired_width(160.0),
-                    );
-                }
-            }
-        });
+        }
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui, env: &mut Env) {

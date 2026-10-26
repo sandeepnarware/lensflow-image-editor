@@ -5,13 +5,14 @@ on:
   pull_request:
 
 env:
-  WGPU_BACKEND: vulkan
   LF_ALLOW_FALLBACK_ADAPTER: "1"
 
 jobs:
   check:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      WGPU_BACKEND: vulkan
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -51,3 +52,44 @@ jobs:
         env:
           LF_REQUIRE_SAMPLES: ${{ steps.samples.outputs.require }}
         run: bash scripts/ci-test-watchdog.sh cargo test --workspace -- --nocapture
+
+  # The desktop app on each platform: a release build uploaded as an artifact, and lf-app's
+  # tests. GPU tests skip without an adapter (the Linux runner has none here; the workspace
+  # job above runs them on lavapipe); Windows has WARP and macOS has Metal.
+  app:
+    name: app (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+            binary: lensflow-image-editor.exe
+          - os: macos-latest
+            name: macos
+            binary: lensflow-image-editor
+          - os: ubuntu-24.04
+            name: linux
+            binary: lensflow-image-editor
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: app
+      # Vulkan only, and no driver installed: wgpu must not pick up a GL software adapter.
+      - name: Linux backend
+        if: runner.os == 'Linux'
+        run: echo "WGPU_BACKEND=vulkan" >> "$GITHUB_ENV"
+      - name: Build
+        run: cargo build -p lf-app --release
+      - name: Test
+        timeout-minutes: 25
+        run: cargo test -p lf-app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lensflow-image-editor-${{ matrix.name }}
+          path: target/release/${{ matrix.binary }}
+          if-no-files-found: error

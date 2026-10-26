@@ -10,10 +10,15 @@ pub const MAX_BYTES: u64 = 5 << 20;
 /// How many rotated files (`app.log.1` to `app.log.3`) are kept.
 pub const KEEP: usize = 3;
 
+/// The log folder inside the data dir.
+pub fn dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("logs")
+}
+
 /// Starts logging and returns the log file's path. Logs the version and OS; panics are
 /// logged too (then reported as before).
 pub fn init(data_dir: &Path) -> Result<PathBuf, String> {
-    let dir = data_dir.join("logs");
+    let dir = dir(data_dir);
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("Could not create the log folder {}: {e}", dir.display()))?;
     let path = dir.join("app.log");

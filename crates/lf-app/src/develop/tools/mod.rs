@@ -1,7 +1,7 @@
 //! The tools over the preview: crop (`R`) and spots (`Q`). Their overlays are drawn with
 //! egui's painter over the preview texture; their maths lives in [`crop`] and [`spots`].
 //!
-//! Keys (the plan's keyboard map): `R` and `Q` open or leave a tool, `Esc` leaves it (the
+//! Keys (the keyboard map in `shortcuts.rs`, read by the app): `R` and `Q` open or leave a tool, `Esc` leaves it (the
 //! crop tool puts back the settings it was entered with), `Enter` applies the crop, `Delete`
 //! removes the selected spot.
 
@@ -11,10 +11,11 @@ pub mod spots;
 use super::Develop;
 use super::panels;
 use super::view::Viewport;
+use crate::shortcuts::Action;
 use crate::theme;
 use crate::toast::{Level, Toasts};
 use crop::CropTool;
-use eframe::egui::{self, Color32, CursorIcon, Key, Modifiers, Pos2, Rect, RichText, Stroke};
+use eframe::egui::{self, Color32, CursorIcon, Pos2, Rect, RichText, Stroke};
 use lf_pipeline::renderer::View;
 use lf_settings::geometry::{self, Geometry, apply, invert, output_to_source};
 use lf_settings::{Crop, EditSettings, MAX_SPOTS, Spot, SpotMode};
@@ -271,42 +272,40 @@ impl Develop {
         }
     }
 
-    /// `R`, `Q`, `Esc`, `Enter` and `Delete`.
-    pub(super) fn tool_keys(&mut self, ctx: &egui::Context, toasts: &mut Toasts) {
-        if ctx.egui_wants_keyboard_input() || crate::dialogs::modal_open(ctx) || !self.is_ready() {
-            return;
+    /// Whether a tool key's action is possible now: `R` and `Q` with a photo ready, `Esc` with
+    /// a tool open, `Enter` while cropping, `Delete` with a spot selected.
+    pub fn tool_enabled(&self, action: Action) -> bool {
+        if !self.is_ready() {
+            return false;
         }
-        let selected = matches!(&self.tools.active, Some(Active::Spots(t)) if t.selected.is_some());
-        let cropping = self.tool() == Some(ToolKind::Crop);
-        let open = self.tool().is_some();
-        let (r, q, esc, enter, delete) = ctx.input_mut(|i| {
-            (
-                i.consume_key(Modifiers::NONE, Key::R),
-                i.consume_key(Modifiers::NONE, Key::Q),
-                open && i.consume_key(Modifiers::NONE, Key::Escape),
-                cropping && i.consume_key(Modifiers::NONE, Key::Enter),
-                selected && i.consume_key(Modifiers::NONE, Key::Delete),
-            )
-        });
-        if r {
-            self.toggle_tool(ToolKind::Crop, toasts);
+        match action {
+            Action::CropTool | Action::SpotTool => true,
+            Action::LeaveTool => self.tool().is_some(),
+            Action::ApplyCrop => self.tool() == Some(ToolKind::Crop),
+            Action::DeleteSpot => {
+                matches!(&self.tools.active, Some(Active::Spots(t)) if t.selected.is_some())
+            }
+            _ => false,
         }
-        if q {
-            self.toggle_tool(ToolKind::Spots, toasts);
-        }
-        if esc {
-            self.cancel_tool(toasts);
-        }
-        if enter {
-            self.leave_tool(toasts);
-        }
-        if delete
-            && let (Some(Active::Spots(tool)), Some(edit)) =
-                (&mut self.tools.active, self.session.edit_mut())
-        {
-            let mut out = ToolOutput::default();
-            edit.set(|s| out = tool.remove_selected(&mut s.spots));
-            self.absorb_tool(out, toasts);
+    }
+
+    /// `R`, `Q`, `Esc`, `Enter` and `Delete` (from the keyboard map; see [`Self::tool_enabled`]).
+    pub fn tool_command(&mut self, action: Action, toasts: &mut Toasts) {
+        match action {
+            Action::CropTool => self.toggle_tool(ToolKind::Crop, toasts),
+            Action::SpotTool => self.toggle_tool(ToolKind::Spots, toasts),
+            Action::LeaveTool => self.cancel_tool(toasts),
+            Action::ApplyCrop => self.leave_tool(toasts),
+            Action::DeleteSpot => {
+                if let (Some(Active::Spots(tool)), Some(edit)) =
+                    (&mut self.tools.active, self.session.edit_mut())
+                {
+                    let mut out = ToolOutput::default();
+                    edit.set(|s| out = tool.remove_selected(&mut s.spots));
+                    self.absorb_tool(out, toasts);
+                }
+            }
+            _ => {}
         }
     }
 

@@ -1,18 +1,29 @@
 //! The `eframe::App`: owns the shared GPU, preferences, jobs, toasts and the session, and
 //! draws the current screen. The session's rules live in `session.rs`, the screens in
 //! `screens/`, the account calls in `account.rs`; this file wires them together.
+//!
+//! The window has one menu bar (`menu.rs`) and one status bar (the library's counts and
+//! progress, then the studio's standing). Menu items and keys are the same [`Action`]s: the
+//! keyboard map (`shortcuts.rs`) is read once per frame in `logic()`, the library does its
+//! own actions, and the app does the rest (Quit, Preferences, the Account and Help menus).
 
+use crate::dialogs::preferences::{self, PrefsAction, PrefsView};
+use crate::dialogs::{about, keys};
 use crate::jobs::{Jobs, Msg};
 use crate::library::{self, Library};
+use crate::menu::{self, Item, MENUS, MenuState};
 use crate::prefs::{Dirs, Prefs};
 use crate::screens::{self, View};
 use crate::session::Session;
 use crate::session_flow::{self, SessionFlow};
-use crate::toast::Toasts;
-use crate::{device_reset, gpu, theme};
+use crate::shortcuts::{Action, Keys};
+use crate::toast::{Level, Toasts};
+use crate::{device_reset, gpu, logging, platform, theme};
 use eframe::egui::{self, RichText};
+use eframe::egui_wgpu::RenderState;
 use lf_account::entitlement::Decision;
 use lf_pipeline::Gpu;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -35,15 +46,39 @@ macro_rules! flow_env {
     };
 }
 
+/// The library's view of the app around it (a macro so the borrows stay disjoint).
+macro_rules! library_env {
+    ($app:expr) => {
+        library::Env {
+            jobs: &$app.jobs,
+            toasts: &mut $app.toasts,
+            prefs: &mut $app.prefs,
+            config_dir: &$app.dirs.config,
+        }
+    };
+}
+
+/// The window's own dialogs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Dialog {
+    About,
+    Keys,
+    Preferences,
+}
+
 pub struct App {
     dirs: Dirs,
     /// The shared device, or why the window has none.
     gpu: Result<Arc<Gpu>, String>,
+    /// egui's renderer, for the Develop preview's texture (a restarted library needs it too).
+    render_state: Option<RenderState>,
     prefs: Prefs,
     jobs: Jobs,
     toasts: Toasts,
     logo: Option<egui::TextureHandle>,
     lost_logged: bool,
+    /// Uncaptured graphics errors (the library logs them; a burst shows a toast).
+    gpu_errors: gpu::ErrorTap,
     /// The device-reset answer was taken (the dialog's thread watches it), and whether to
     /// start again at the end of `on_exit`.
     exit: device_reset::Exit,
@@ -51,6 +86,9 @@ pub struct App {
     flow: SessionFlow,
     /// The catalogue, grid and filmstrip (none without a graphics device).
     library: Option<Library>,
+    dialog: Option<Dialog>,
+    /// The keyboard map's reader before a studio is open (the library has its own).
+    keys: Keys,
 }
 
 impl App {
@@ -73,24 +111,29 @@ impl App {
         }
         let prefs = Prefs::load(&dirs.config);
         let flow = SessionFlow::new(&prefs, &dirs.config);
+        let render_state = cc.wgpu_render_state.clone();
         let library = gpu.as_ref().ok().map(|gpu| {
             let mut library = Library::new(gpu.clone(), dirs.cache.join("frames"), &prefs);
             // The Develop preview registers its canvas with egui's renderer.
-            library.set_render_state(cc.wgpu_render_state.clone());
+            library.set_render_state(render_state.clone());
             library
         });
         let mut app = App {
             library,
             gpu,
+            render_state,
             prefs,
             jobs: Jobs::new(cc.egui_ctx.clone()),
             toasts: Toasts::default(),
             logo: load_logo(&cc.egui_ctx),
             lost_logged: false,
+            gpu_errors: gpu::ErrorTap::default(),
             exit: device_reset::Exit::default(),
             ctx: cc.egui_ctx.clone(),
             flow,
             dirs,
+            dialog: None,
+            keys: Keys::default(),
         };
         app.flow.resume(&app.jobs);
         app
@@ -107,12 +150,7 @@ impl App {
             self.device_reset(choice);
             return;
         }
-        let mut env = library::Env {
-            jobs: &self.jobs,
-            toasts: &mut self.toasts,
-            prefs: &mut self.prefs,
-            config_dir: &self.dirs.config,
-        };
+        let mut env = library_env!(self);
         let msg = match &mut self.library {
             Some(lib) => match lib.handle(msg, &mut env) {
                 Some(msg) => msg,
@@ -149,6 +187,173 @@ impl App {
             .view(self.logo.as_ref().map(|logo| logo.id()), &self.prefs)
     }
 
+    fn active(&self) -> bool {
+        matches!(self.flow.session, Session::Active { .. })
+    }
+
+    /// The library, while a studio is open (its menus and keys work only then).
+    fn active_library(&self) -> Option<&Library> {
+        self.library.as_ref().filter(|_| self.active())
+    }
+
+    /// Whether `action` is possible now.
+    fn enabled(&self, action: Action) -> bool {
+        menu::ALWAYS.contains(&action)
+            || menu::account_actions(&self.flow.session, self.view().can_switch).contains(&action)
+            || self.active_library().is_some_and(|lib| lib.enabled(action))
+    }
+
+    fn menu_state(&self) -> MenuState {
+        let enabled = MENUS
+            .iter()
+            .flat_map(|(_, items)| items.iter())
+            .filter_map(|item| match item {
+                Item::Do(action) if self.enabled(*action) => Some(*action),
+                _ => None,
+            })
+            .collect();
+        MenuState {
+            enabled,
+            studio: match &self.flow.session {
+                Session::Active { studio, .. } => Some(studio.name.clone()),
+                _ => None,
+            },
+            before: self
+                .active_library()
+                .is_some_and(|lib| lib.develop().before()),
+        }
+    }
+
+    /// Does a menu item's or a key's action.
+    fn run(&mut self, action: Action) {
+        match action {
+            Action::Quit => self.ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Action::Preferences => self.dialog = Some(Dialog::Preferences),
+            Action::About => self.dialog = Some(Dialog::About),
+            Action::KeyboardShortcuts => self.dialog = Some(Dialog::Keys),
+            Action::ShowLogFolder => self.show_logs(),
+            Action::SwitchStudio => self.session_action(screens::Action::SwitchStudio),
+            Action::SignOut => self.session_action(screens::Action::SignOut),
+            Action::CheckEntitlement => {
+                self.flow
+                    .refresh_now(&self.jobs, "a check asked for in the Account menu");
+            }
+            other => {
+                if !self.active() {
+                    return;
+                }
+                let ctx = self.ctx.clone();
+                let mut env = library_env!(self);
+                if let Some(lib) = &mut self.library {
+                    lib.run(other, &ctx, &mut env);
+                }
+            }
+        }
+    }
+
+    fn session_action(&mut self, action: screens::Action) {
+        let mut env = flow_env!(self);
+        self.flow.act(action, &mut env);
+    }
+
+    fn show_logs(&mut self) {
+        let file = logging::dir(&self.dirs.data).join("app.log");
+        if let Err(e) = platform::show_in_folder(&file) {
+            self.toasts.push(
+                Level::Error,
+                format!("The log folder could not be shown. {e}"),
+            );
+        }
+    }
+
+    /// The keyboard map: the library's keys while a studio is open, and `F1` anywhere.
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        let dialog = self.dialog.is_some();
+        let app_key = |a: Action| a == Action::About && !dialog;
+        let active = self.active();
+        let fired = match &mut self.library {
+            Some(lib) if active => {
+                let mut env = library_env!(self);
+                lib.shortcuts(ctx, &mut env, app_key)
+            }
+            _ => self.keys.read(ctx, false, app_key),
+        };
+        for action in fired {
+            self.run(action);
+        }
+    }
+
+    /// Preferences → Change…: the library starts again on the first-run screen (it can go
+    /// back to this catalogue). The open photo's gesture is committed, an import stops after
+    /// its batch, the waiting edit files are written, and the old thumbnailer and catalogue
+    /// connections are dropped.
+    fn change_catalogue(&mut self) {
+        let (Ok(gpu), Some(lib)) = (&self.gpu, &mut self.library) else {
+            return;
+        };
+        if let Some(reason) = lib.restart_blocked() {
+            self.toasts.push(Level::Warning, reason);
+            return;
+        }
+        lib.finish_edits(&mut self.toasts);
+        lib.stop_import();
+        if let Err(e) = lib.sidecar_saver().flush() {
+            self.toasts.push(
+                Level::Error,
+                format!("An edit file could not be written. {e}"),
+            );
+        }
+        let keep = lib.root().map(Path::to_path_buf);
+        let generation = lib.develop().generation();
+        let mut fresh = Library::new(gpu.clone(), self.dirs.cache.join("frames"), &self.prefs);
+        fresh.set_render_state(self.render_state.clone());
+        fresh.choose_another_root(keep, generation);
+        self.library = Some(fresh);
+        self.dialog = None;
+        log::info!("the library restarted to choose another catalogue folder");
+    }
+
+    fn dialogs(&mut self, ctx: &egui::Context) {
+        match self.dialog {
+            None => {}
+            Some(Dialog::About) => {
+                if about::show(ctx, self.logo.as_ref().map(|l| l.id())) {
+                    self.dialog = None;
+                }
+            }
+            Some(Dialog::Keys) => {
+                if keys::show(ctx) {
+                    self.dialog = None;
+                }
+            }
+            Some(Dialog::Preferences) => {
+                let root = self
+                    .library
+                    .as_ref()
+                    .and_then(|lib| lib.root().or(lib.kept_root()))
+                    .map(Path::to_path_buf)
+                    .or_else(|| self.prefs.catalogue_root.clone());
+                let blocked = match &self.library {
+                    None => Some("The catalogue needs the graphics device."),
+                    Some(lib) => lib.restart_blocked(),
+                };
+                let log_dir = logging::dir(&self.dirs.data);
+                let view = PrefsView {
+                    root: root.as_deref(),
+                    change_blocked: blocked,
+                    log_dir: &log_dir,
+                };
+                match preferences::show(ctx, &mut self.prefs, &view) {
+                    None => {}
+                    Some(PrefsAction::Close) => self.dialog = None,
+                    Some(PrefsAction::Changed) => self.save_prefs(),
+                    Some(PrefsAction::ShowLogs) => self.show_logs(),
+                    Some(PrefsAction::ChangeRoot) => self.change_catalogue(),
+                }
+            }
+        }
+    }
+
     /// The signed-in screen until the library arrives.
     fn signed_in_placeholder(&self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
@@ -166,17 +371,17 @@ impl App {
     /// The session's screen, or the chrome around the signed-in view.
     fn session_ui(&mut self, ui: &mut egui::Ui) {
         let view = self.view();
-        let action = if matches!(self.flow.session, Session::Active { .. }) {
-            let top = screens::active_top(ui, &self.flow.session, &view);
-            let status = screens::status_bar(ui, &self.flow.session, &view);
+        let action = if self.active() {
+            screens::read_only_banner(ui, &self.flow.session);
+            let library = self.library.as_ref();
+            let status = screens::status_bar(ui, &self.flow.session, &view, |ui| {
+                if let Some(lib) = library {
+                    lib.status_ui(ui);
+                }
+            });
             match &mut self.library {
                 Some(lib) => {
-                    let mut env = library::Env {
-                        jobs: &self.jobs,
-                        toasts: &mut self.toasts,
-                        prefs: &mut self.prefs,
-                        config_dir: &self.dirs.config,
-                    };
+                    let mut env = library_env!(self);
                     lib.ui(ui, &mut env);
                 }
                 None => {
@@ -184,15 +389,14 @@ impl App {
                         .show(ui, |ui| self.signed_in_placeholder(ui));
                 }
             }
-            top.or(status)
+            status
         } else {
             egui::CentralPanel::default_margins()
                 .show(ui, |ui| screens::show(ui, &mut self.flow.session, &view))
                 .inner
         };
         if let Some(action) = action {
-            let mut env = flow_env!(self);
-            self.flow.act(action, &mut env);
+            self.session_action(action);
         }
     }
 }
@@ -224,6 +428,7 @@ impl eframe::App for App {
             self.handle(msg);
         }
         self.flow.tick(Instant::now(), &self.jobs);
+        self.shortcuts(ctx);
         if let Some(lib) = &mut self.library {
             lib.set_studio(self.flow.studio_id());
             // Match a reference: its cost line reads the gate; a fit asked for gets the AI
@@ -237,13 +442,14 @@ impl eframe::App for App {
                 self.flow.sync_presets(&self.jobs, root.as_deref());
             }
         }
-        if matches!(self.flow.session, Session::Active { .. }) {
+        if self.active() {
             // The status bar's "Last checked" and the next scheduled check.
             ctx.request_repaint_after(Duration::from_secs(60));
         }
         if let Ok(gpu) = &self.gpu {
-            if let Some(error) = gpu.take_error() {
-                log::error!("graphics error: {error}");
+            // The library's handler has logged it; a burst is worth a word on screen.
+            if gpu.take_error().is_some() && self.gpu_errors.record(Instant::now()) {
+                self.toasts.push(Level::Warning, gpu::ERROR_BURST);
             }
             if gpu.is_lost() && !self.lost_logged {
                 // egui's own drawing may fail from here on, so the banner may never show:
@@ -275,7 +481,16 @@ impl eframe::App for App {
                 });
             }
             Ok(gpu) => {
-                if gpu.is_lost() {
+                let lost = gpu.is_lost();
+                let software = gpu.is_software();
+                let state = self.menu_state();
+                let clicked = egui::Panel::top("menu-bar")
+                    .show(ui, |ui| menu::bar(ui, &state))
+                    .inner;
+                if let Some(action) = clicked {
+                    self.run(action);
+                }
+                if lost {
                     let restart = egui::Panel::top("device-lost")
                         .show(ui, |ui| {
                             ui.add_space(4.0);
@@ -294,10 +509,11 @@ impl eframe::App for App {
                     if restart {
                         self.device_reset(device_reset::Choice::Restart);
                     }
-                } else if gpu.is_software() {
+                } else if software {
                     banner(ui, "software", SOFTWARE_BANNER, theme::WARNING);
                 }
                 self.session_ui(ui);
+                self.dialogs(ui.ctx());
             }
         }
         self.toasts.show(ui.ctx());

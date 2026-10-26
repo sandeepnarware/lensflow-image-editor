@@ -9,7 +9,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
 use lf_app::catalog_ext::{FOLDER_MISSING, NETWORK_WARNING};
 use lf_app::jobs::{Jobs, Lane, Msg};
-use lf_app::library::import_ui::{Chosen, FIRST_RUN, Purpose, TYPE_PATH};
+use lf_app::library::import_ui::{Chosen, FIRST_RUN, KEEP_ROOT, Purpose, TYPE_PATH};
 use lf_app::library::{Env, Library, Mode, Stage};
 use lf_app::prefs::Prefs;
 use lf_app::toast::Toasts;
@@ -75,6 +75,13 @@ fn harness(dir: &Path, root: Option<PathBuf>) -> Option<Harness<'static, State>>
                         prefs: &mut s.prefs,
                         config_dir: &s.config,
                     };
+                    // As the app does: the keyboard map first, then the status bar and the
+                    // library.
+                    let ctx = ui.ctx().clone();
+                    s.lib.shortcuts(&ctx, &mut env, |_| false);
+                    egui::Panel::bottom("status").show(ui, |ui| {
+                        ui.horizontal(|ui| s.lib.status_ui(ui));
+                    });
                     s.lib.ui(ui, &mut env);
                     s.toasts.show(ui.ctx());
                 },
@@ -1192,4 +1199,45 @@ fn export_to_disk_from_the_shortcut_remembers_the_form_and_refuses_existing_file
         h.query_by_label(&export::title(2)).is_some(),
         "the form stays"
     );
+}
+
+/// Preferences → Change…: the app swaps in a fresh library asking for another folder. It can
+/// go back to the catalogue it left; a folder list from the old catalogue arriving late, and
+/// work for it, are ignored.
+#[test]
+fn changing_the_catalogue_restarts_the_library_and_can_keep_the_old_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 2);
+    import_folder(&mut h, &shoot, 2);
+    let old_root = h.state().lib.root().unwrap().to_path_buf();
+    let generation = h.state().lib.develop().generation();
+
+    let gpu = try_shared_gpu().unwrap();
+    let mut fresh = Library::new(gpu, dir.path().join("frames"), &h.state().prefs);
+    fresh.choose_another_root(Some(old_root.clone()), generation);
+    h.state_mut().lib = fresh;
+    h.step();
+    assert_eq!(h.state().lib.stage, Stage::NoRoot);
+    h.get_by_label(FIRST_RUN);
+    h.get_by_label(&old_root.display().to_string());
+    // Late answers for the old catalogue change nothing here.
+    h.state_mut().handle(Msg::Folders {
+        root: dir.path().join("elsewhere"),
+        result: Ok(Vec::new()),
+    });
+    h.state_mut().handle(Msg::ImportDone(Err("stopped".into())));
+    assert!(h.state().toasts.texts().all(|t| !t.contains("stopped")));
+
+    h.get_by_role_and_label(Role::Button, KEEP_ROOT).click();
+    step_until(&mut h, "the catalogue to open again", |s| {
+        s.lib.stage == Stage::Ready
+    });
+    step_until(&mut h, "the photos", |s| s.lib.photos().len() == 2);
+    assert_eq!(h.state().lib.root(), Some(old_root.as_path()));
+    assert!(h.state().lib.kept_root().is_none());
+    assert!(h.state().lib.develop().generation() >= generation);
 }

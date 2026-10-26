@@ -119,6 +119,7 @@ fn device_is_lost_in_develop() {
                     lib.handle(msg, &mut env);
                 }
                 let (lib, mut env) = s.env();
+                lib.shortcuts(&ui.ctx().clone(), &mut env, |_| false);
                 lib.ui(ui, &mut env);
             },
             state,
