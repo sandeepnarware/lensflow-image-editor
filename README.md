@@ -116,11 +116,19 @@ A studio from sign-in can use the desktop editor when its member has
   entitlement for another studio counts as missing.
 
 Where things live. The sign-in token goes in the OS keychain (service
-`lensflow-ImageEditor`, account = the API base URL). With no usable keychain it
-falls back to a file `token-<hash>` (0600 on Unix) in the `directories`
-project config dir (`ProjectDirs::from("in", "lensflow",
-"lensflow-ImageEditor")`), with a logged warning; on a system with no config
-dir, `<temp dir>/lensflow-ImageEditor` (never the current directory). The entitlement cache is
+`lensflow-ImageEditor`, account = the API base URL). With no usable keychain
+(mostly Linux without a Secret Service) it falls back to a file `token-<hash>`
+(0600 on Unix) in the `directories` project config dir (`ProjectDirs::from("in",
+"lensflow", "lensflow-ImageEditor")`), with a logged warning; on a system with
+no config dir, `<temp dir>/lensflow-ImageEditor` (never the current directory).
+The file is encrypted (ChaCha20-Poly1305) with a key bound to this machine and
+user account: HKDF-SHA256 over the machine id, the user id and the user name,
+with a random salt kept next to it in `token-salt` (0600) and the base URL mixed
+in. That protects a copied file and casual reading. It does not protect against
+software running as the same user, which can derive the same key; the OS
+keychain cannot fully prevent that either. A file that cannot be read on this
+machine is deleted and you sign in again. A plaintext token file from an older
+build is read once and re-saved encrypted. The entitlement cache is
 `entitlement.json`, written atomically in a folder the app chooses
 (`entitlement::Cache::new(dir)`); the crate does not pick that folder.
 
