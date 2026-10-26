@@ -62,8 +62,12 @@ struct AccountState {
     last_gate: Option<Instant>,
     /// Installer download progress (bytes done, total).
     download: Option<(u64, u64)>,
-    /// The generation whose sign-in preset sync was asked for (once per sign-in or studio).
+    /// The generation whose sign-in preset sync was asked for (once per sign-in or studio);
+    /// cleared when a sync fails, so the next gate answer (back online) tries again.
     presets_synced: Option<Generation>,
+    /// "Studio presets will sync when LensFlow can be reached." was shown; quiet until a sync
+    /// works again.
+    sync_offline_told: bool,
 }
 
 impl AccountState {
@@ -85,6 +89,7 @@ impl AccountState {
             last_gate: None,
             download: None,
             presets_synced: None,
+            sync_offline_told: false,
         }
     }
 
@@ -495,6 +500,7 @@ impl SessionFlow {
     fn presets_synced(&mut self, result: Result<SyncReport, SyncError>, env: &mut Env) {
         match result {
             Ok(report) => {
+                self.account.sync_offline_told = false;
                 if report.conflicts > 0 {
                     env.toasts
                         .push(Level::Info, conflicts_text(report.conflicts));
@@ -502,11 +508,20 @@ impl SessionFlow {
             }
             Err(SyncError::Account(e)) if self.signed_out_by(&e, env.jobs) => {}
             Err(e) => {
-                log::warn!("the studio presets could not be synced: {e}");
-                env.toasts.push(
-                    Level::Warning,
-                    format!("Studio presets could not be synced. {e}"),
-                );
+                // Tried again at the next gate answer (the first one back online).
+                self.account.presets_synced = None;
+                if matches!(&e, SyncError::Account(a) if account::is_transient(a)) {
+                    log::info!("the studio presets could not be synced (offline): {e}");
+                    if !std::mem::replace(&mut self.account.sync_offline_told, true) {
+                        env.toasts.push(Level::Info, SYNC_LATER);
+                    }
+                } else {
+                    log::warn!("the studio presets could not be synced: {e}");
+                    env.toasts.push(
+                        Level::Warning,
+                        format!("Studio presets could not be synced. {e}"),
+                    );
+                }
             }
         }
     }
@@ -676,6 +691,9 @@ impl SessionFlow {
     }
 }
 
+/// The one quiet note when a preset sync cannot reach LensFlow (it is tried again later).
+pub const SYNC_LATER: &str = "Studio presets will sync when LensFlow can be reached.";
+
 /// The toast when presets were changed both here and on the web.
 pub fn conflicts_text(n: usize) -> String {
     if n == 1 {
@@ -709,8 +727,93 @@ mod tests {
                 last_gate: None,
                 download: None,
                 presets_synced: None,
+                sync_offline_told: false,
             },
         }
+    }
+
+    fn dirs(dir: &Path) -> Dirs {
+        Dirs {
+            config: dir.join("config"),
+            data: dir.join("data"),
+            cache: dir.join("cache"),
+        }
+    }
+
+    /// Launched offline (the studio rebuilt from the cache), then the server answers: `me`
+    /// runs again and the presets sync, and a sync that fails offline is tried again at the
+    /// next gate answer, with one quiet note however often it fails.
+    #[test]
+    fn back_online_after_an_offline_launch_reruns_me_and_syncs_presets() {
+        use lf_account::entitlement::{Entitlement, Standing};
+        let dir = tempfile::tempdir().unwrap();
+        let mut flow = flow(dir.path());
+        let summary = serde_json::json!({
+            "id": 7, "name": "Frames", "slug": "frames", "permissions": ["galleries.manage"],
+        });
+        flow.account.token = Some("secret".into());
+        flow.account.studio = Some(serde_json::from_value(summary.clone()).unwrap());
+        flow.account.user = Some(
+            serde_json::from_value(serde_json::json!({
+                "id": 0, "name": "", "email": "", "studios": [summary],
+            }))
+            .unwrap(),
+        );
+        flow.account.offline_user = true;
+
+        let mut jobs = Jobs::new(egui::Context::default());
+        // Hold the account lane: the jobs asked for are counted, never run (no network).
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        jobs.spawn(Lane::Account, "hold", move || {
+            let _ = held.recv();
+            Msg::Cleared
+        });
+        let mut toasts = Toasts::default();
+        let mut prefs = Prefs {
+            catalogue_root: Some(dir.path().join("catalogue")),
+            ..Prefs::default()
+        };
+        let dirs = dirs(dir.path());
+        let ctx = egui::Context::default();
+        {
+            let mut env = Env {
+                jobs: &jobs,
+                toasts: &mut toasts,
+                prefs: &mut prefs,
+                dirs: &dirs,
+                ctx: &ctx,
+            };
+            let allow = || Decision::Allow(Entitlement::example(Standing::Active, true));
+            assert!(flow.handle(Msg::Gate(3, allow()), &mut env).is_none());
+            assert!(matches!(flow.session, Session::Active { .. }));
+            assert_eq!(
+                flow.account.checking,
+                Some("Checking your account…"),
+                "me runs again"
+            );
+            assert_eq!(flow.account.presets_synced, Some(3), "a sync was asked for");
+
+            // The sync could not reach LensFlow: one quiet note, and it is tried again.
+            for _ in 0..2 {
+                let offline = SyncError::Account(AccountError::Network("offline".into()));
+                assert!(
+                    flow.handle(Msg::PresetsSynced(3, Err(offline)), &mut env)
+                        .is_none()
+                );
+                assert_eq!(flow.account.presets_synced, None);
+            }
+            assert_eq!(env.toasts.count(), 1);
+            assert_eq!(env.toasts.last_text(), Some(SYNC_LATER));
+
+            flow.account.checking = None;
+            assert!(flow.handle(Msg::Gate(3, allow()), &mut env).is_none());
+            assert_eq!(flow.account.presets_synced, Some(3), "synced again");
+            let ok = Msg::PresetsSynced(3, Ok(SyncReport::default()));
+            assert!(flow.handle(ok, &mut env).is_none());
+            assert!(!flow.account.sync_offline_told);
+        }
+        jobs.shutdown(std::time::Duration::from_millis(1));
+        drop(release);
     }
 
     #[test]
