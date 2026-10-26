@@ -3,13 +3,16 @@
 
 pub mod account;
 pub mod app;
+pub mod catalog_ext;
 pub mod gpu;
 pub mod jobs;
+pub mod library;
 pub mod logging;
 pub mod prefs;
 pub mod screens;
 pub mod session;
 pub mod theme;
+pub mod thumbs_ui;
 pub mod toast;
 pub mod update;
 pub mod version;

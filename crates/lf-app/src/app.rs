@@ -4,6 +4,7 @@
 
 use crate::account::{self, Credentials};
 use crate::jobs::{Jobs, Lane, Msg};
+use crate::library::{self, Library};
 use crate::prefs::{Dirs, InstanceChoice, Prefs};
 use crate::screens::{self, Action, View};
 use crate::session::{GateClock, Session, StudioChoice, choose_studio};
@@ -37,6 +38,8 @@ pub struct App {
     ctx: egui::Context,
     session: Session,
     account: AccountState,
+    /// The catalogue, grid and filmstrip (none without a graphics device).
+    library: Option<Library>,
 }
 
 /// Who is signed in, where, and what the account lane is doing.
@@ -102,7 +105,12 @@ impl App {
         }
         let prefs = Prefs::load(&dirs.config);
         let account = AccountState::connect(prefs.instance, &dirs.config);
+        let library = gpu
+            .as_ref()
+            .ok()
+            .map(|gpu| Library::new(gpu.clone(), dirs.cache.join("frames"), &prefs));
         let mut app = App {
+            library,
             gpu,
             prefs,
             jobs: Jobs::new(cc.egui_ctx.clone()),
@@ -216,6 +224,19 @@ impl App {
     }
 
     fn handle(&mut self, msg: Msg) {
+        let mut env = library::Env {
+            jobs: &self.jobs,
+            toasts: &mut self.toasts,
+            prefs: &mut self.prefs,
+            config_dir: &self.dirs.config,
+        };
+        let msg = match &mut self.library {
+            Some(lib) => match lib.handle(msg, &mut env) {
+                Some(msg) => msg,
+                None => return,
+            },
+            None => msg,
+        };
         match msg {
             Msg::JobFailed { name, message } => {
                 self.account.checking = None;
@@ -232,6 +253,17 @@ impl App {
             Msg::Gate(decision) => self.gate_decided(decision),
             Msg::SignedOut => {}
             Msg::Download(progress) => self.download(progress),
+            // The library's own messages (handled above when there is a library).
+            Msg::RootPicked(_)
+            | Msg::CatalogueOpened { .. }
+            | Msg::PoolReady(_)
+            | Msg::NothingPicked
+            | Msg::Scanned { .. }
+            | Msg::ImportProgress(_)
+            | Msg::ImportDone(_)
+            | Msg::Folders(_)
+            | Msg::Photos { .. }
+            | Msg::FolderRemoved { .. } => {}
             #[cfg(test)]
             Msg::Probe(_) => {}
         }
@@ -499,7 +531,21 @@ impl App {
         let action = if matches!(self.session, Session::Active { .. }) {
             let top = screens::active_top(ui, &self.session, &view);
             let status = screens::status_bar(ui, &self.session, &view);
-            egui::CentralPanel::default_margins().show(ui, |ui| self.signed_in_placeholder(ui));
+            match &mut self.library {
+                Some(lib) => {
+                    let mut env = library::Env {
+                        jobs: &self.jobs,
+                        toasts: &mut self.toasts,
+                        prefs: &mut self.prefs,
+                        config_dir: &self.dirs.config,
+                    };
+                    lib.ui(ui, &mut env);
+                }
+                None => {
+                    egui::CentralPanel::default_margins()
+                        .show(ui, |ui| self.signed_in_placeholder(ui));
+                }
+            }
             top.or(status)
         } else {
             egui::CentralPanel::default_margins()
@@ -586,6 +632,10 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        if let Some(lib) = &self.library {
+            // A running import stops after the batch in progress (each batch commits).
+            lib.stop_import();
+        }
         self.jobs.shutdown(Duration::from_secs(10));
         self.save_prefs();
     }

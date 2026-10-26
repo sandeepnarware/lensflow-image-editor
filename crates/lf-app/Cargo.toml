@@ -12,6 +12,10 @@ path = "src/main.rs"
 [dependencies]
 lf-pipeline = { path = "../lf-pipeline" }
 lf-account = { path = "../lf-account" }
+lf-catalog = { path = "../lf-catalog" }
+lf-raw = { path = "../lf-raw" }
+# File dialogs (MIT). Default features: the XDG desktop portal on Linux, so no GTK.
+rfd = "0.17"
 # Downloads the installer from its signed link (not through the account client, so the
 # bearer token never goes to the storage host). Same version and features as lf-account.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
@@ -28,5 +32,10 @@ image.workspace = true
 
 [dev-dependencies]
 egui_kittest = "0.37"
+lf-pipeline = { path = "../lf-pipeline", features = ["test-support"] }
 tempfile = "3"
 httpmock = "0.8"
+
+[target.'cfg(windows)'.dependencies]
+# GetDriveTypeW: is the catalogue root on a network drive?
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
