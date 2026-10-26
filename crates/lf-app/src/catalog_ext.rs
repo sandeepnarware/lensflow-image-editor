@@ -22,6 +22,30 @@ pub const IMPORT_BATCH: usize = 200;
 pub const NETWORK_WARNING: &str =
     "Catalogues on network drives can be damaged. Choose a folder on this computer.";
 
+/// A typed folder path that does not exist.
+pub const FOLDER_MISSING: &str = "That folder does not exist.";
+/// A typed folder path that names a file.
+pub const FOLDER_IS_FILE: &str = "That is a file, not a folder.";
+/// A typed folder path that cannot be listed.
+pub const FOLDER_UNREADABLE: &str = "lensflow-ImageEditor cannot read that folder.";
+
+/// Whether `path` is a folder the app can use: it exists, is a directory and can be listed.
+/// The error is the sentence to show. Touches the disk (and a network drive may be slow), so
+/// call it off the UI thread.
+pub fn check_folder(path: &Path) -> Result<(), &'static str> {
+    if path.as_os_str().is_empty() {
+        return Err(FOLDER_MISSING);
+    }
+    match std::fs::metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(FOLDER_MISSING),
+        Err(_) => Err(FOLDER_UNREADABLE),
+        Ok(meta) if !meta.is_dir() => Err(FOLDER_IS_FILE),
+        Ok(_) => std::fs::read_dir(path)
+            .map(|_| ())
+            .map_err(|_| FOLDER_UNREADABLE),
+    }
+}
+
 /// What the library needs once a catalogue root is open.
 pub struct Opened {
     pub thumbs: Thumbnailer,
@@ -92,6 +116,13 @@ pub fn remove_folder(root: &Path, folder_id: i64) -> Result<(), String> {
         .map_err(text)
 }
 
+/// Marks every photo of the folder missing, once the user confirmed the folder was emptied.
+pub fn mark_missing_confirmed(root: &Path, folder_id: i64) -> Result<usize, String> {
+    Catalog::open(root)
+        .map_err(text)
+        .and_then(|c| import::mark_missing_confirmed(&c, folder_id).map_err(text))
+}
+
 /// A finished import.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Imported {
@@ -99,6 +130,9 @@ pub struct Imported {
     pub summary: Summary,
     /// Photos newly flagged missing.
     pub missing: usize,
+    /// The folder was read and held none of its files while this many of its photos were
+    /// still present: the user is asked before they are marked missing.
+    pub emptied: Option<usize>,
 }
 
 /// Records `scan` (of `folder`) in the catalogue at `root`, `IMPORT_BATCH` files per
@@ -131,10 +165,16 @@ pub fn import_folder(
     )
     .map_err(text)?;
     let missing = import::mark_missing(&catalog, folder_id, scan).map_err(text)?;
+    let emptied = if scan.root_readable && scan.candidates.is_empty() {
+        Some(import::present_count(&catalog, folder_id).map_err(text)?).filter(|n| *n > 0)
+    } else {
+        None
+    };
     Ok(Imported {
         folder_id,
         summary,
         missing,
+        emptied,
     })
 }
 
@@ -273,5 +313,22 @@ mod tests {
         assert!(is_network_path(Path::new(r"\\nas\photos\2026")));
         assert!(is_network_path(Path::new(r"\\?\UNC\nas\photos")));
         assert!(!is_network_path(Path::new(r"\\?\C:\Users\me\Pictures")));
+    }
+
+    #[test]
+    fn check_folder_explains_what_is_wrong() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("photo.jpg");
+        std::fs::write(&file, b"x").unwrap();
+        assert_eq!(check_folder(dir.path()), Ok(()));
+        assert_eq!(check_folder(&dir.path().join("nope")), Err(FOLDER_MISSING));
+        assert_eq!(check_folder(&file), Err(FOLDER_IS_FILE));
+        assert_eq!(check_folder(Path::new("")), Err(FOLDER_MISSING));
+        assert_eq!(FOLDER_MISSING, "That folder does not exist.");
+        assert_eq!(FOLDER_IS_FILE, "That is a file, not a folder.");
+        assert_eq!(
+            FOLDER_UNREADABLE,
+            "lensflow-ImageEditor cannot read that folder."
+        );
     }
 }

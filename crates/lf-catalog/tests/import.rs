@@ -446,3 +446,43 @@ fn mark_missing_marks_nothing_when_the_folder_was_not_reached() {
         assert!(!row.missing, "{}", row.path.display());
     }
 }
+
+#[test]
+fn mark_missing_confirmed_flags_every_photo_of_the_folder() {
+    let d = tempfile::tempdir().unwrap();
+    let shoot = d.path().join("shoot");
+    std::fs::create_dir(&shoot).unwrap();
+    png(&shoot.join("a.png"), 8, 6);
+    png(&shoot.join("b.png"), 8, 6);
+    let c = Catalog::open(d.path()).unwrap();
+    let folder = c.add_folder(&shoot.to_string_lossy()).unwrap();
+    let other = c.add_folder("other").unwrap();
+    c.add_photo(
+        other,
+        &lf_catalog::NewPhoto {
+            path: "other/x.png".into(),
+            kind: "png".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    import::run(
+        &c,
+        folder,
+        &import::scan(&shoot).candidates,
+        200,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(import::present_count(&c, folder).unwrap(), 2);
+
+    // The folder was emptied on purpose and the user said so.
+    assert_eq!(import::mark_missing_confirmed(&c, folder).unwrap(), 2);
+    assert!(c.photos_in(folder).unwrap().iter().all(|r| r.missing));
+    assert_eq!(import::present_count(&c, folder).unwrap(), 0);
+    assert!(
+        !c.photo_missing("other/x.png").unwrap(),
+        "other folders untouched"
+    );
+    assert_eq!(import::mark_missing_confirmed(&c, folder).unwrap(), 0);
+}

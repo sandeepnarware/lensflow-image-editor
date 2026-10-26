@@ -406,7 +406,8 @@ pub fn run(
 /// A scan that did not reach the folder marks nothing: one whose root could not be read (a
 /// drive unplugged or a network share offline), and one that found no files at all (the empty
 /// mount point an unplugged drive leaves behind is indistinguishable from a folder emptied on
-/// purpose, and wrongly hiding every photo is the worse mistake).
+/// purpose, and wrongly hiding every photo is the worse mistake; ask, then call
+/// [`mark_missing_confirmed`]).
 pub fn mark_missing(
     catalog: &Catalog,
     folder_id: i64,
@@ -441,4 +442,28 @@ pub fn mark_missing(
     }
     tx.commit()?;
     Ok(gone.len())
+}
+
+/// How many photos catalogued under `folder_id` are not flagged missing.
+pub fn present_count(catalog: &Catalog, folder_id: i64) -> Result<usize, CatalogError> {
+    let n: i64 = catalog.conn.query_row(
+        "SELECT COUNT(*) FROM photos WHERE folder_id = ?1 AND missing = 0",
+        [folder_id],
+        |r| r.get(0),
+    )?;
+    Ok(n as usize)
+}
+
+/// Flags every photo catalogued under `folder_id` as missing. For the case [`mark_missing`]
+/// refuses to decide alone: the folder was read and holds none of its photos any more, and
+/// the user confirmed that they are gone (not an unplugged drive's empty mount point).
+/// Returns how many rows this call newly flagged.
+pub fn mark_missing_confirmed(catalog: &Catalog, folder_id: i64) -> Result<usize, CatalogError> {
+    let tx = catalog.write_tx()?;
+    let n = tx.execute(
+        "UPDATE photos SET missing = 1 WHERE folder_id = ?1 AND missing = 0",
+        [folder_id],
+    )?;
+    tx.commit()?;
+    Ok(n)
 }

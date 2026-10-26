@@ -165,7 +165,8 @@ untouched. `import::scan` also reports whether the folder itself could be read
 (`Scan::root_readable`). `import::mark_missing(catalog, folder,
 &scan)` flags rows whose file is gone (`photos.missing`); `run` clears the
 flag when the file is seen again; a scan that could not read the folder, or
-found no files at all (an unplugged drive), marks nothing. The progress callback can stop the import
+found no files at all (an unplugged drive), marks nothing; `import::mark_missing_confirmed`
+flags them all once the user confirms the folder was emptied. The progress callback can stop the import
 after the batch it reports.
 
 Thumbnails. `Thumbnailer` runs a small worker pool (default `min(2, cores)`)

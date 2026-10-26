@@ -306,10 +306,10 @@ impl App {
             Msg::Resumed(..) | Msg::SignedIn(..) | Msg::Me(..) | Msg::Gate(..) | Msg::Cleared => {}
             Msg::Download(progress) => self.download(progress),
             // The library's own messages (handled above when there is a library).
-            Msg::RootPicked(_)
+            Msg::FolderChosen { .. }
             | Msg::CatalogueOpened { .. }
             | Msg::PoolReady(_)
-            | Msg::NothingPicked
+            | Msg::MarkedMissing { .. }
             | Msg::Scanned { .. }
             | Msg::ImportProgress(_)
             | Msg::ImportDone(_)
