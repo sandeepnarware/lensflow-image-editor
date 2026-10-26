@@ -2,13 +2,17 @@
 //! of [`Msg`] values that the UI drains every frame.
 
 use crate::account::{Generation, Token};
+use crate::catalog_ext::{Imported, Opened, Pool};
 use crate::update::DownloadProgress;
 use eframe::egui;
 use lf_account::AccountError;
 use lf_account::auth::{SignedIn, User};
 use lf_account::entitlement::Decision;
+use lf_catalog::import::{Progress, Scan};
+use lf_catalog::{Folder, PhotoRow};
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -56,6 +60,36 @@ pub enum Msg {
     Cleared,
     /// The installer download moved on or finished.
     Download(DownloadProgress),
+    /// The catalogue-root picker closed: the folder chosen, and whether it is on a network
+    /// drive.
+    RootPicked(Option<(PathBuf, bool)>),
+    /// The catalogue at `root` was opened, with its thumbnail pool and frame cache.
+    CatalogueOpened {
+        root: PathBuf,
+        result: Result<Box<Opened>, String>,
+    },
+    /// A thumbnail pool built again after a device error.
+    PoolReady(Result<Pool, String>),
+    /// The "Add folder" picker closed without a folder.
+    NothingPicked,
+    /// A folder was scanned for photos (picked, or rescanned).
+    Scanned { folder: PathBuf, scan: Scan },
+    /// An import moved on.
+    ImportProgress(Progress),
+    /// An import finished.
+    ImportDone(Result<Imported, String>),
+    /// The catalogue's folders, with their photo counts.
+    Folders(Result<Vec<Folder>, String>),
+    /// A folder's photos, in capture order.
+    Photos {
+        folder_id: i64,
+        result: Result<Vec<PhotoRow>, String>,
+    },
+    /// A folder was removed from the catalogue.
+    FolderRemoved {
+        folder_id: i64,
+        result: Result<(), String>,
+    },
     #[cfg(test)]
     Probe(&'static str),
 }

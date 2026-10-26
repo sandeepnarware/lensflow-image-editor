@@ -11,6 +11,6 @@ pub mod sidecar;
 pub mod thumbs;
 pub mod versions;
 
-pub use db::{Catalog, CatalogError};
+pub use db::{Catalog, CatalogError, Folder, PhotoRow};
 pub use model::{NewPhoto, Reconciled, Source, Version};
 pub use sidecar::Sidecar;

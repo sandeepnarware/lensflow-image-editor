@@ -272,10 +272,12 @@ pub fn redo(catalog: &Catalog, photo_id: i64) -> Result<Option<Sidecar>> {
 
 /// Apply the conflict rule between the database and a sidecar found on reopen (and on import):
 /// a strictly newer sidecar wins and the database takes its settings and versions (a stamp in
-/// the future is adopted as now, and the sidecar rewritten with it); otherwise the database
+/// the future is adopted as now, and one finer than milliseconds is adopted truncated to the
+/// stored milliseconds; either way the sidecar is rewritten with it); otherwise the database
 /// wins. The sidecar is rewritten only when the database is strictly newer or the content
 /// (`v`, settings, versions) differs; an equal sidecar is left alone. With no sidecar, one is
-/// written when the photo has edits.
+/// written when the photo has edits. Being given a readable sidecar (or none) clears the
+/// photo's `sidecar_error`.
 pub fn reconcile(
     catalog: &Catalog,
     photo_id: i64,
@@ -298,6 +300,11 @@ pub(crate) fn reconcile_in(
     if let Some(sc) = sidecar {
         put_meta(tx, photo_id, sc)?;
     }
+    // The sidecar was read (or there is none): an earlier "damaged sidecar" no longer holds.
+    tx.execute(
+        "UPDATE photos SET sidecar_error = NULL WHERE id = ?1 AND sidecar_error IS NOT NULL",
+        [photo_id],
+    )?;
     let result = match (db, sidecar) {
         (None, None) => Reconciled {
             source: Source::Db,
@@ -309,9 +316,14 @@ pub(crate) fn reconcile_in(
         },
         (db, Some(sc)) if db.as_ref().is_none_or(|(_, t)| sc.updated_at > *t) => {
             // A stamp from a clock set ahead would win every later comparison: adopt it as now.
+            // A stamp finer than the stored milliseconds would stay newer than the database
+            // after the round trip and win every reopen: adopt it truncated, and rewrite it.
             let now = now();
             let clamped = sc.updated_at > now;
             let at = if clamped { now } else { sc.updated_at };
+            let stored = parse_ts(&ts(at)).unwrap_or(at);
+            let rewrite = clamped || stored != sc.updated_at;
+            let at = stored;
             put_edits(tx, photo_id, &sc.settings, at)?;
             tx.execute("DELETE FROM versions WHERE photo_id = ?1", [photo_id])?;
             for v in &sc.versions {
@@ -344,7 +356,7 @@ pub(crate) fn reconcile_in(
             push_history(tx, photo_id, &sc.settings, at)?;
             Reconciled {
                 source: Source::Sidecar,
-                sidecar_to_write: if clamped {
+                sidecar_to_write: if rewrite {
                     Some(build_sidecar(tx, photo_id)?)
                 } else {
                     None
