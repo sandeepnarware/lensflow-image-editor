@@ -3,6 +3,7 @@
 
 use crate::account::{Generation, Token};
 use crate::catalog_ext::{Imported, Opened, Pool};
+use crate::library::import_ui::{Chosen, Purpose};
 use crate::update::DownloadProgress;
 use eframe::egui;
 use lf_account::AccountError;
@@ -28,15 +29,19 @@ pub enum Lane {
     Open,
     /// Disk work: imports, sidecars, exports.
     Io,
+    /// Quick catalogue reads (folders, a folder's photos), so they never wait behind an
+    /// import or an export.
+    Query,
 }
 
 impl Lane {
-    /// The worker thread's name: `lf-account`, `lf-open`, `lf-io`.
+    /// The worker thread's name: `lf-account`, `lf-open`, `lf-io`, `lf-query`.
     pub fn thread_name(self) -> &'static str {
         match self {
             Lane::Account => "lf-account",
             Lane::Open => "lf-open",
             Lane::Io => "lf-io",
+            Lane::Query => "lf-query",
         }
     }
 }
@@ -60,9 +65,14 @@ pub enum Msg {
     Cleared,
     /// The installer download moved on or finished.
     Download(DownloadProgress),
-    /// The catalogue-root picker closed: the folder chosen, and whether it is on a network
-    /// drive.
-    RootPicked(Option<(PathBuf, bool)>),
+    /// A folder was chosen (picker or typed path) for `purpose`: the folder, `None` when the
+    /// picker was cancelled, or why a typed path cannot be used. Answers whose `ticket` is
+    /// not the latest are ignored.
+    FolderChosen {
+        purpose: Purpose,
+        ticket: u64,
+        result: Result<Option<Chosen>, String>,
+    },
     /// The catalogue at `root` was opened, with its thumbnail pool and frame cache.
     CatalogueOpened {
         root: PathBuf,
@@ -70,8 +80,11 @@ pub enum Msg {
     },
     /// A thumbnail pool built again after a device error.
     PoolReady(Result<Pool, String>),
-    /// The "Add folder" picker closed without a folder.
-    NothingPicked,
+    /// A folder's photos were marked missing after the user confirmed it.
+    MarkedMissing {
+        folder_id: i64,
+        result: Result<usize, String>,
+    },
     /// A folder was scanned for photos (picked, or rescanned).
     Scanned { folder: PathBuf, scan: Scan },
     /// An import moved on.
@@ -144,7 +157,7 @@ impl Jobs {
     pub fn new(ctx: egui::Context) -> Jobs {
         let (results_tx, results) = mpsc::channel();
         let stopping = Arc::new(AtomicBool::new(false));
-        let lanes = [Lane::Account, Lane::Open, Lane::Io]
+        let lanes = [Lane::Account, Lane::Open, Lane::Io, Lane::Query]
             .into_iter()
             .map(|lane| start_lane(lane, results_tx.clone(), ctx.clone(), stopping.clone()))
             .collect();
@@ -323,15 +336,15 @@ mod tests {
     #[test]
     fn each_lane_runs_on_its_own_named_thread() {
         let jobs = Jobs::new(egui::Context::default());
-        for lane in [Lane::Account, Lane::Open, Lane::Io] {
+        for lane in [Lane::Account, Lane::Open, Lane::Io, Lane::Query] {
             jobs.spawn(lane, lane.thread_name(), move || {
                 assert_eq!(std::thread::current().name(), Some(lane.thread_name()));
                 Msg::Probe(lane.thread_name())
             });
         }
-        let mut got = drain_until(&jobs, 3);
+        let mut got = drain_until(&jobs, 4);
         got.sort();
-        assert_eq!(got, ["lf-account", "lf-io", "lf-open"]);
+        assert_eq!(got, ["lf-account", "lf-io", "lf-open", "lf-query"]);
     }
 
     #[test]

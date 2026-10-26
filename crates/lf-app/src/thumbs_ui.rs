@@ -98,6 +98,8 @@ pub struct Thumbs {
     stopped: bool,
     /// The first visible cell last frame and how many were visible.
     last_range: Option<(usize, usize)>,
+    /// This pool's "a worker could not start" was already reported.
+    worker_failure_told: bool,
 }
 
 impl Default for Thumbs {
@@ -111,6 +113,7 @@ impl Default for Thumbs {
             failed: HashMap::new(),
             stopped: false,
             last_range: None,
+            worker_failure_told: false,
         }
     }
 }
@@ -123,6 +126,7 @@ impl Thumbs {
         self.in_flight.clear();
         self.background.clear();
         self.last_range = None;
+        self.worker_failure_told = false;
     }
 
     /// The pool stopped on a device error and has not been rebuilt.
@@ -136,15 +140,10 @@ impl Thumbs {
         let mut events = Vec::new();
         if let Some(pool) = &self.pool {
             self.arrived.extend(pool.take_ready());
-            for (id, message) in pool.take_failed() {
-                if id == 0 {
-                    events.push(ThumbEvent::WorkerFailed(message));
-                } else {
-                    self.in_flight.remove(&id);
-                    self.failed.insert(id, message);
-                }
-            }
-            if let Some(message) = pool.take_device_error() {
+            let failures = pool.take_failed();
+            let device = pool.take_device_error();
+            events.extend(self.absorb_failures(failures));
+            if let Some(message) = device {
                 self.stopped = true;
                 self.in_flight.clear();
                 events.push(ThumbEvent::DeviceError(message));
@@ -169,15 +168,36 @@ impl Thumbs {
         events
     }
 
+    /// Records the pool's failures: per photo (a badge), or id 0 (a worker could not start:
+    /// one event per pool, however many workers failed).
+    pub fn absorb_failures(&mut self, failures: Vec<(i64, String)>) -> Vec<ThumbEvent> {
+        let mut events = Vec::new();
+        for (id, message) in failures {
+            if id == 0 {
+                if !self.worker_failure_told {
+                    self.worker_failure_told = true;
+                    events.push(ThumbEvent::WorkerFailed(message));
+                }
+            } else {
+                self.in_flight.remove(&id);
+                self.failed.insert(id, message);
+            }
+        }
+        events
+    }
+
     /// Asks for the thumbnails of `order[first..last]` (on screen) at `High`. When the
-    /// visible range jumps by more than two screens, the queued requests are dropped first.
+    /// visible range jumps by more than two screens, the queued requests are dropped first,
+    /// the new screen is asked for, and then the rest of the folder again at `Normal` (the
+    /// pool serves `High` first, so the screen still comes first).
     pub fn visible(&mut self, order: &[i64], first: usize, last: usize) {
         let last = last.min(order.len());
         let first = first.min(last);
         let screen = (last - first).max(1);
-        if let Some((prev, _)) = self.last_range
-            && prev.abs_diff(first) > 2 * screen
-        {
+        let jumped = self
+            .last_range
+            .is_some_and(|(prev, _)| prev.abs_diff(first) > 2 * screen);
+        if jumped {
             if let Some(pool) = &self.pool {
                 pool.cancel_pending();
             }
@@ -185,6 +205,11 @@ impl Thumbs {
         }
         self.last_range = Some((first, last - first));
         self.request(&order[first..last], Priority::High);
+        if jumped {
+            let textures = &self.textures;
+            self.background.retain(|id| textures.contains(*id));
+            self.background(order);
+        }
     }
 
     /// Asks for `ids` at `High` without the jump rule (the filmstrip's visible cells, drawn
@@ -247,6 +272,14 @@ impl Thumbs {
         self.last_range = None;
     }
 
+    /// Thumbnails asked for at `High` and not back yet.
+    pub fn pending_high(&self) -> usize {
+        self.in_flight
+            .values()
+            .filter(|p| **p == Priority::High)
+            .count()
+    }
+
     /// Thumbnails asked for and not back yet.
     pub fn pending(&self) -> usize {
         self.in_flight.len()
@@ -266,6 +299,7 @@ impl Thumbs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lf_raw::demosaic::Quality;
 
     #[test]
     fn lru_evicts_the_least_recently_used() {
@@ -290,5 +324,49 @@ mod tests {
         thumbs.background(&[1, 2, 3]);
         assert_eq!(thumbs.pending(), 0);
         assert!(thumbs.pump(&egui::Context::default()).is_empty());
+    }
+
+    #[test]
+    fn a_jump_requeues_the_folders_background_work() {
+        let Some(gpu) = lf_pipeline::test_support::try_shared_gpu() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        // A paused pool keeps every request queued, so what is asked for can be counted.
+        let pool = Thumbnailer::new_paused(gpu, dir.path(), 1, Quality::Fast).unwrap();
+        let mut thumbs = Thumbs::default();
+        thumbs.set_pool(pool);
+        let order: Vec<i64> = (1..=1_000).collect();
+        thumbs.background(&order);
+        thumbs.visible(&order, 0, 20);
+        assert_eq!(thumbs.pending(), 1_000);
+        assert_eq!(thumbs.pending_high(), 20);
+
+        // Jump far down: the queue is dropped, the new screen goes first, and the rest of
+        // the folder is asked for again at Normal.
+        thumbs.visible(&order, 600, 620);
+        assert_eq!(thumbs.pending(), 1_000, "nothing forgotten for good");
+        assert_eq!(thumbs.pending_high(), 20, "only the new screen is High");
+    }
+
+    #[test]
+    fn worker_start_failures_toast_once_per_pool() {
+        let mut thumbs = Thumbs::default();
+        let events = thumbs.absorb_failures(vec![
+            (0, "worker 1 could not open the catalogue".into()),
+            (0, "worker 2 could not open the catalogue".into()),
+            (7, "damaged file".into()),
+        ]);
+        assert_eq!(
+            events,
+            [ThumbEvent::WorkerFailed(
+                "worker 1 could not open the catalogue".into()
+            )]
+        );
+        assert_eq!(thumbs.error(7), Some("damaged file"));
+        assert!(
+            thumbs.absorb_failures(vec![(0, "again".into())]).is_empty(),
+            "still the same pool"
+        );
     }
 }

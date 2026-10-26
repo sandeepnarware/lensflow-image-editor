@@ -114,6 +114,7 @@ digest v0.11.3                           MIT OR Apache-2.0
 directories v6.0.0                       MIT OR Apache-2.0
 dirs-sys v0.5.0                          MIT OR Apache-2.0
 dispatch v0.2.0                          MIT
+dispatch2 v0.3.1                         Zlib OR Apache-2.0 OR MIT
 displaydoc v0.2.7                        MIT OR Apache-2.0
 dlib v0.5.3                              MIT
 document-features v0.2.12                MIT OR Apache-2.0
@@ -544,5 +545,7 @@ epaint_default_fonts bundles unmodified fonts: Hack (MIT), Noto Emoji (SIL Open 
 Licence 1.1), Ubuntu-Light (Ubuntu Font Licence 1.0) and emoji-icon-font (MIT).
 self_cell (Apache-2.0 OR GPL-2.0-only) and r-efi (MIT OR Apache-2.0 OR LGPL-2.1-or-later)
 are used under Apache-2.0. egui_kittest is development-only and is not shipped.
-rfd (file dialogs) uses the XDG desktop portal on Linux (no GTK), the Windows common
-dialogs and the macOS open panel.
+rfd (file dialogs): on Linux the picker uses the XDG desktop portal over D-Bus (libdbus is
+loaded at run time, not linked) and falls back to zenity; there is no GTK. Windows uses the
+common dialogs and macOS the open panel. Typing a folder path always works, with or without
+a picker.

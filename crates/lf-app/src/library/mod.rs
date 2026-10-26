@@ -1,8 +1,9 @@
 //! The library: catalogue root, folders, the grid, the filmstrip and the selection.
 //!
-//! The UI thread holds no catalogue connection: every query and write runs on the `Io` lane
-//! with its own `Catalog` and answers with a [`Msg`]. The thumbnail pool has its own
-//! connections.
+//! The UI thread holds no catalogue connection: quick reads (folders, a folder's photos) run
+//! on the `Query` lane and writes (imports, rescans, removals) on the `Io` lane, each job with
+//! its own `Catalog`, answering with a [`Msg`]. So a folder never waits behind an import to
+//! show. The thumbnail pool has its own connections.
 
 pub mod filmstrip;
 pub mod grid;
@@ -54,8 +55,6 @@ impl Env<'_> {
 pub enum Stage {
     /// No root chosen yet (first run).
     NoRoot,
-    /// The root picker is open.
-    Picking,
     /// The chosen root is on a network drive: ask first.
     NetworkWarning(PathBuf),
     /// A root is set and not opened yet.
@@ -99,6 +98,14 @@ pub struct Library {
     reviving: bool,
     /// Asking before a folder is removed from the catalogue.
     confirm_remove: Option<Folder>,
+    /// The folder chooser (picker and typed path) for the root and for "Add folder".
+    chooser: import_ui::Chooser,
+    /// The "Add folder" dialog is open.
+    adding: bool,
+    /// Asking whether an emptied folder's photos (folder id, count) are gone.
+    confirm_missing: Option<(i64, usize)>,
+    /// The folder whose photos are being loaded.
+    loading: Option<i64>,
     /// Scroll the grid and filmstrip to the active photo on this frame.
     reveal_active: bool,
     /// The grid's columns last frame (for the arrow keys).
@@ -132,6 +139,10 @@ impl Library {
             stop_import: Arc::new(AtomicBool::new(false)),
             reviving: false,
             confirm_remove: None,
+            chooser: import_ui::Chooser::default(),
+            adding: false,
+            confirm_missing: None,
+            loading: None,
             reveal_active: false,
             columns: 1,
             last_scroll: 0.0,
@@ -167,6 +178,11 @@ impl Library {
         )
     }
 
+    /// A folder's photos are being loaded.
+    pub fn loading(&self) -> bool {
+        self.loading.is_some()
+    }
+
     /// An import is running.
     pub fn importing(&self) -> bool {
         self.importing.is_some()
@@ -180,7 +196,11 @@ impl Library {
     /// Handles the library's messages; anything else is handed back.
     pub fn handle(&mut self, msg: Msg, env: &mut Env) -> Option<Msg> {
         match msg {
-            Msg::RootPicked(picked) => self.root_picked(picked, env),
+            Msg::FolderChosen {
+                purpose,
+                ticket,
+                result,
+            } => self.folder_chosen(purpose, ticket, result, env),
             Msg::CatalogueOpened { root, result } => self.opened(root, result, env),
             Msg::PoolReady(result) => {
                 self.reviving = false;
@@ -192,7 +212,7 @@ impl Library {
                     Err(e) => log::error!("could not restart thumbnails: {e}"),
                 }
             }
-            Msg::NothingPicked => self.busy = None,
+            Msg::MarkedMissing { folder_id, result } => self.marked_missing(folder_id, result, env),
             Msg::Scanned { folder, scan } => self.scanned(folder, scan, env),
             Msg::ImportProgress(progress) => {
                 if let Some(importing) = &mut self.importing {
@@ -206,12 +226,17 @@ impl Library {
                     .toasts
                     .push(Level::Error, format!("Could not list the folders. {e}")),
             },
-            Msg::Photos { folder_id, result } => match result {
-                Ok(rows) => self.photos_loaded(folder_id, rows),
-                Err(e) => env
-                    .toasts
-                    .push(Level::Error, format!("Could not list the photos. {e}")),
-            },
+            Msg::Photos { folder_id, result } => {
+                if self.loading == Some(folder_id) {
+                    self.loading = None;
+                }
+                match result {
+                    Ok(rows) => self.photos_loaded(folder_id, rows),
+                    Err(e) => env
+                        .toasts
+                        .push(Level::Error, format!("Could not list the photos. {e}")),
+                }
+            }
             Msg::FolderRemoved { folder_id, result } => match result {
                 Ok(()) => {
                     if self.current_folder == Some(folder_id) {
@@ -228,10 +253,10 @@ impl Library {
                 // A panicking library job must not leave the library waiting for it.
                 match name.as_str() {
                     "add folder" | "rescan" => self.busy = None,
+                    "photos" => self.loading = None,
                     "import" => self.importing = None,
                     "open catalogue" => self.stage = Stage::Failed(message.clone()),
                     "thumbnail pool" => self.reviving = false,
-                    "choose catalogue folder" => self.stage = Stage::NoRoot,
                     _ => {}
                 }
                 return Some(Msg::JobFailed { name, message });
@@ -328,9 +353,10 @@ impl Library {
             self.reveal_active = true;
         }
         self.current_folder = folder;
+        self.loading = folder;
         self.revive_thumbs(env);
         if let (Some(folder_id), Some(root)) = (folder, self.root.clone()) {
-            env.jobs.spawn(Lane::Io, "photos", move || Msg::Photos {
+            env.jobs.spawn(Lane::Query, "photos", move || Msg::Photos {
                 folder_id,
                 result: catalog_ext::photos_in(&root, folder_id),
             });
@@ -341,7 +367,7 @@ impl Library {
         let Some(root) = self.root.clone() else {
             return;
         };
-        env.jobs.spawn(Lane::Io, "folders", move || {
+        env.jobs.spawn(Lane::Query, "folders", move || {
             Msg::Folders(catalog_ext::folders(&root))
         });
     }
@@ -423,7 +449,7 @@ impl Library {
             .show(ui, |ui| self.status(ui));
         egui::Panel::bottom("filmstrip")
             .exact_size(filmstrip::HEIGHT)
-            .show(ui, |ui| self.filmstrip(ui));
+            .show(ui, |ui| self.filmstrip(ui, env));
         egui::Panel::left("folders")
             .default_size(220.0)
             .resizable(true)
@@ -433,11 +459,17 @@ impl Library {
             Mode::Develop(id) => self.develop_placeholder(ui, id),
         });
         self.confirm_remove_dialog(ui.ctx(), env);
+        self.add_folder_dialog(ui.ctx(), env);
+        self.confirm_missing_dialog(ui.ctx(), env);
         self.reveal_active = false;
     }
 
     fn keys(&mut self, ctx: &egui::Context, env: &mut Env) {
-        if ctx.egui_wants_keyboard_input() || self.confirm_remove.is_some() {
+        if ctx.egui_wants_keyboard_input()
+            || self.confirm_remove.is_some()
+            || self.confirm_missing.is_some()
+            || self.adding
+        {
             return;
         }
         let (left, right, up, down, all, develop, library) = ctx.input_mut(|i| {
@@ -598,6 +630,14 @@ impl Library {
     }
 
     fn grid(&mut self, ui: &mut egui::Ui, env: &mut Env) {
+        if self.loading.is_some() && self.photos.is_empty() {
+            ui.vertical_centered(|ui| {
+                ui.add_space(ui.available_height() / 3.0);
+                ui.spinner();
+                ui.label(RichText::new("Loading photos…").color(theme::MUTED));
+            });
+            return;
+        }
         if self.folders.is_empty() {
             ui.vertical_centered(|ui| {
                 ui.add_space(ui.available_height() / 3.0);
@@ -651,11 +691,13 @@ impl Library {
         });
     }
 
-    fn filmstrip(&mut self, ui: &mut egui::Ui) {
+    fn filmstrip(&mut self, ui: &mut egui::Ui, env: &mut Env) {
         if let Some(id) = filmstrip::show(ui, self) {
             self.selection.click(id);
+            // Develop follows the click, through the same check as any open (a missing
+            // photo is never opened).
             if let Mode::Develop(_) = self.mode {
-                self.mode = Mode::Develop(id);
+                self.open_photo(id, env);
             }
         }
     }

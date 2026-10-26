@@ -1,18 +1,58 @@
-//! Choosing the catalogue root (first run, the network-drive warning), opening it, and adding
-//! or rescanning folders. The pickers, scans and imports all run on the `Io` lane.
+//! Choosing folders (the catalogue root on first run, and folders to add), opening the
+//! catalogue, and importing.
+//!
+//! A folder comes from the system picker or from a typed path. Each picker runs on its own
+//! short-lived thread, never on a lane: a picker that fails says nothing (rfd answers `None`
+//! for a cancel and a failure alike), and one that never answers must not hold up other
+//! work. A typed path is always available, so a machine without a working picker (no
+//! desktop portal and no zenity on Linux) can still choose a folder. Scans and imports run
+//! on the `Io` lane.
 
 use super::{Env, Library, Stage};
 use crate::catalog_ext::{self, Imported, NETWORK_WARNING, count};
-use crate::jobs::{Lane, Msg};
+use crate::jobs::{Lane, Msg, Reporter};
 use crate::theme;
 use crate::toast::Level;
-use eframe::egui::{self, RichText};
+use eframe::egui::{self, Key, RichText};
 use lf_catalog::Folder;
 use lf_catalog::import::{self, Progress, Scan};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
 /// The first-run screen's text.
 pub const FIRST_RUN: &str = "Choose a folder for your catalogue. Photos stay where they are; the catalogue only remembers them.";
+/// The label of the typed-path field.
+pub const TYPE_PATH: &str = "Or type a folder path";
+
+/// What a chosen folder is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Purpose {
+    /// The catalogue root.
+    Root,
+    /// A folder of photos to add.
+    AddFolder,
+}
+
+/// A folder that exists and can be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Chosen {
+    pub path: PathBuf,
+    /// It is on a network drive (asked about for the catalogue root).
+    pub network: bool,
+}
+
+/// The folder chooser's state: the typed path, the open picker and the last problem.
+#[derive(Debug, Default)]
+pub struct Chooser {
+    /// Increases with every choice started; older answers are ignored.
+    ticket: u64,
+    /// The ticket of the picker still open, if any.
+    picker: Option<u64>,
+    /// A typed path is being checked.
+    checking: bool,
+    typed: String,
+    error: Option<String>,
+}
 
 /// A running import.
 #[derive(Debug, Clone)]
@@ -56,24 +96,167 @@ pub fn summary_text(imported: &Imported) -> String {
     text
 }
 
+/// The question asked when a readable folder holds none of its photos any more.
+pub fn emptied_question(photos: usize) -> String {
+    if photos == 1 {
+        "The photo is not in this folder any more. Mark it missing?".to_owned()
+    } else {
+        format!(
+            "None of the {} photos are in this folder any more. Mark them missing?",
+            count(photos)
+        )
+    }
+}
+
+/// Runs `choose` on its own thread and sends what it returns as the answer to `ticket`.
+/// A panic answers with an error instead of leaving the chooser waiting.
+fn on_own_thread(
+    reporter: Reporter,
+    purpose: Purpose,
+    ticket: u64,
+    choose: impl FnOnce() -> Result<Option<Chosen>, String> + Send + 'static,
+) {
+    let spawned = std::thread::Builder::new()
+        .name("lf-folder-choice".to_owned())
+        .spawn(move || {
+            let result = catch_unwind(AssertUnwindSafe(choose)).unwrap_or_else(|_| {
+                log::error!("choosing a folder ({purpose:?}) crashed");
+                Err(
+                    "The folder picker stopped unexpectedly. Type the folder path instead."
+                        .to_owned(),
+                )
+            });
+            reporter.send(Msg::FolderChosen {
+                purpose,
+                ticket,
+                result,
+            });
+        });
+    if let Err(e) = spawned {
+        log::error!("could not start the folder chooser: {e}");
+    }
+}
+
 impl Library {
+    /// The chooser's current ticket (tests use it to answer as a picker would).
+    pub fn ticket(&self) -> u64 {
+        self.chooser.ticket
+    }
+
+    /// Replaces the typed folder path (tests use it).
+    pub fn set_typed_path(&mut self, path: &str) {
+        self.chooser.typed = path.to_owned();
+    }
+
+    /// The picker button, the typed-path field and the last problem.
+    fn chooser_ui(&mut self, ui: &mut egui::Ui, purpose: Purpose, env: &mut Env) {
+        let picking = self.chooser.picker.is_some();
+        let text = if picking {
+            "Waiting for the folder picker…"
+        } else {
+            "Choose a folder…"
+        };
+        if ui.add_enabled(!picking, egui::Button::new(text)).clicked() {
+            self.open_picker(purpose, env);
+        }
+        ui.add_space(12.0);
+        let label = ui.label(TYPE_PATH);
+        let field = ui
+            .add(egui::TextEdit::singleline(&mut self.chooser.typed).desired_width(360.0))
+            .labelled_by(label.id);
+        let entered = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+        let can_use = !self.chooser.checking && !self.chooser.typed.trim().is_empty();
+        let clicked = ui
+            .add_enabled(can_use, egui::Button::new("Use this folder"))
+            .clicked();
+        if clicked || (entered && can_use) {
+            self.check_typed(purpose, env);
+        }
+        if let Some(error) = &self.chooser.error {
+            ui.label(RichText::new(error).color(theme::DANGER));
+        }
+    }
+
+    fn open_picker(&mut self, purpose: Purpose, env: &mut Env) {
+        self.chooser.ticket += 1;
+        self.chooser.error = None;
+        self.chooser.checking = false;
+        let ticket = self.chooser.ticket;
+        self.chooser.picker = Some(ticket);
+        let title = match purpose {
+            Purpose::Root => "Choose a folder for your catalogue",
+            Purpose::AddFolder => "Add a folder of photos",
+        };
+        on_own_thread(env.jobs.reporter(), purpose, ticket, move || {
+            let picked = rfd::FileDialog::new().set_title(title).pick_folder();
+            log::info!("folder picker ({purpose:?}) answered: {picked:?}");
+            Ok(picked.map(|path| Chosen {
+                network: catalog_ext::is_network_path(&path),
+                path,
+            }))
+        });
+    }
+
+    fn check_typed(&mut self, purpose: Purpose, env: &mut Env) {
+        self.chooser.ticket += 1;
+        self.chooser.error = None;
+        self.chooser.checking = true;
+        let ticket = self.chooser.ticket;
+        let path = PathBuf::from(self.chooser.typed.trim());
+        on_own_thread(env.jobs.reporter(), purpose, ticket, move || {
+            catalog_ext::check_folder(&path).map_err(str::to_owned)?;
+            log::info!("typed folder ({purpose:?}): {}", path.display());
+            Ok(Some(Chosen {
+                network: catalog_ext::is_network_path(&path),
+                path,
+            }))
+        });
+    }
+
+    pub(super) fn folder_chosen(
+        &mut self,
+        purpose: Purpose,
+        ticket: u64,
+        result: Result<Option<Chosen>, String>,
+        env: &mut Env,
+    ) {
+        if self.chooser.picker == Some(ticket) {
+            self.chooser.picker = None;
+        }
+        if ticket != self.chooser.ticket {
+            return; // superseded by a later choice
+        }
+        self.chooser.checking = false;
+        let chosen = match result {
+            Ok(Some(chosen)) => chosen,
+            Ok(None) => return, // the picker was cancelled
+            Err(message) => {
+                self.chooser.error = Some(message);
+                return;
+            }
+        };
+        self.chooser.typed.clear();
+        match purpose {
+            Purpose::Root if chosen.network => self.stage = Stage::NetworkWarning(chosen.path),
+            Purpose::Root => self.use_root(chosen.path, env),
+            Purpose::AddFolder => {
+                if self.adding {
+                    self.adding = false;
+                    self.scan_folder(chosen.path, "add folder", env);
+                }
+            }
+        }
+    }
+
     /// The first-run, network-warning, opening and failure screens.
     pub(super) fn root_screen(&mut self, ui: &mut egui::Ui, env: &mut Env) {
         ui.vertical_centered(|ui| {
-            ui.add_space(ui.available_height() / 3.0);
+            ui.add_space(ui.available_height() / 4.0);
             match self.stage.clone() {
-                Stage::NoRoot | Stage::Picking => {
+                Stage::NoRoot => {
                     ui.label(RichText::new(FIRST_RUN).size(16.0));
                     ui.add_space(12.0);
-                    let picking = self.stage == Stage::Picking;
-                    let text = if picking {
-                        "Waiting for the folder picker…"
-                    } else {
-                        "Choose a folder…"
-                    };
-                    if ui.add_enabled(!picking, egui::Button::new(text)).clicked() {
-                        self.pick_root(env);
-                    }
+                    self.chooser_ui(ui, Purpose::Root, env);
                 }
                 Stage::NetworkWarning(path) => {
                     ui.label(RichText::new(NETWORK_WARNING).color(theme::WARNING));
@@ -81,7 +264,8 @@ impl Library {
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
                         if ui.button("Choose another").clicked() {
-                            self.pick_root(env);
+                            self.stage = Stage::NoRoot;
+                            self.open_picker(Purpose::Root, env);
                         }
                         if ui.button("Use it anyway").clicked() {
                             log::warn!("catalogue root on a network drive: {}", path.display());
@@ -99,39 +283,13 @@ impl Library {
                             .color(theme::DANGER),
                     );
                     ui.add_space(12.0);
-                    if ui.button("Choose another folder").clicked() {
-                        self.pick_root(env);
-                    }
+                    ui.label("Choose another folder for your catalogue.");
+                    ui.add_space(8.0);
+                    self.chooser_ui(ui, Purpose::Root, env);
                 }
                 Stage::Ready => {}
             }
         });
-    }
-
-    fn pick_root(&mut self, env: &mut Env) {
-        self.stage = Stage::Picking;
-        // Always on a lane: GTK dialogs must not run on winit's thread on Linux.
-        env.jobs
-            .spawn(Lane::Io, "choose catalogue folder", move || {
-                let picked = rfd::FileDialog::new()
-                    .set_title("Choose a folder for your catalogue")
-                    .pick_folder()
-                    .map(|path| {
-                        let network = catalog_ext::is_network_path(&path);
-                        (path, network)
-                    });
-                Msg::RootPicked(picked)
-            });
-    }
-
-    pub(super) fn root_picked(&mut self, picked: Option<(PathBuf, bool)>, env: &mut Env) {
-        match picked {
-            // Cancelled: back to the remembered root (tried again), or the first-run screen.
-            None if self.root.is_some() => self.stage = Stage::Closed,
-            None => self.stage = Stage::NoRoot,
-            Some((path, true)) => self.stage = Stage::NetworkWarning(path),
-            Some((path, false)) => self.use_root(path, env),
-        }
     }
 
     fn use_root(&mut self, path: PathBuf, env: &mut Env) {
@@ -140,6 +298,7 @@ impl Library {
         self.root = Some(path);
         self.folders.clear();
         self.current_folder = None;
+        self.loading = None;
         self.photos.clear();
         self.order.clear();
         self.index.clear();
@@ -164,35 +323,58 @@ impl Library {
         });
     }
 
+    /// Opens the "Add folder" dialog (picker and typed path).
     pub(super) fn add_folder(&mut self, env: &mut Env) {
         if !self.can_add() {
             return;
         }
-        self.busy = Some("Choose a folder of photos…");
+        self.adding = true;
+        self.chooser.error = None;
         self.revive_thumbs(env);
-        env.jobs
-            .spawn(Lane::Io, "add folder", move || match rfd::FileDialog::new()
-                .set_title("Add a folder of photos")
-                .pick_folder()
-            {
-                None => Msg::NothingPicked,
-                Some(folder) => {
-                    let scan = import::scan(&folder);
-                    Msg::Scanned { folder, scan }
-                }
-            });
+    }
+
+    pub(super) fn add_folder_dialog(&mut self, ctx: &egui::Context, env: &mut Env) {
+        if !self.adding {
+            return;
+        }
+        let mut cancel = false;
+        egui::Modal::new(egui::Id::unique("add-folder")).show(ctx, |ui| {
+            ui.set_max_width(440.0);
+            ui.heading("Add a folder of photos");
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("Photos stay where they are; the catalogue only remembers them.")
+                    .color(theme::MUTED),
+            );
+            ui.add_space(12.0);
+            self.chooser_ui(ui, Purpose::AddFolder, env);
+            ui.add_space(12.0);
+            if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
+                cancel = true;
+            }
+        });
+        if cancel {
+            self.adding = false;
+            // An answer still on its way is ignored.
+            self.chooser.ticket += 1;
+            self.chooser.checking = false;
+            self.chooser.error = None;
+        }
     }
 
     pub(super) fn rescan(&mut self, folder: &Folder, env: &mut Env) {
         if !self.can_add() {
             return;
         }
-        self.busy = Some("Looking for photos…");
         self.revive_thumbs(env);
-        let path = folder.path.clone();
-        env.jobs.spawn(Lane::Io, "rescan", move || {
-            let scan = import::scan(&path);
-            Msg::Scanned { folder: path, scan }
+        self.scan_folder(folder.path.clone(), "rescan", env);
+    }
+
+    fn scan_folder(&mut self, folder: PathBuf, name: &str, env: &mut Env) {
+        self.busy = Some("Looking for photos…");
+        env.jobs.spawn(Lane::Io, name, move || {
+            let scan = import::scan(&folder);
+            Msg::Scanned { folder, scan }
         });
     }
 
@@ -247,6 +429,10 @@ impl Library {
                     imported.missing
                 );
                 env.toasts.push(Level::Success, summary_text(&imported));
+                if let Some(n) = imported.emptied {
+                    log::info!("{shown} was read and holds none of its {n} photos; asking");
+                    self.confirm_missing = Some((imported.folder_id, n));
+                }
                 self.mode = super::Mode::Library;
                 self.refresh_folders(env);
                 self.show_folder(Some(imported.folder_id), env);
@@ -260,6 +446,53 @@ impl Library {
                     self.show_folder(Some(current), env);
                 }
             }
+        }
+    }
+
+    /// "None of the N photos are in this folder any more. Mark them missing?"
+    pub(super) fn confirm_missing_dialog(&mut self, ctx: &egui::Context, env: &mut Env) {
+        let Some((folder_id, photos)) = self.confirm_missing else {
+            return;
+        };
+        let (mut mark, mut keep) = (false, false);
+        egui::Modal::new(egui::Id::unique("confirm-mark-missing")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.label(emptied_question(photos));
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                mark = ui.button("Mark missing").clicked();
+                keep = ui.button("Keep them").clicked() || ui.input(|i| i.key_pressed(Key::Escape));
+            });
+        });
+        if mark && let Some(root) = self.root.clone() {
+            env.jobs
+                .spawn(Lane::Io, "mark missing", move || Msg::MarkedMissing {
+                    folder_id,
+                    result: catalog_ext::mark_missing_confirmed(&root, folder_id),
+                });
+        }
+        if mark || keep {
+            self.confirm_missing = None;
+        }
+    }
+
+    pub(super) fn marked_missing(
+        &mut self,
+        folder_id: i64,
+        result: Result<usize, String>,
+        env: &mut Env,
+    ) {
+        match result {
+            Ok(n) => {
+                log::info!("marked {n} photos of folder {folder_id} missing");
+                if self.current_folder == Some(folder_id) {
+                    self.show_folder(Some(folder_id), env);
+                }
+            }
+            Err(e) => env.toasts.push(
+                Level::Error,
+                format!("Could not mark the photos missing. {e}"),
+            ),
         }
     }
 }
@@ -285,10 +518,19 @@ mod tests {
                 skipped: 1_000,
             },
             missing: 3,
+            emptied: None,
         };
         assert_eq!(
             summary_text(&imported),
             "Import finished: 48 added, 2 updated, 1,000 unchanged, 3 missing."
+        );
+        assert_eq!(
+            emptied_question(1_200),
+            "None of the 1,200 photos are in this folder any more. Mark them missing?"
+        );
+        assert_eq!(
+            emptied_question(1),
+            "The photo is not in this folder any more. Mark it missing?"
         );
     }
 }
