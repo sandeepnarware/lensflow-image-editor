@@ -12,13 +12,15 @@ that reproduces the web editor's output), Part 2b (RAW decoding and
 development, so `lf-render` opens camera files) and Part 2c-i (the grade,
 account and catalogue libraries) are built. The app itself (2c-ii) and
 packaging (2d) follow. 2c-i is libraries only: there is no UI yet.
-The application crate `lf-app` has started (2c-ii Tasks 1 to 7: window and runtime,
+The application crate `lf-app` has started (2c-ii Tasks 1 to 8: window and runtime,
 sign-in and entitlement, catalogue root, import, library grid and filmstrip, the
 Develop view's preview drawn straight into a texture egui shows, and the adjust panels
 with one history step per gesture, undo and redo, and debounced sidecar writes; the crop
 and straighten tool (`R`) and the heal and clone spot tool (`Q`); looks, studio presets
 synced with LensFlow, copy and paste of edits (`Ctrl+Shift+C` / `Ctrl+Shift+V`), "Apply to N
-photos", and named versions).
+photos", and named versions; "Match a reference…" in the Photo menu, which shows its AI
+cost first, checks the studio again before each AI request, and fits from measurements
+alone when AI is off).
 
 ## Crates
 

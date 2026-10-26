@@ -16,6 +16,10 @@ use crate::clipboard::{self, Clipboard};
 use crate::develop::{self, Develop, Outcome};
 use crate::dialogs::batch::{self, BatchAction, BatchDialog, BatchProgress, Choice};
 use crate::dialogs::group_picker::{CopyAction, CopyDialog};
+use crate::dialogs::match_reference::steps::{AiLink, MatchError, SheetRender};
+use crate::dialogs::match_reference::{
+    self as matching, AiGate, MatchAction, MatchDialog, MatchStep,
+};
 use crate::jobs::{Jobs, Lane, Msg};
 use crate::prefs::Prefs;
 use crate::theme;
@@ -146,6 +150,11 @@ pub struct Library {
     paste_asked: Option<Instant>,
     /// "Apply to N photos".
     batch: Option<BatchDialog>,
+    /// "Match a reference…", the gate's last answer for its cost line, and a fit asked for
+    /// (the app supplies the AI link).
+    matching: Option<MatchDialog>,
+    match_gate: AiGate,
+    match_wanted: bool,
 }
 
 impl Library {
@@ -187,6 +196,9 @@ impl Library {
             copying: false,
             paste_asked: None,
             batch: None,
+            matching: None,
+            match_gate: AiGate::default(),
+            match_wanted: false,
         }
     }
 
@@ -239,9 +251,13 @@ impl Library {
         self.importing.is_some()
     }
 
-    /// Stops a running import after its current batch (the app is quitting).
+    /// Stops a running import after its current batch, and a match at its next step (the app
+    /// is quitting).
     pub fn stop_import(&self) {
         self.stop_import.store(true, Ordering::SeqCst);
+        if let Some(m) = &self.matching {
+            m.cancel.store(true, Ordering::SeqCst);
+        }
     }
 
     /// The flag [`Library::stop_import`] sets (for the device-reset dialog's thread).
@@ -272,6 +288,190 @@ impl Library {
     /// The "Apply to N photos" dialog, while open.
     pub fn batch(&self) -> Option<&BatchDialog> {
         self.batch.as_ref()
+    }
+
+    /// The "Match a reference" dialog, while open.
+    pub fn matching(&self) -> Option<&MatchDialog> {
+        self.matching.as_ref()
+    }
+
+    /// The gate's last answer, for the match's cost line (the app tells the library each
+    /// frame).
+    pub fn set_match_gate(&mut self, decision: Option<&lf_account::entitlement::Decision>) {
+        self.match_gate = AiGate::from(decision);
+    }
+
+    /// The dialog asked for a fit since the last call (the app then calls
+    /// [`Library::start_match`] with the AI link).
+    pub fn take_match_run(&mut self) -> bool {
+        std::mem::take(&mut self.match_wanted)
+    }
+
+    /// Opens "Match a reference" for the selected photos.
+    pub fn open_match(&mut self) {
+        let photos: Vec<PhotoRow> = self
+            .selected_in_order()
+            .into_iter()
+            .filter_map(|id| self.photo(id).cloned())
+            .collect();
+        if !photos.is_empty() {
+            self.matching = Some(MatchDialog::new(photos));
+        }
+    }
+
+    /// Starts the fit on the `Open` lane (the device renders the sheet); progress and the
+    /// answer arrive as `Msg::Match`. `ai` is `None` without a studio session.
+    pub fn start_match(&mut self, ai: Option<AiLink>, jobs: &Jobs) {
+        let Some(req) = self.matching.as_mut().and_then(|m| m.start(ai)) else {
+            return;
+        };
+        let gpu = self.gpu.clone();
+        let frames = self.frames.clone();
+        let reporter = jobs.reporter();
+        jobs.spawn(Lane::Open, "match", move || {
+            let open =
+                |p: &Path, edge: u32| matching::open_default(&gpu, frames.as_deref(), p, edge);
+            let report = |step: MatchStep| reporter.send(Msg::Match(step));
+            let renderer = |sheet: &image::RgbaImage| {
+                lf_pipeline::Renderer::new(gpu.clone(), sheet, sheet.width(), sheet.height())
+                    .map(|r| Box::new(r) as Box<dyn SheetRender>)
+                    .map_err(|e| format!("The contact sheet could not be drawn. {e}"))
+            };
+            Msg::Match(matching::fit(req, &open, renderer, &report))
+        });
+    }
+
+    fn match_step(&mut self, step: MatchStep, env: &mut Env) -> Option<Msg> {
+        match step {
+            MatchStep::SignedOut(g) => return Some(Msg::Match(MatchStep::SignedOut(g))),
+            MatchStep::Fitted {
+                run,
+                result: Err(MatchError::Unauthorized(g)),
+            } => {
+                if let Some(m) = &mut self.matching {
+                    m.handle(MatchStep::Fitted {
+                        run,
+                        result: Err(MatchError::Unauthorized(g)),
+                    });
+                }
+                return Some(Msg::Match(MatchStep::SignedOut(g)));
+            }
+            MatchStep::Applied { run, report } => {
+                // Photos written before a close still get their new thumbnails and settings.
+                self.edited(&report.edited, env);
+                if let Some(m) = &mut self.matching {
+                    m.handle(MatchStep::Applied { run, report });
+                }
+            }
+            other => {
+                if let Some(m) = &mut self.matching {
+                    m.handle(other);
+                }
+            }
+        }
+        None
+    }
+
+    fn match_dialog(&mut self, ctx: &egui::Context, env: &mut Env) {
+        let Some(dialog) = &mut self.matching else {
+            return;
+        };
+        match dialog.show(ctx, self.match_gate) {
+            MatchAction::None => {}
+            MatchAction::Close => self.matching = None,
+            MatchAction::Run => self.match_wanted = true,
+            MatchAction::PickFile => {
+                dialog.ticket = matching::next_id();
+                let ticket = dialog.ticket;
+                let reporter = env.jobs.reporter();
+                // Its own short-lived thread, as the folder picker: one that never answers
+                // must not hold up a lane.
+                let spawned =
+                    std::thread::Builder::new()
+                        .name("lf-picker".into())
+                        .spawn(move || {
+                            let path = rfd::FileDialog::new()
+                                .set_title(matching::CHOOSE)
+                                .add_filter("Pictures", matching::IMAGES)
+                                .pick_file();
+                            reporter.send(Msg::Match(MatchStep::Picked { ticket, path }));
+                        });
+                if let Err(e) = spawned {
+                    log::warn!("could not open the file picker: {e}");
+                }
+            }
+            MatchAction::Apply(plan) => self.apply_match(*plan, env),
+        }
+    }
+
+    /// Saves the preset when named, then writes the grade to every selected photo on the
+    /// `Open` lane (measuring a photo needs the device), each through the batch's per-photo
+    /// path.
+    fn apply_match(&mut self, plan: matching::ApplyPlan, env: &mut Env) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        // The open photo's gesture is recorded first, so the grade lands on top of it.
+        self.develop.finish_edit(env.toasts);
+        if let Some(name) = &plan.preset {
+            let partial =
+                crate::clipboard::picked(&plan.grade, &lf_settings::groups::DEFAULT_COPY_GROUPS);
+            match self.develop.studio() {
+                None => env
+                    .toasts
+                    .push(Level::Warning, crate::develop::panels::presets::NO_STUDIO),
+                Some(studio) => match self.develop.save_preset(studio, name, &partial) {
+                    Ok(true) => env
+                        .toasts
+                        .push(Level::Success, format!("Preset “{name}” saved.")),
+                    Ok(false) => env
+                        .toasts
+                        .push(Level::Warning, crate::dialogs::save_preset::TAKEN),
+                    Err(e) => env
+                        .toasts
+                        .push(Level::Error, format!("The preset could not be saved. {e}")),
+                },
+            }
+        }
+        let Some(dialog) = &mut self.matching else {
+            return;
+        };
+        dialog.applying();
+        let (run, ids, stop) = (dialog.run, dialog.ids.clone(), dialog.cancel.clone());
+        let gpu = self.gpu.clone();
+        let frames = self.frames.clone();
+        let saver = self.develop.saver();
+        let reporter = env.jobs.reporter();
+        env.jobs.spawn(Lane::Open, "match apply", move || {
+            let total = ids.len();
+            let report = match lf_catalog::Catalog::open(&root) {
+                Err(e) => matching::ApplyReport {
+                    total,
+                    done: total,
+                    edited: Vec::new(),
+                    failed: ids.iter().map(|&id| (id, e.to_string())).collect(),
+                },
+                Ok(catalog) => {
+                    let open = |p: &Path, edge: u32| {
+                        matching::open_default(&gpu, frames.as_deref(), p, edge)
+                    };
+                    let mut offset = matching::offsets(&plan.exposure, &open);
+                    let mut progress = |done: usize| {
+                        reporter.send(Msg::Match(MatchStep::Applying { run, done, total }))
+                    };
+                    matching::apply(
+                        &catalog,
+                        &ids,
+                        &plan.grade,
+                        &mut offset,
+                        &saver,
+                        &stop,
+                        &mut progress,
+                    )
+                }
+            };
+            Msg::Match(MatchStep::Applied { run, report })
+        });
     }
 
     /// Commits a gesture still in progress (the app is quitting).
@@ -352,6 +552,7 @@ impl Library {
                 Err(e) => log::info!("could not pre-open photo {photo_id}: {e}"),
             },
             Msg::BatchProgress(progress) => self.batch_progress(progress, env),
+            Msg::Match(step) => return self.match_step(step, env),
             Msg::PresetsSynced(..) => {
                 // The catalogue's presets may have changed; the session handles the rest.
                 self.develop.presets_stale();
@@ -366,6 +567,11 @@ impl Library {
                     "import" => self.importing = None,
                     "open catalogue" => self.stage = Stage::Failed(message.clone()),
                     "thumbnail pool" => self.reviving = false,
+                    "match" | "match apply" => {
+                        if let Some(m) = &mut self.matching {
+                            m.job_failed(&message);
+                        }
+                    }
                     "batch" => {
                         if let Some(b) = &mut self.batch {
                             let total = b.ids.len();
@@ -633,6 +839,17 @@ impl Library {
                         self.add_folder(env);
                     }
                 });
+                ui.menu_button("Photo", |ui| {
+                    if ui
+                        .add_enabled(
+                            !self.selection.current.is_empty(),
+                            egui::Button::new(matching::MENU),
+                        )
+                        .clicked()
+                    {
+                        self.open_match();
+                    }
+                });
                 ui.menu_button("Edit", |ui| {
                     let editing = matches!(self.mode, Mode::Develop(_));
                     let undo =
@@ -707,6 +924,7 @@ impl Library {
         self.copy_dialog(ui.ctx(), env);
         self.waiting_paste(ui.ctx(), env);
         self.batch_dialog(ui.ctx(), env);
+        self.match_dialog(ui.ctx(), env);
         self.reveal_active = false;
     }
 
@@ -718,6 +936,7 @@ impl Library {
             || self.adding
             || self.copying
             || self.batch.is_some()
+            || self.matching.is_some()
         {
             return;
         }

@@ -59,6 +59,20 @@ pub fn apply_one(
     recipe: &Recipe,
     saver: &SidecarSaver,
 ) -> Result<(), String> {
+    apply_with(catalog, photo_id, saver, |_, current| {
+        Ok(recipe.apply(current))
+    })
+}
+
+/// The per-photo path every multi-photo edit takes: the photo's settings become
+/// `next(photo, current)`, recorded with one `set_settings`, and its sidecar is written at
+/// once (unless the sidecar beside it is damaged: that file is left alone).
+pub fn apply_with(
+    catalog: &Catalog,
+    photo_id: i64,
+    saver: &SidecarSaver,
+    next: impl FnOnce(&lf_catalog::PhotoRow, &EditSettings) -> Result<EditSettings, String>,
+) -> Result<(), String> {
     let text = |e: CatalogError| e.to_string();
     let photo = catalog
         .photo(photo_id)
@@ -67,7 +81,7 @@ pub fn apply_one(
     let current = edits::get_settings(catalog, photo_id)
         .map_err(text)?
         .unwrap_or_else(EditSettings::default_settings);
-    let next = recipe.apply(&current);
+    let next = next(&photo, &current)?;
     let sidecar = edits::set_settings(catalog, photo_id, &next).map_err(text)?;
     if photo.sidecar_error.is_some() {
         log::debug!("photo {photo_id}: its sidecar is damaged; not writing");

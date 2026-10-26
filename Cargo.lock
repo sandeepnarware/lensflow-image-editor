@@ -2863,6 +2863,7 @@ dependencies = [
  "image",
  "lf-account",
  "lf-catalog",
+ "lf-grade",
  "lf-pipeline",
  "lf-raw",
  "lf-settings",

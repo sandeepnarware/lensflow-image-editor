@@ -226,6 +226,12 @@ impl eframe::App for App {
         self.flow.tick(Instant::now(), &self.jobs);
         if let Some(lib) = &mut self.library {
             lib.set_studio(self.flow.studio_id());
+            // Match a reference: its cost line reads the gate; a fit asked for gets the AI
+            // link, whose fresh check before each AI request goes through the session.
+            lib.set_match_gate(self.flow.gate());
+            if lib.take_match_run() {
+                lib.start_match(self.flow.ai_link(&self.jobs), &self.jobs);
+            }
             if lib.take_presets_changed() {
                 let root = lib.root().map(std::path::Path::to_path_buf);
                 self.flow.sync_presets(&self.jobs, root.as_deref());

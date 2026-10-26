@@ -3,6 +3,7 @@
 
 pub mod batch;
 pub mod group_picker;
+pub mod match_reference;
 pub mod save_preset;
 
 use crate::theme;
