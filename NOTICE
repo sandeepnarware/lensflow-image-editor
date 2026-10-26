@@ -467,6 +467,7 @@ wayland-scanner v0.31.11                 MIT
 wayland-sys v0.31.11                     MIT
 web-sys v0.3.106                         MIT OR Apache-2.0
 web-time v1.1.0                          MIT OR Apache-2.0
+webbrowser v1.2.5                        MIT OR Apache-2.0
 webpki-root-certs v1.0.11                CDLA-Permissive-2.0
 weezl v0.1.12                            MIT OR Apache-2.0
 wgpu v30.0.1                             MIT OR Apache-2.0
@@ -559,4 +560,5 @@ loaded at run time, not linked) and falls back to zenity; there is no GTK. Windo
 common dialogs and macOS the open panel. Typing a folder path always works, with or without
 a picker.
 
+webbrowser opens links (Help > About) in the system browser.
 This notice is compiled into lensflow-ImageEditor and shown under Help > About.

@@ -12,6 +12,7 @@ use lf_app::jobs::{Jobs, Lane, Msg};
 use lf_app::library::import_ui::{Chosen, FIRST_RUN, KEEP_ROOT, Purpose, TYPE_PATH};
 use lf_app::library::{Env, Library, Mode, Stage};
 use lf_app::prefs::Prefs;
+use lf_app::shortcuts::Action;
 use lf_app::toast::Toasts;
 use lf_catalog::import;
 use lf_pipeline::test_support::try_shared_gpu;
@@ -1240,4 +1241,125 @@ fn changing_the_catalogue_restarts_the_library_and_can_keep_the_old_one() {
     assert_eq!(h.state().lib.root(), Some(old_root.as_path()));
     assert!(h.state().lib.kept_root().is_none());
     assert!(h.state().lib.develop().generation() >= generation);
+}
+
+/// Runs a menu action as the app does (through `Library::run`).
+fn run_action(h: &mut Harness<'static, State>, action: Action) -> bool {
+    let s = h.state_mut();
+    let mut env = Env {
+        jobs: &s.jobs,
+        toasts: &mut s.toasts,
+        prefs: &mut s.prefs,
+        config_dir: &s.config,
+    };
+    s.lib.run(action, &egui::Context::default(), &mut env)
+}
+
+#[test]
+fn reset_all_edits_is_one_undo_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    let id = h.state().lib.photos()[0].id;
+    drag_slider(&mut h, "Exposure", 60.0);
+    step_until(&mut h, "the drag to be committed", |s| {
+        s.lib.develop().edit_state().is_some_and(|e| !e.dirty)
+    });
+    let dragged = exposure(&h);
+    assert!(dragged > 0.0);
+    let catalog = lf_catalog::Catalog::open(&dir.path().join("catalogue")).unwrap();
+    let before = lf_catalog::edits::history_len(&catalog, id).unwrap();
+
+    assert!(run_action(&mut h, Action::ResetAll));
+    h.step();
+    assert_eq!(exposure(&h), 0.0);
+    assert_eq!(
+        lf_catalog::edits::history_len(&catalog, id).unwrap(),
+        before + 1,
+        "one step"
+    );
+    assert!(run_action(&mut h, Action::Undo));
+    h.step();
+    assert_eq!(exposure(&h), dragged, "one undo brings the edit back");
+}
+
+#[test]
+fn a_photo_list_from_another_catalogue_is_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 2);
+    import_folder(&mut h, &shoot, 2);
+    let folder_id = h.state().lib.photos()[0].folder_id;
+    h.state_mut().handle(Msg::Photos {
+        root: dir.path().join("elsewhere"),
+        folder_id,
+        result: Ok(Vec::new()),
+    });
+    h.step();
+    assert_eq!(
+        h.state().lib.photos().len(),
+        2,
+        "the old catalogue's list is dropped"
+    );
+}
+
+/// Preferences → Change…: the open gesture is committed, an import is told to stop, and the
+/// waiting edit file is written before the library is replaced; while "Match a reference"
+/// is open, a toast says why not and nothing happens.
+#[test]
+fn winding_down_for_another_catalogue_commits_stops_then_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let photo = develop_one(&mut h, dir.path());
+    let id = h.state().lib.photos()[0].id;
+
+    h.state_mut().lib.open_match();
+    let s = h.state_mut();
+    assert!(s.lib.prepare_restart(&mut s.toasts).is_none());
+    assert!(
+        s.toasts.texts().any(|t| t.contains("Match a reference")),
+        "the toast says why"
+    );
+    assert!(
+        !s.lib
+            .import_stop_flag()
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
+    h.state_mut().lib.close_match();
+
+    h.state_mut().lib.develop_mut().edit(|s| s.exposure = 1.5);
+    let sidecar = lf_catalog::sidecar::path_for(&photo);
+    assert!(!sidecar.exists());
+    let s = h.state_mut();
+    let (keep, generation) = s.lib.prepare_restart(&mut s.toasts).expect("not blocked");
+    assert_eq!(
+        keep.as_deref(),
+        Some(dir.path().join("catalogue").as_path())
+    );
+    assert!(generation >= 1);
+    assert!(
+        s.lib
+            .import_stop_flag()
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
+    let written = lf_catalog::sidecar::read(&sidecar).unwrap().unwrap();
+    assert_eq!(
+        written.settings.exposure, 1.5,
+        "committed, then written at once"
+    );
+    let catalog = lf_catalog::Catalog::open(&dir.path().join("catalogue")).unwrap();
+    assert_eq!(
+        lf_catalog::edits::get_settings(&catalog, id)
+            .unwrap()
+            .unwrap()
+            .exposure,
+        1.5
+    );
 }

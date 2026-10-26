@@ -143,7 +143,7 @@ pub fn status_bar(
     ui: &mut egui::Ui,
     session: &Session,
     view: &View,
-    library: impl FnOnce(&mut egui::Ui),
+    library: impl FnOnce(&mut egui::Ui) -> bool,
 ) -> Option<Action> {
     let Session::Active {
         studio,
@@ -160,8 +160,9 @@ pub fn status_bar(
         .exact_size(24.0)
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                library(ui);
-                ui.separator();
+                if library(ui) {
+                    ui.separator();
+                }
                 ui.label(&studio.name);
                 ui.separator();
                 ui.label(standing_text(entitlement.standing, *read_only));

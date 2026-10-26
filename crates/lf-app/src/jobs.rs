@@ -109,6 +109,8 @@ pub enum Msg {
     },
     /// A folder's photos, in capture order.
     Photos {
+        /// The catalogue asked (a list for one left behind is dropped).
+        root: PathBuf,
         folder_id: i64,
         result: Result<Vec<PhotoRow>, String>,
     },
@@ -623,6 +625,7 @@ pub(crate) mod owners {
                 result: Err("no".into()),
             },
             Msg::Photos {
+                root: dir.to_path_buf(),
                 folder_id: 1,
                 result: Err("no".into()),
             },

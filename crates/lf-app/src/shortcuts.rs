@@ -96,6 +96,20 @@ impl Action {
         }
     }
 
+    /// A held key fires again (key repeat): stepping through photos and undo or redo do;
+    /// a held `Space` or tool key does not flicker.
+    pub fn repeats(self) -> bool {
+        matches!(
+            self,
+            Action::Previous
+                | Action::Next
+                | Action::Up
+                | Action::Down
+                | Action::Undo
+                | Action::Redo
+        )
+    }
+
     /// Shown while its key is held (`\`), not fired on a press.
     pub fn held(self) -> bool {
         self == Action::BeforeAfter
@@ -173,6 +187,7 @@ impl Map {
                 key,
                 modifiers,
                 pressed: true,
+                repeat,
                 ..
             } = event
             else {
@@ -180,7 +195,8 @@ impl Map {
             };
             match self.best(*key, *modifiers) {
                 Some(action) if !action.held() && enabled(action) => {
-                    if !fired.contains(&action) {
+                    // A repeat of a key that does not repeat is swallowed.
+                    if !(*repeat && !action.repeats()) && !fired.contains(&action) {
                         fired.push(action);
                     }
                     false
@@ -350,6 +366,31 @@ mod tests {
         h.key_press(Key::Escape);
         h.run();
         assert_eq!(h.state().2, [Action::Library, Action::LeaveTool]);
+    }
+
+    #[test]
+    fn a_held_key_repeats_only_steps_and_undo() {
+        let mut input = InputState::default();
+        let repeat = |key, modifiers| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers,
+        };
+        input.events = vec![
+            repeat(Key::Space, Modifiers::NONE),
+            repeat(Key::R, Modifiers::NONE),
+            repeat(Key::Escape, Modifiers::NONE),
+            repeat(Key::ArrowRight, Modifiers::NONE),
+            repeat(Key::Z, pressed(Modifiers::COMMAND, false)),
+        ];
+        let fired = MAP.fired(&mut input, |_| true);
+        assert_eq!(fired, vec![Action::Next, Action::Undo]);
+        assert!(
+            input.events.is_empty(),
+            "the repeats are swallowed, not passed on"
+        );
     }
 
     #[test]
