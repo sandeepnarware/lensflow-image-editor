@@ -124,6 +124,8 @@ impl AccountState {
 pub struct SessionFlow {
     pub session: Session,
     account: AccountState,
+    /// A verified installer, started by the app at the very end of `on_exit`.
+    installer: Option<PathBuf>,
 }
 
 impl SessionFlow {
@@ -131,7 +133,14 @@ impl SessionFlow {
         SessionFlow {
             session: Session::signing_in(),
             account: AccountState::connect(prefs.instance, config_dir, 0),
+            installer: None,
         }
+    }
+
+    /// The installer to hand over once the app has exited (the window was asked to close
+    /// when it verified).
+    pub fn take_installer(&mut self) -> Option<PathBuf> {
+        self.installer.take()
     }
 
     /// The gate's last answer: AI, preset sync and gallery export read it.
@@ -540,12 +549,13 @@ impl SessionFlow {
             DownloadProgress::Finished(result) => {
                 self.account.download = None;
                 match result {
-                    Ok(path) => match update::launch(&path) {
-                        Ok(()) => env.ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                        Err(e) => env
-                            .toasts
-                            .push(Level::Error, format!("Could not start the installer. {e}")),
-                    },
+                    // Never started while this app still holds its files: the app closes
+                    // (asking first if an export runs), and `on_exit` starts it last.
+                    Ok(path) => {
+                        log::info!("the update verified; it starts when the app has closed");
+                        self.installer = Some(path);
+                        env.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
                     Err(UpdateError::Account(e)) if self.signed_out_by(&e, env.jobs) => {}
                     Err(e) => env.toasts.push(Level::Error, e.to_string()),
                 }
@@ -748,7 +758,40 @@ mod tests {
                 presets_synced: None,
                 sync_offline_told: false,
             },
+            installer: None,
         }
+    }
+
+    #[test]
+    fn a_verified_installer_waits_for_the_app_to_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut flow = flow(dir.path());
+        let jobs = Jobs::new(egui::Context::default());
+        let mut toasts = Toasts::default();
+        let mut prefs = Prefs::default();
+        let dirs = dirs(dir.path());
+        let ctx = egui::Context::default();
+        let mut env = Env {
+            jobs: &jobs,
+            toasts: &mut toasts,
+            prefs: &mut prefs,
+            dirs: &dirs,
+            ctx: &ctx,
+        };
+        flow.account.download = Some((0, 10));
+        let installer = dir
+            .path()
+            .join("lensflow-ImageEditor-1.3.0-windows-x64.msi");
+        let done = Msg::Download(DownloadProgress::Finished(Ok(installer.clone())));
+        assert!(flow.handle(done, &mut env).is_none());
+        assert_eq!(
+            flow.take_installer(),
+            Some(installer),
+            "kept for the end of on_exit"
+        );
+        assert_eq!(flow.take_installer(), None);
+        assert!(flow.account.download.is_none());
+        assert_eq!(toasts.texts().count(), 0);
     }
 
     fn dirs(dir: &Path) -> Dirs {

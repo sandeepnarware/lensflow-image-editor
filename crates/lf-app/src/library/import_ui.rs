@@ -58,11 +58,13 @@ pub struct Chooser {
     error: Option<String>,
 }
 
-/// A running import.
+/// A folder being scanned, then imported: it cannot be removed until the import ends.
 #[derive(Debug, Clone)]
 pub struct Importing {
     pub folder: PathBuf,
     pub progress: Option<Progress>,
+    /// "Add folder…" (shown when its import ends), not a rescan.
+    pub added: bool,
 }
 
 impl Importing {
@@ -254,7 +256,7 @@ impl Library {
             Purpose::AddFolder => {
                 if self.adding {
                     self.adding = false;
-                    self.scan_folder(chosen.path, "add folder", env);
+                    self.scan_folder(chosen.path, true, env);
                 }
             }
         }
@@ -387,11 +389,19 @@ impl Library {
             return;
         }
         self.revive_thumbs(env);
-        self.scan_folder(folder.path.clone(), "rescan", env);
+        self.scan_folder(folder.path.clone(), false, env);
     }
 
-    fn scan_folder(&mut self, folder: PathBuf, name: &str, env: &mut Env) {
+    /// Scans `folder` on the `Long` lane (`added`: for "Add folder…", else a rescan). The
+    /// folder counts as importing from here on.
+    fn scan_folder(&mut self, folder: PathBuf, added: bool, env: &mut Env) {
         self.busy = Some("Looking for photos…");
+        self.importing = Some(Importing {
+            folder: folder.clone(),
+            progress: None,
+            added,
+        });
+        let name = if added { "add folder" } else { "rescan" };
         env.jobs.spawn(Lane::Long, name, move || {
             let scan = import::scan(&folder);
             Msg::Scanned { folder, scan }
@@ -400,6 +410,10 @@ impl Library {
 
     pub(super) fn scanned(&mut self, folder: PathBuf, scan: Scan, env: &mut Env) {
         self.busy = None;
+        let added = self
+            .importing
+            .take()
+            .is_some_and(|i| i.added && i.folder == folder);
         if !scan.root_readable {
             env.toasts.push(
                 Level::Error,
@@ -424,6 +438,7 @@ impl Library {
                 done: 0,
                 total: scan.candidates.len(),
             }),
+            added,
         });
         let reporter = env.jobs.reporter();
         let stop = self.stop_import.clone();
@@ -436,7 +451,9 @@ impl Library {
     }
 
     pub(super) fn import_done(&mut self, result: Result<Imported, String>, env: &mut Env) {
-        let folder = self.importing.take().map(|i| i.folder);
+        let importing = self.importing.take();
+        let added = importing.as_ref().is_some_and(|i| i.added);
+        let folder = importing.map(|i| i.folder);
         let shown = folder.as_deref().map_or_else(String::new, display);
         match result {
             Ok(imported) => {
@@ -453,13 +470,14 @@ impl Library {
                     log::info!("{shown} was read and holds none of its {n} photos; asking");
                     self.confirm_missing = Some((imported.folder_id, n));
                 }
-                // The view moves to the imported folder only when nothing else is shown;
-                // a photographer in Develop or on another folder stays where they are.
+                // A folder just added is shown in the library; after a rescan the view
+                // moves to the imported folder only when nothing else is shown. A
+                // photographer in Develop stays where they are.
                 let here = self.current_folder == Some(imported.folder_id);
-                let nothing_shown =
-                    self.current_folder.is_none() && self.mode == super::Mode::Library;
+                let in_library = self.mode == super::Mode::Library;
+                let nothing_shown = self.current_folder.is_none() && in_library;
                 self.refresh_folders(env);
-                if here || nothing_shown {
+                if here || nothing_shown || (added && in_library) {
                     self.show_folder(Some(imported.folder_id), env);
                 }
             }

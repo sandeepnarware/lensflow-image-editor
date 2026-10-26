@@ -518,21 +518,31 @@ fn export_one(
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// The prefix of an export's temp files (`.lfexport-<name>.<pid>-<n>.tmp`): its own, so the
+/// app's sweep of unfinished exports never matches a sidecar's temp file
+/// (`.<photo>.lensflow.json.<pid>-<n>.tmp`) in a folder that also holds catalogued photos.
+pub const TEMP_PREFIX: &str = ".lfexport-";
+
+/// The hidden temp file a replacing write of `path` goes through.
+pub fn temp_path(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    path.with_file_name(format!(
+        "{TEMP_PREFIX}{name}.{}-{}.tmp",
+        std::process::id(),
+        TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
 /// Write `bytes` to `path`. Overwriting goes through a temp file in the same folder and a
 /// rename, so a failure never leaves a truncated file where the old one was. Otherwise the
 /// file is created new (an existing one is [`CatalogError::Exists`]) and removed again if the
 /// write fails.
 fn write_output(path: &Path, bytes: &[u8], overwrite: bool) -> Result<()> {
     if overwrite {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let tmp = path.with_file_name(format!(
-            ".{name}.{}-{}.tmp",
-            std::process::id(),
-            TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
+        let tmp = temp_path(path);
         let result = (|| -> Result<()> {
             let mut f = std::fs::File::create(&tmp)?;
             f.write_all(bytes)?;

@@ -419,9 +419,13 @@ impl Library {
     /// Develop never waits behind it); progress and the
     /// answer arrive as `Msg::Match`. `ai` is `None` without a studio session.
     pub fn start_match(&mut self, ai: Option<AiLink>, shown: AiGate, jobs: &Jobs) {
+        let wait = self.long_lane_wait();
         let Some(req) = self.matching.as_mut().and_then(|m| m.start(ai, shown)) else {
             return;
         };
+        if let Some(m) = &mut self.matching {
+            m.wait(wait);
+        }
         let gpu = self.gpu.clone();
         let frames = self.frames.clone();
         let reporter = jobs.reporter();
@@ -531,10 +535,12 @@ impl Library {
                 },
             }
         }
+        let wait = self.long_lane_wait();
         let Some(dialog) = &mut self.matching else {
             return;
         };
         dialog.applying();
+        dialog.wait(wait);
         let (run, ids, stop) = (dialog.run, dialog.ids.clone(), dialog.cancel.clone());
         let gpu = self.gpu.clone();
         let frames = self.frames.clone();
@@ -542,6 +548,12 @@ impl Library {
         let reporter = env.jobs.reporter();
         env.jobs.spawn(Lane::Long, "match apply", move || {
             let total = ids.len();
+            // Started: the dialog stops saying what it waited for.
+            reporter.send(Msg::Match(MatchStep::Applying {
+                run,
+                done: 0,
+                total,
+            }));
             let report = match lf_catalog::Catalog::open(&root) {
                 Err(e) => matching::ApplyReport {
                     total,
@@ -698,7 +710,10 @@ impl Library {
                 let plain = crate::jobs::failed_text(&name);
                 match name.as_str() {
                     "open photo" => self.develop.open_failed(&plain),
-                    "add folder" | "rescan" => self.busy = None,
+                    "add folder" | "rescan" => {
+                        self.busy = None;
+                        self.importing = None;
+                    }
                     "photos" => self.loading = None,
                     "import" => self.importing = None,
                     "open catalogue" => self.stage = Stage::Failed(plain),
@@ -792,7 +807,7 @@ impl Library {
             .map(|r| r.id)
             .collect();
         for id in changed {
-            self.thumbs.forget(id);
+            self.thumbs.refresh(id);
         }
         self.order = rows.iter().map(|r| r.id).collect();
         self.index = self
@@ -1173,7 +1188,8 @@ impl Library {
             ui.label(crate::dialogs::export::status_text(done, total));
             ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).desired_width(160.0));
         }
-        if let Some(importing) = &self.importing {
+        // While its folder is still being read, the scan's own text says so.
+        if let Some(importing) = self.importing.as_ref().filter(|_| self.busy.is_none()) {
             ui.separator();
             ui.label(importing.text());
             if let Some(p) = importing.progress.filter(|p| p.total > 0) {
@@ -1538,8 +1554,9 @@ impl Library {
     /// Photos whose edits changed in the catalogue: their thumbnails are made again (asked
     /// for at `High`) and the folder's rows are read again (the edited badge).
     fn refresh_photos(&mut self, ids: &[i64], env: &mut Env) {
+        // The old thumbnails stay on screen until the new ones arrive.
         for id in ids {
-            self.thumbs.forget(*id);
+            self.thumbs.refresh(*id);
         }
         let shown: Vec<i64> = ids
             .iter()
@@ -1562,6 +1579,14 @@ impl Library {
 
     fn can_add(&self) -> bool {
         self.busy.is_none() && self.importing.is_none()
+    }
+
+    /// What long work started now waits behind on the `Long` lane, in words.
+    fn long_lane_wait(&self) -> Option<&'static str> {
+        matching::waiting_text(
+            self.export.as_ref().is_some_and(ExportDialog::running),
+            self.importing.is_some(),
+        )
     }
 }
 

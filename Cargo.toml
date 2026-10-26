@@ -3,6 +3,8 @@ resolver = "3"
 members = ["crates/lf-settings", "crates/lf-pipeline", "crates/lf-fixtures", "crates/lf-raw", "crates/lf-grade", "crates/lf-account", "crates/lf-catalog", "crates/lf-app"]
 
 [workspace.package]
+# The release version: the build workflow writes its input here, and lf-app inherits it.
+version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/sandeepnarware/lensflow-image-editor"
@@ -42,3 +44,7 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = true
+# Line tables only, split out of the binary (a .pdb, a .dSYM, a .dwp): the build workflow
+# keeps them as a separate artifact for reading crash reports, never inside an installer.
+debug = "line-tables-only"
+split-debuginfo = "packed"

@@ -6,7 +6,7 @@
 
 use eframe::egui::{self, Key, accesskit::Role};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable as _;
+use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use lf_app::catalog_ext::{FOLDER_MISSING, NETWORK_WARNING};
 use lf_app::jobs::{Jobs, Lane, Msg};
 use lf_app::library::import_ui::{Chosen, FIRST_RUN, KEEP_ROOT, Purpose, TYPE_PATH};
@@ -1520,4 +1520,120 @@ fn an_import_finishing_leaves_develop_and_another_folder_alone() {
     });
     assert_eq!(h.state().lib.current_folder(), Some(first_folder));
     assert_eq!(h.state().lib.photos().len(), 1);
+}
+
+#[test]
+fn a_folder_being_scanned_cannot_be_removed_and_an_added_folder_is_shown() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 2);
+    import_folder(&mut h, &shoot, 2);
+    let shoot_id = h
+        .state()
+        .lib
+        .current_folder()
+        .expect("the first import is shown");
+
+    // A rescan waits on the Long lane: its folder cannot be removed while it is read.
+    let (release, held) = mpsc::channel::<()>();
+    h.state().jobs.spawn(Lane::Long, "hold", move || {
+        let _ = held.recv();
+        Msg::Cleared
+    });
+    h.get_by_label("shoot  (2)").click_secondary();
+    h.step();
+    h.step();
+    h.get_by_role_and_label(Role::Button, "Rescan").click();
+    h.step();
+    h.step();
+    h.get_by_label("shoot  (2)").click_secondary();
+    h.step();
+    h.step();
+    assert!(
+        h.get_by_role_and_label(Role::Button, "Remove from catalogue…")
+            .accesskit_node()
+            .is_disabled(),
+        "a folder being scanned stays until its import ends"
+    );
+    h.key_press(Key::Escape);
+    h.step();
+    release.send(()).unwrap();
+    step_until(&mut h, "the rescan", |s| {
+        !s.lib.importing() && !s.lib.loading()
+    });
+
+    // "Add folder…" shows the folder it added, though another folder was shown.
+    let added = dir.path().join("added");
+    pngs(&added, 3);
+    assert!(run_action(&mut h, Action::AddFolder));
+    h.step();
+    let ticket = h.state().lib.ticket();
+    h.state_mut().handle(Msg::FolderChosen {
+        purpose: Purpose::AddFolder,
+        ticket,
+        result: Ok(Some(Chosen {
+            path: added.clone(),
+            network: false,
+        })),
+    });
+    step_until(&mut h, "the added folder's photos", |s| {
+        !s.lib.importing() && !s.lib.loading() && s.lib.photos().len() == 3
+    });
+    let shown = h.state().lib.current_folder();
+    assert!(
+        shown.is_some() && shown != Some(shoot_id),
+        "the added folder is shown"
+    );
+}
+
+#[test]
+fn a_match_queued_behind_an_import_says_it_is_waiting() {
+    use lf_app::dialogs::match_reference::{AiGate, MatchStep, WAITING_IMPORT};
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 2);
+    import_folder(&mut h, &shoot, 2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::A);
+    h.step();
+    h.state_mut().lib.open_match();
+    h.state_mut().handle(Msg::Match(MatchStep::Picked {
+        ticket: 0,
+        path: Some(shoot.join("p1.png")),
+    }));
+
+    // An import is queued behind other long work; the fit queues behind both.
+    let (release, held) = mpsc::channel::<()>();
+    h.state().jobs.spawn(Lane::Long, "hold", move || {
+        let _ = held.recv();
+        Msg::Cleared
+    });
+    let other = dir.path().join("other");
+    pngs(&other, 1);
+    let scan = import::scan(&other);
+    h.state_mut().handle(Msg::Scanned {
+        folder: other.clone(),
+        scan,
+    });
+    let s = h.state_mut();
+    s.lib.start_match(None, AiGate::default(), &s.jobs);
+    h.step();
+    assert_eq!(
+        h.state().lib.matching().and_then(|m| m.status()),
+        Some(WAITING_IMPORT)
+    );
+    step_until_label(&mut h, WAITING_IMPORT);
+    release.send(()).unwrap();
+    step_until(&mut h, "the fit to start", |s| {
+        s.lib
+            .matching()
+            .and_then(|m| m.status())
+            .is_none_or(|t| t != WAITING_IMPORT)
+    });
+    h.state_mut().lib.close_match();
 }

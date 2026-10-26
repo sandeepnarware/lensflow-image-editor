@@ -7,6 +7,7 @@
 //! keyboard map (`shortcuts.rs`) is read once per frame in `logic()`, the library does its
 //! own actions, and the app does the rest (Quit, Preferences, the Account and Help menus).
 
+use crate::diagnostics::{self, GpuFacts};
 use crate::dialogs::preferences::{self, PrefsAction, PrefsView};
 use crate::dialogs::{about, keys, quit};
 use crate::jobs::{Jobs, Lane, Msg};
@@ -111,7 +112,12 @@ impl App {
         self.flow.refresh_now(&self.jobs, reason);
     }
 
-    pub fn new(cc: &eframe::CreationContext, dirs: Dirs) -> App {
+    /// `lock` is the single-instance lock, held until the end of `on_exit`.
+    pub fn new(
+        cc: &eframe::CreationContext,
+        dirs: Dirs,
+        lock: Option<crate::single_instance::Guard>,
+    ) -> App {
         theme::apply(&cc.egui_ctx);
         let gpu = gpu::attach(cc.wgpu_render_state.as_ref());
         if let Err(e) = &gpu {
@@ -136,7 +142,10 @@ impl App {
             logo: load_logo(&cc.egui_ctx),
             lost_logged: false,
             gpu_errors: gpu::ErrorTap::default(),
-            exit: device_reset::Exit::default(),
+            exit: device_reset::Exit {
+                lock,
+                ..Default::default()
+            },
             ctx: cc.egui_ctx.clone(),
             flow,
             dirs,
@@ -316,8 +325,25 @@ impl App {
         match self.dialog {
             None => {}
             Some(Dialog::About) => {
-                if about::show(ctx, self.logo.as_ref().map(|l| l.id())) {
-                    self.dialog = None;
+                let log_dir = logging::dir(&self.dirs.data);
+                let gpu = self.gpu.as_deref().map(GpuFacts::of);
+                let diagnostics = diagnostics::text(
+                    gpu.as_ref().map_err(|e| e.as_str()),
+                    &self.dirs,
+                    &self.prefs,
+                );
+                let view = about::AboutView {
+                    logo: self.logo.as_ref().map(|l| l.id()),
+                    log_dir: &log_dir,
+                    diagnostics: &diagnostics,
+                };
+                match about::show(ctx, &view) {
+                    None => {}
+                    Some(about::AboutAction::Close) => self.dialog = None,
+                    Some(about::AboutAction::ShowLogs) => self.show_logs(),
+                    Some(about::AboutAction::Copied) => {
+                        self.toasts.push(Level::Success, about::COPIED);
+                    }
                 }
             }
             Some(Dialog::Keys) => {
@@ -555,8 +581,9 @@ impl eframe::App for App {
     /// Review Focus 4: a gesture in progress is committed, a running import stops after its
     /// batch (each batch commits), an export or a batch after the current photo, the lanes
     /// finish their running jobs, then the waiting sidecars are written here, synchronously.
-    /// An export still writing at the deadline has its unfinished files removed. A restart
-    /// asked for starts last.
+    /// An export still writing at the deadline has its unfinished files removed. Last, the
+    /// single-instance lock is let go and a verified installer, or a restart asked for,
+    /// starts (`Exit::finish`).
     fn on_exit(&mut self) {
         let mut exporting_to = None;
         if let Some(lib) = &mut self.library {
@@ -576,6 +603,9 @@ impl eframe::App for App {
             log::error!("an edit file could not be written before quitting: {e}");
         }
         self.save_prefs();
+        if let Some(installer) = self.flow.take_installer() {
+            self.exit.installer = Some(installer);
+        }
         self.exit.finish();
     }
 

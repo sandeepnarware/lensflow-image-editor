@@ -152,5 +152,12 @@ mod tests {
         let partial = Prefs::load(&config);
         assert_eq!(partial.studio_slug.as_deref(), Some("a"));
         assert_eq!(partial.frame_cache_bytes, 4 << 30);
+
+        // A file from a newer version (after a downgrade): fields it added are ignored.
+        let newer = br#"{ "studio_slug": "b", "gallery_sync": true, "frame_cache_bytes": 5 }"#;
+        std::fs::write(config.join(FILE_NAME), newer).unwrap();
+        let newer = Prefs::load(&config);
+        assert_eq!(newer.studio_slug.as_deref(), Some("b"));
+        assert_eq!(newer.frame_cache_bytes, 5);
     }
 }
