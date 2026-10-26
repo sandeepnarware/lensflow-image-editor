@@ -70,8 +70,22 @@ mod tests {
         h.get_by_label(NAME);
         h.get_by_label(&version_text());
         h.get_by_label(BUILT_WITH);
-        h.get_by_label(WEBSITE);
         h.get_by_label(NOTICE);
+        // The link asks the platform to open the website (eframe's `links` feature carries
+        // the request to the browser; without it egui-winit only logs it).
+        h.get_by_label(WEBSITE).click();
+        h.step();
+        let opened = h
+            .output()
+            .platform_output
+            .commands
+            .iter()
+            .any(|c| matches!(c, egui::OutputCommand::OpenUrl(open) if open.url == WEBSITE));
+        assert!(opened, "clicking the link opens {WEBSITE}");
+        assert!(
+            include_str!("../../Cargo.toml").contains("\"links\""),
+            "eframe is built with its links feature"
+        );
         h.get_by_label("Close").click();
         h.run();
         assert!(*h.state());

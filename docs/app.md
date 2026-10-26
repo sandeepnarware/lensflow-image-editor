@@ -145,7 +145,8 @@ for example, `Delete` with no spot selected still removes a tone curve point.
 
 Keys never fire while a widget has the keyboard (typing in a field, stepping a
 slider with the arrows) or while a dialog is open. The `Esc` that ends typing in
-a field does not also leave a tool. The tool keys act only in Develop. On macOS,
+a field does not also leave a tool. The tool keys act only in Develop. Holding
+an arrow key or `Ctrl+Z` repeats; holding `Space` or a tool key does not. On macOS,
 `Ctrl` reads as `Cmd`.
 
 | Key | Action |

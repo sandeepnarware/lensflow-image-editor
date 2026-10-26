@@ -75,13 +75,19 @@ pub fn show(ctx: &egui::Context, prefs: &mut Prefs, view: &PrefsView) -> Option<
         ui.add_space(12.0);
 
         let mut gb = cache_gb(prefs.frame_cache_bytes);
-        ui.horizontal(|ui| {
-            let label = ui.label(RichText::new(CACHE).strong());
-            ui.add(egui::DragValue::new(&mut gb).range(CACHE_GB))
-                .labelled_by(label.id);
-        });
+        let size = ui
+            .horizontal(|ui| {
+                let label = ui.label(RichText::new(CACHE).strong());
+                ui.add(egui::DragValue::new(&mut gb).range(CACHE_GB))
+                    .labelled_by(label.id)
+            })
+            .inner;
         if gb != cache_gb(prefs.frame_cache_bytes) {
+            // Shown at once; saved when the drag or the typing ends.
             prefs.frame_cache_bytes = gb << 30;
+        }
+        let editing = size.dragged() || size.has_focus();
+        if size.drag_stopped() || size.lost_focus() || (size.changed() && !editing) {
             action = Some(PrefsAction::Changed);
         }
         ui.label(RichText::new(CACHE_NOTE).small());
@@ -113,15 +119,23 @@ pub fn show(ctx: &egui::Context, prefs: &mut Prefs, view: &PrefsView) -> Option<
             action = Some(PrefsAction::Close);
         }
     });
-    if action.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    // egui lets go of a field's focus on Esc before this runs: that Esc only cancelled the
+    // typing, so it must not also close the dialog.
+    let typing = egui::Id::unique("preferences-typing");
+    let was_typing = ctx.data(|d| d.get_temp::<bool>(typing)).unwrap_or(false);
+    let escape = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    if action.is_none() && escape && !was_typing {
         action = Some(PrefsAction::Close);
     }
+    let typing_now = ctx.egui_wants_keyboard_input();
+    ctx.data_mut(|d| d.insert_temp(typing, typing_now));
     action
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eframe::egui::accesskit::Role;
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable as _;
     use std::path::PathBuf;
@@ -173,6 +187,52 @@ mod tests {
         assert_eq!(h.state().actions.last(), Some(&PrefsAction::ChangeRoot));
         assert_eq!(cache_gb(4 << 30), 4);
         assert_eq!(cache_gb(0), 1);
+    }
+
+    #[test]
+    fn the_cache_size_is_saved_once_when_the_drag_ends() {
+        let mut h = harness(None);
+        h.run();
+        let start = h.get_by_role(Role::SpinButton).rect().center();
+        h.drag_at(start);
+        h.step();
+        for i in 1..=5 {
+            h.hover_at(start + egui::vec2(20.0 * i as f32, 0.0));
+            h.step();
+        }
+        assert!(h.state().actions.is_empty(), "nothing saved while dragging");
+        assert!(
+            cache_gb(h.state().prefs.frame_cache_bytes) > 4,
+            "the size follows"
+        );
+        h.drop_at(start + egui::vec2(100.0, 0.0));
+        h.step();
+        h.step();
+        assert_eq!(h.state().actions, [PrefsAction::Changed]);
+    }
+
+    #[test]
+    fn esc_while_typing_a_size_does_not_close_the_dialog() {
+        let mut h = harness(None);
+        h.run();
+        let at = h.get_by_role(Role::SpinButton).rect().center();
+        h.drag_at(at);
+        h.step();
+        h.drop_at(at);
+        h.run();
+        assert!(
+            h.ctx.egui_wants_keyboard_input(),
+            "typing in the size field"
+        );
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(
+            !h.state().actions.contains(&PrefsAction::Close),
+            "Esc only left the field"
+        );
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert_eq!(h.state().actions.last(), Some(&PrefsAction::Close));
     }
 
     #[test]

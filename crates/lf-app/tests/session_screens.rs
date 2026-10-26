@@ -151,6 +151,7 @@ fn chrome(session: Session, can_switch: bool) -> Harness<'static, Screen> {
             screens::read_only_banner(ui, &s.session);
             let status = screens::status_bar(ui, &s.session, &s.view, |ui| {
                 ui.label("4 photos · 1 selected");
+                true
             });
             if let Some(action) = status {
                 s.actions.push(action);
@@ -257,4 +258,26 @@ fn the_server_switch_is_ignored_while_signing_in() {
     h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::D);
     h.run_steps(2);
     assert!(h.state().actions.is_empty());
+}
+
+/// Before the catalogue is open the library says nothing, and the bar starts with the studio
+/// (no separator in front of it).
+#[test]
+fn the_status_bar_starts_with_the_studio_while_the_library_says_nothing() {
+    let mut h = Harness::new_ui_state(
+        |ui, s: &mut Screen| {
+            screens::status_bar(ui, &s.session, &s.view, |_| false);
+        },
+        Screen {
+            session: active(false, None),
+            view: View::default(),
+            actions: Vec::new(),
+        },
+    );
+    h.run();
+    let left = h.get_by_label("Frames").rect().left();
+    assert!(
+        left < 20.0,
+        "the studio's name is first (x = {left}; 30 with a separator)"
+    );
 }

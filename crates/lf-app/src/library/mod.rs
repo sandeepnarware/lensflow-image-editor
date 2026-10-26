@@ -214,6 +214,26 @@ impl Library {
         }
     }
 
+    /// Preferences → Change…, before the library is replaced: when nothing blocks it (else
+    /// a toast says why and `None`), the open photo's gesture is committed, a running import
+    /// is told to stop after its batch, and the waiting edit files are written, in that
+    /// order. Returns the catalogue to offer back and the Develop generation to carry on.
+    pub fn prepare_restart(&mut self, toasts: &mut Toasts) -> Option<(Option<PathBuf>, u64)> {
+        if let Some(reason) = self.restart_blocked() {
+            toasts.push(Level::Warning, reason);
+            return None;
+        }
+        self.finish_edits(toasts);
+        self.stop_import();
+        if let Err(e) = self.sidecar_saver().flush() {
+            toasts.push(
+                Level::Error,
+                format!("An edit file could not be written. {e}"),
+            );
+        }
+        Some((self.root.clone(), self.develop.generation()))
+    }
+
     /// A fresh library asking for another catalogue folder (Preferences → Change…): the
     /// first-run screen, with a way back to `keep`. `generation` is the old Develop view's,
     /// so none of its open answers still on the way is shown here.
@@ -237,6 +257,10 @@ impl Library {
     /// The Develop view.
     pub fn develop(&self) -> &Develop {
         &self.develop
+    }
+
+    pub fn develop_mut(&mut self) -> &mut Develop {
+        &mut self.develop
     }
 
     /// The catalogue root in use.
@@ -343,6 +367,13 @@ impl Library {
             .collect();
         if !photos.is_empty() {
             self.matching = Some(MatchDialog::new(photos));
+        }
+    }
+
+    /// Closes "Match a reference" (cancelling a fit or apply still running).
+    pub fn close_match(&mut self) {
+        if let Some(m) = self.matching.take() {
+            m.cancel.store(true, Ordering::SeqCst);
         }
     }
 
@@ -559,7 +590,14 @@ impl Library {
                     .toasts
                     .push(Level::Error, format!("Could not list the folders. {e}")),
             },
-            Msg::Photos { folder_id, result } => {
+            Msg::Photos { root, .. } if self.root.as_deref() != Some(root.as_path()) => {
+                // A list from a catalogue left behind (Preferences → Change…): its folder ids
+                // mean nothing here.
+                log::debug!("dropped the photos of {}", root.display());
+            }
+            Msg::Photos {
+                folder_id, result, ..
+            } => {
                 if self.loading == Some(folder_id) {
                     self.loading = None;
                 }
@@ -738,9 +776,13 @@ impl Library {
         self.loading = folder;
         self.revive_thumbs(env);
         if let (Some(folder_id), Some(root)) = (folder, self.root.clone()) {
-            env.jobs.spawn(Lane::Query, "photos", move || Msg::Photos {
-                folder_id,
-                result: catalog_ext::photos_in(&root, folder_id),
+            env.jobs.spawn(Lane::Query, "photos", move || {
+                let result = catalog_ext::photos_in(&root, folder_id);
+                Msg::Photos {
+                    root,
+                    folder_id,
+                    result,
+                }
             });
         }
     }
@@ -1063,9 +1105,10 @@ impl Library {
     }
 
     /// The library's half of the status bar: photos and selection, then whatever runs.
-    pub fn status_ui(&self, ui: &mut egui::Ui) {
+    /// Returns whether it drew anything (nothing until the catalogue is open).
+    pub fn status_ui(&self, ui: &mut egui::Ui) -> bool {
         if self.stage != Stage::Ready {
-            return;
+            return false;
         }
         ui.label(status_text(self.photos.len(), self.selection.current.len()));
         if let Some(text) = self.busy {
@@ -1084,6 +1127,7 @@ impl Library {
                 ui.add(egui::ProgressBar::new(p.done as f32 / p.total as f32).desired_width(160.0));
             }
         }
+        true
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui, env: &mut Env) {
@@ -1434,9 +1478,13 @@ impl Library {
             self.develop.reload_edit(env.toasts);
         }
         if let (Some(folder_id), Some(root)) = (self.current_folder, self.root.clone()) {
-            env.jobs.spawn(Lane::Query, "photos", move || Msg::Photos {
-                folder_id,
-                result: catalog_ext::photos_in(&root, folder_id),
+            env.jobs.spawn(Lane::Query, "photos", move || {
+                let result = catalog_ext::photos_in(&root, folder_id);
+                Msg::Photos {
+                    root,
+                    folder_id,
+                    result,
+                }
             });
         }
     }

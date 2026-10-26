@@ -291,20 +291,9 @@ impl App {
         let (Ok(gpu), Some(lib)) = (&self.gpu, &mut self.library) else {
             return;
         };
-        if let Some(reason) = lib.restart_blocked() {
-            self.toasts.push(Level::Warning, reason);
+        let Some((keep, generation)) = lib.prepare_restart(&mut self.toasts) else {
             return;
-        }
-        lib.finish_edits(&mut self.toasts);
-        lib.stop_import();
-        if let Err(e) = lib.sidecar_saver().flush() {
-            self.toasts.push(
-                Level::Error,
-                format!("An edit file could not be written. {e}"),
-            );
-        }
-        let keep = lib.root().map(Path::to_path_buf);
-        let generation = lib.develop().generation();
+        };
         let mut fresh = Library::new(gpu.clone(), self.dirs.cache.join("frames"), &self.prefs);
         fresh.set_render_state(self.render_state.clone());
         fresh.choose_another_root(keep, generation);
@@ -375,9 +364,7 @@ impl App {
             screens::read_only_banner(ui, &self.flow.session);
             let library = self.library.as_ref();
             let status = screens::status_bar(ui, &self.flow.session, &view, |ui| {
-                if let Some(lib) = library {
-                    lib.status_ui(ui);
-                }
+                library.is_some_and(|lib| lib.status_ui(ui))
             });
             match &mut self.library {
                 Some(lib) => {
