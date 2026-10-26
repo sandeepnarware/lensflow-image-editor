@@ -8,8 +8,9 @@
 //!
 //! A run never stops at one bad photo: each failure is listed in the [`ExportReport`] and the
 //! rest are exported. Only the up-front checks (name collisions, existing files when not
-//! overwriting) fail the whole run, before anything is written. The progress callback can
-//! cancel after the current photo.
+//! overwriting) fail the whole run, before anything is written, and a lost graphics device
+//! stops it where it is ([`CatalogError::DeviceLost`]). The progress callback can cancel
+//! after the current photo.
 
 use std::io::{Cursor, Write};
 use std::ops::ControlFlow;
@@ -348,13 +349,15 @@ fn export_one(
             &row.path,
         ));
     }
-    let mut renderer =
-        lf_raw::render::renderer_for(gpu, &opened).map_err(|e| fail(&e, &row.path))?;
+    // A lost device is not this photo's fault: it stops the run (see `run`).
+    let gpu_fail = |e: lf_pipeline::PipelineError| match e {
+        lf_pipeline::PipelineError::DeviceLost => CatalogError::DeviceLost,
+        e => fail(&e, &row.path),
+    };
+    let mut renderer = lf_raw::render::renderer_for(gpu, &opened).map_err(gpu_fail)?;
     let pixels = match spec.format {
         Format::Tiff16 => {
-            let f = renderer
-                .render_f16(&settings)
-                .map_err(|e| fail(&e, &row.path))?;
+            let f = renderer.render_f16(&settings).map_err(gpu_fail)?;
             let data: Vec<u16> = f
                 .data
                 .as_chunks::<4>()
@@ -369,9 +372,7 @@ fn export_one(
             )
         }
         _ => {
-            let img = renderer
-                .render(&settings)
-                .map_err(|e| fail(&e, &row.path))?;
+            let img = renderer.render(&settings).map_err(gpu_fail)?;
             Pixels::Eight(DynamicImage::ImageRgba8(img).to_rgb8())
         }
     };
@@ -495,7 +496,9 @@ fn write_output(path: &Path, bytes: &[u8], overwrite: bool) -> Result<()> {
 /// just finished. A photo that fails is listed in [`ExportReport::failed`] and the run goes
 /// on. Only the up-front checks fail the whole run (`Err`), before anything is written: two
 /// photos on one path ([`CatalogError::NameCollision`]) or, unless overwriting, an existing
-/// file ([`CatalogError::Exists`]). The run is recorded in `export_jobs`.
+/// file ([`CatalogError::Exists`]). A graphics device lost before or during a photo stops the
+/// run there with [`CatalogError::DeviceLost`] (the photos already written stay; the job row
+/// is `failed` with their count). The run is recorded in `export_jobs`.
 pub fn run(
     gpu: Arc<Gpu>,
     catalog: &Catalog,
@@ -540,8 +543,22 @@ pub fn run(
             break;
         }
         let id = photo_ids[i];
+        let device_lost = |report: &ExportReport| -> Result<ExportReport> {
+            log::error!(
+                "the graphics device was lost exporting photo {id}; stopping after {} photos",
+                report.exported.len()
+            );
+            let e = CatalogError::DeviceLost;
+            finish("failed", report.exported.len(), Some(e.to_string()))?;
+            Err(e)
+        };
+        if gpu.is_lost() {
+            return device_lost(&report);
+        }
         match export_one(&gpu, catalog, id, &row, path, spec) {
             Ok(e) => report.exported.push(e),
+            Err(CatalogError::DeviceLost) => return device_lost(&report),
+            Err(_) if gpu.is_lost() => return device_lost(&report),
             Err(e) => {
                 log::warn!("export of photo {id} ({}) failed: {e}", row.path);
                 report.failed.push((id, e));

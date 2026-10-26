@@ -1119,3 +1119,77 @@ fn paste_works_in_the_library_before_any_photo_is_opened() {
     );
     assert!(lf_catalog::sidecar::path_for(&second).exists());
 }
+
+#[test]
+fn export_to_disk_from_the_shortcut_remembers_the_form_and_refuses_existing_files() {
+    use lf_app::dialogs::export;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 2);
+    import_folder(&mut h, &shoot, 2);
+    let out = dir.path().join("out");
+    std::fs::create_dir(&out).unwrap();
+    let both = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::A);
+    h.step();
+    h.key_press_modifiers(both, Key::E);
+    h.step();
+    h.step();
+    assert!(h.query_by_label(&export::title(2)).is_some());
+    // Nothing chosen yet: Export says what is missing.
+    h.get_by_role_and_label(Role::Button, export::EXPORT)
+        .click();
+    h.step();
+    h.step();
+    assert!(h.query_by_label(export::NO_FOLDER).is_some());
+
+    // A typed folder is checked off the UI thread, then used.
+    h.state_mut()
+        .lib
+        .export_mut()
+        .unwrap()
+        .set_typed(&out.to_string_lossy());
+    h.step();
+    h.get_by_role_and_label(Role::Button, export::USE_FOLDER)
+        .click();
+    step_until(&mut h, "the typed folder", |s| {
+        s.lib.export_folder().as_deref() == Some(out.as_path())
+    });
+    h.get_by_role_and_label(Role::Button, export::EXPORT)
+        .click();
+    h.step();
+    step_until_label(&mut h, "Exported 2 photos.");
+    // The dialog's new contents are laid out unseen first.
+    h.step();
+    assert!(out.join("p0.jpg").exists() && out.join("p1.jpg").exists());
+    assert!(h.query_by_label(export::SHOW_FOLDER).is_some());
+    let remembered = h.state().prefs.last_export.clone().unwrap();
+    assert_eq!(
+        remembered["destination"]["Folder"],
+        out.to_string_lossy().as_ref()
+    );
+    h.get_by_role_and_label(Role::Button, export::DONE).click();
+    h.step();
+    assert!(h.state().lib.export().is_none());
+
+    // Again: the folder is remembered, and the files there now stop the run up front.
+    h.key_press_modifiers(both, Key::E);
+    h.step();
+    h.step();
+    assert_eq!(h.state().lib.export_folder(), Some(out.clone()));
+    h.get_by_role_and_label(Role::Button, export::EXPORT)
+        .click();
+    h.step();
+    step_until_label(
+        &mut h,
+        "p0.jpg already exists. Turn on 'Replace existing files' or choose another folder.",
+    );
+    assert!(
+        h.query_by_label(&export::title(2)).is_some(),
+        "the form stays"
+    );
+}

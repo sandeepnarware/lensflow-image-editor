@@ -5,6 +5,7 @@
 //! its own `Catalog`, answering with a [`Msg`]. So a folder never waits behind an import to
 //! show. The thumbnail pool has its own connections.
 
+pub mod export_ui;
 pub mod filmstrip;
 pub mod grid;
 pub mod import_ui;
@@ -15,6 +16,7 @@ use crate::catalog_ext::{self, count};
 use crate::clipboard::{self, Clipboard};
 use crate::develop::{self, Develop, Outcome};
 use crate::dialogs::batch::{self, BatchAction, BatchDialog, BatchProgress, Choice};
+use crate::dialogs::export::ExportDialog;
 use crate::dialogs::group_picker::{CopyAction, CopyDialog};
 use crate::jobs::{Jobs, Lane, Msg};
 use crate::prefs::Prefs;
@@ -48,6 +50,10 @@ pub const COPY_KEY: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::C);
 pub const PASTE_KEY: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::V);
+/// Export to disk.
+pub const EXPORT: &str = "Export…";
+pub const EXPORT_KEY: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::E);
 /// How long a paste waits for the system clipboard's text.
 const PASTE_WAIT: Duration = Duration::from_secs(1);
 
@@ -146,6 +152,8 @@ pub struct Library {
     paste_asked: Option<Instant>,
     /// "Apply to N photos".
     batch: Option<BatchDialog>,
+    /// "Export N photos", while open or while its export runs (hidden).
+    export: Option<ExportDialog>,
 }
 
 impl Library {
@@ -187,6 +195,7 @@ impl Library {
             copying: false,
             paste_asked: None,
             batch: None,
+            export: None,
         }
     }
 
@@ -352,6 +361,8 @@ impl Library {
                 Err(e) => log::info!("could not pre-open photo {photo_id}: {e}"),
             },
             Msg::BatchProgress(progress) => self.batch_progress(progress, env),
+            Msg::ExportProgress { done, total } => self.export_progress(done, total),
+            Msg::ExportDone(result) => self.export_done(result, env),
             Msg::PresetsSynced(..) => {
                 // The catalogue's presets may have changed; the session handles the rest.
                 self.develop.presets_stale();
@@ -366,6 +377,11 @@ impl Library {
                     "import" => self.importing = None,
                     "open catalogue" => self.stage = Stage::Failed(message.clone()),
                     "thumbnail pool" => self.reviving = false,
+                    "export" => {
+                        if self.export.as_ref().is_some_and(ExportDialog::running) {
+                            self.export_done(Err(message.clone()), env);
+                        }
+                    }
                     "batch" => {
                         if let Some(b) = &mut self.batch {
                             let total = b.ids.len();
@@ -632,6 +648,17 @@ impl Library {
                     {
                         self.add_folder(env);
                     }
+                    let export = egui::Button::new(EXPORT)
+                        .shortcut_text(ui.ctx().format_shortcut(&EXPORT_KEY));
+                    if ui
+                        .add_enabled(
+                            !self.selection.current.is_empty() || self.export.is_some(),
+                            export,
+                        )
+                        .clicked()
+                    {
+                        self.open_export(env);
+                    }
                 });
                 ui.menu_button("Edit", |ui| {
                     let editing = matches!(self.mode, Mode::Develop(_));
@@ -707,6 +734,7 @@ impl Library {
         self.copy_dialog(ui.ctx(), env);
         self.waiting_paste(ui.ctx(), env);
         self.batch_dialog(ui.ctx(), env);
+        self.export_dialog(ui.ctx(), env);
         self.reveal_active = false;
     }
 
@@ -718,15 +746,20 @@ impl Library {
             || self.adding
             || self.copying
             || self.batch.is_some()
+            || self.export.as_ref().is_some_and(|d| d.visible)
         {
             return;
         }
-        let (copy, paste) = ctx.input_mut(|i| {
+        let (copy, paste, export) = ctx.input_mut(|i| {
             (
                 i.consume_shortcut(&COPY_KEY),
                 i.consume_shortcut(&PASTE_KEY),
+                i.consume_shortcut(&EXPORT_KEY),
             )
         });
+        if export {
+            self.open_export(env);
+        }
         if copy && self.copy_source().is_some() {
             self.copying = true;
         }
@@ -805,6 +838,13 @@ impl Library {
             if let Some(text) = self.busy {
                 ui.separator();
                 ui.label(RichText::new(text).color(theme::MUTED));
+            }
+            if let Some((done, total)) = self.export_status() {
+                ui.separator();
+                ui.label(crate::dialogs::export::status_text(done, total));
+                ui.add(
+                    egui::ProgressBar::new(done as f32 / total.max(1) as f32).desired_width(160.0),
+                );
             }
             if let Some(importing) = &self.importing {
                 ui.separator();

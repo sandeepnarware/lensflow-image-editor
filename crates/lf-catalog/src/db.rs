@@ -36,6 +36,12 @@ pub enum CatalogError {
          graphics device allows is {limit} pixels on a side. Choose a smaller size."
     )]
     TooLarge { width: u32, height: u32, limit: u32 },
+    /// The graphics device was lost (a driver reset, sleep): an export stops at once.
+    #[error(
+        "The graphics device was reset, so the export stopped. Export the remaining photos \
+         again."
+    )]
+    DeviceLost,
     #[error(
         "This catalogue was made by a newer lensflow-ImageEditor. Update the app to open it \
          (catalogue schema {found}, this version understands up to {supported})."
