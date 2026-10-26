@@ -459,7 +459,12 @@ fn a_drag_is_one_history_step_undone_with_ctrl_z_and_saved_beside_the_photo() {
     drag_slider(&mut h, "Exposure", 60.0);
     let dragged = exposure(&h);
     assert!(dragged > 0.0, "the drag moved exposure");
-    assert!(!h.state().lib.develop().edit_state().unwrap().dirty);
+    // Letting go commits, unless another connection (a thumbnail or import write on a slow
+    // machine) holds the write lock past the 250 ms quick timeout; the edit then stays dirty
+    // and the commit is retried on a later frame. So wait for the step instead of assuming.
+    step_until(&mut h, "the drag to be committed (not dirty)", |s| {
+        s.lib.develop().edit_state().is_some_and(|e| !e.dirty)
+    });
     let catalog = lf_catalog::Catalog::open(&root).unwrap();
     assert_eq!(
         lf_catalog::edits::history_len(&catalog, id).unwrap(),
