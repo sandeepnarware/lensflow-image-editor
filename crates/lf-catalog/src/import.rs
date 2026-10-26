@@ -213,22 +213,6 @@ fn unreadable(error: String) -> Meta {
     }
 }
 
-/// The sentence stored in `photos.sidecar_error` when a photo's sidecar cannot be read.
-fn sidecar_error(path: &Path, e: &CatalogError) -> String {
-    let name = sidecar::path_for(path)
-        .file_name()
-        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let why = match e {
-        CatalogError::Corrupt(why) => why.clone(),
-        other => other.to_string(),
-    };
-    format!(
-        "The edit file beside this photo ({name}) could not be read ({why}); it was left \
-         untouched, so its edits are not loaded and new edits are not saved beside the photo \
-         until it is repaired or removed."
-    )
-}
-
 /// One file of a batch to record: the candidate, its row if catalogued, its facts and its
 /// sidecar as read.
 struct Work<'a> {
@@ -379,7 +363,7 @@ pub fn run(
                         log::warn!("the sidecar of {} could not be read: {e}", c.path.display());
                         tx.execute(
                             "UPDATE photos SET sidecar_error = ?2 WHERE id = ?1",
-                            rusqlite::params![id, sidecar_error(&c.path, e)],
+                            rusqlite::params![id, sidecar::damaged_message(&c.path, e)],
                         )?;
                     }
                 }

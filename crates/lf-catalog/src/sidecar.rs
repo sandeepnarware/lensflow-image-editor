@@ -32,6 +32,22 @@ pub fn path_for(photo: &Path) -> PathBuf {
     photo.with_file_name(name)
 }
 
+/// The sentence stored in `photos.sidecar_error` when a photo's sidecar cannot be read.
+pub fn damaged_message(path: &Path, e: &CatalogError) -> String {
+    let name = path_for(path)
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let why = match e {
+        CatalogError::Corrupt(why) => why.clone(),
+        other => other.to_string(),
+    };
+    format!(
+        "The edit file beside this photo ({name}) could not be read ({why}); it was left \
+         untouched, so its edits are not loaded and new edits are not saved beside the photo \
+         until it is repaired or removed."
+    )
+}
+
 /// `None` when the file does not exist; an error when it is not a valid sidecar.
 pub fn read(path: &Path) -> Result<Option<Sidecar>> {
     let text = match fs::read_to_string(path) {

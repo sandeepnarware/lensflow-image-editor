@@ -11,7 +11,8 @@ use serde_json::Map;
 
 use crate::db::{Catalog, CatalogError, Result};
 use crate::model::{Reconciled, Source, Version, now, parse_ts, ts};
-use crate::sidecar::{SIDECAR_VERSION, Sidecar};
+use crate::sidecar::{self, SIDECAR_VERSION, Sidecar};
+use std::path::Path;
 
 pub const HISTORY_CAP: usize = 50;
 
@@ -287,6 +288,48 @@ pub fn reconcile(
     let result = reconcile_in(&tx, photo_id, sidecar)?;
     tx.commit()?;
     Ok(result)
+}
+
+/// What [`reconcile_on_open`] did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OnOpen {
+    /// The sidecar (or its absence) was reconciled; this side won.
+    Reconciled(Source),
+    /// The sidecar could not be read: the message stored in `photos.sidecar_error`. Nothing
+    /// was reconciled, the catalogue's edits stand and the file was left untouched.
+    Damaged(String),
+}
+
+/// Reopening a photo (Develop): reads the sidecar beside `photo` and applies [`reconcile`],
+/// so an edit made on another machine shows; a sidecar the rule says to rewrite is written
+/// (a failed write is logged). A sidecar that cannot be read is recorded in
+/// `photos.sidecar_error` and skips the reconcile: it is never treated as absent
+/// (`reconcile(None)` would write the catalogue's edits over it).
+pub fn reconcile_on_open(catalog: &Catalog, photo_id: i64, photo: &Path) -> Result<OnOpen> {
+    let path = sidecar::path_for(photo);
+    match sidecar::read(&path) {
+        Ok(found) => {
+            let r = reconcile(catalog, photo_id, found.as_ref())?;
+            if let Some(out) = &r.sidecar_to_write
+                && let Err(e) = sidecar::write(&path, out)
+            {
+                log::warn!("could not update the sidecar {}: {e}", path.display());
+            }
+            Ok(OnOpen::Reconciled(r.source))
+        }
+        Err(e) => {
+            log::warn!("the sidecar of {} could not be read: {e}", photo.display());
+            let message = sidecar::damaged_message(photo, &e);
+            let tx = catalog.write_tx()?;
+            check_photo(&tx, photo_id)?;
+            tx.execute(
+                "UPDATE photos SET sidecar_error = ?2 WHERE id = ?1",
+                rusqlite::params![photo_id, message],
+            )?;
+            tx.commit()?;
+            Ok(OnOpen::Damaged(message))
+        }
+    }
 }
 
 /// [`reconcile`] inside the caller's transaction.

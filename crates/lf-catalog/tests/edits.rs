@@ -334,3 +334,54 @@ fn an_adopted_stamp_is_truncated_to_milliseconds_and_the_sidecar_rewritten() {
     assert_eq!(again.source, Source::Db);
     assert!(again.sidecar_to_write.is_none());
 }
+
+/// Opening a photo in Develop reconciles its sidecar from disk: a damaged sidecar is recorded
+/// in `sidecar_error` and nothing is reconciled (the catalogue's edits stay, the file is left
+/// untouched; never `reconcile(None)`, which would write over it); a readable newer one wins
+/// and clears the error.
+#[test]
+fn reconcile_on_open_records_a_damaged_sidecar_and_skips_the_reconcile() {
+    let (dir, c, id) = setup();
+    let photo = dir.path().join("a.nef");
+    std::fs::write(&photo, b"not really a raw").unwrap();
+    let sc = edits::set_settings(&c, id, &with_exposure(0.1)).unwrap();
+    let side = lf_catalog::sidecar::path_for(&photo);
+    std::fs::write(&side, b"{ broken").unwrap();
+
+    let got = edits::reconcile_on_open(&c, id, &photo).unwrap();
+    let edits::OnOpen::Damaged(message) = got else {
+        panic!("a damaged sidecar was reconciled: {got:?}");
+    };
+    assert!(message.contains("a.nef.lensflow.json"), "{message}");
+    assert_eq!(
+        c.photo(id).unwrap().unwrap().sidecar_error.as_deref(),
+        Some(message.as_str())
+    );
+    assert_eq!(exposure(&c, id), 0.1, "the catalogue's edits stay");
+    assert_eq!(std::fs::read(&side).unwrap(), b"{ broken", "left untouched");
+
+    // Repaired with newer edits from another machine: adopted, and the error cleared.
+    let mut theirs = sc.clone();
+    theirs.settings = with_exposure(0.7);
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    theirs.updated_at = lf_catalog::model::now() - Duration::milliseconds(5);
+    std::fs::remove_file(&side).unwrap();
+    lf_catalog::sidecar::write(&side, &theirs).unwrap();
+    let got = edits::reconcile_on_open(&c, id, &photo).unwrap();
+    assert!(
+        matches!(got, edits::OnOpen::Reconciled(Source::Sidecar)),
+        "{got:?}"
+    );
+    assert_eq!(exposure(&c, id), 0.7);
+    assert_eq!(c.photo(id).unwrap().unwrap().sidecar_error, None);
+
+    // No sidecar at all: the catalogue's edits are written beside the photo.
+    std::fs::remove_file(&side).unwrap();
+    let got = edits::reconcile_on_open(&c, id, &photo).unwrap();
+    assert!(
+        matches!(got, edits::OnOpen::Reconciled(Source::Db)),
+        "{got:?}"
+    );
+    let written = lf_catalog::sidecar::read(&side).unwrap().unwrap();
+    assert_eq!(written.settings.exposure, 0.7);
+}
