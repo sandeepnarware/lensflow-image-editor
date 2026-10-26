@@ -8,9 +8,9 @@
 //!
 //! A run never stops at one bad photo: each failure is listed in the [`ExportReport`] and the
 //! rest are exported. Only the up-front checks (name collisions, existing files when not
-//! overwriting) fail the whole run, before anything is written, and a lost graphics device
-//! stops it where it is ([`CatalogError::DeviceLost`]). The progress callback can cancel
-//! after the current photo.
+//! overwriting, an output landing on a catalogued photo) fail the whole run, before anything
+//! is written. A lost graphics device stops it where it is ([`ExportReport::device_lost`]).
+//! The progress callback can cancel after the current photo.
 
 use std::io::{Cursor, Write};
 use std::ops::ControlFlow;
@@ -109,6 +109,8 @@ pub struct ExportReport {
     pub exported: Vec<Exported>,
     pub failed: Vec<(i64, CatalogError)>,
     pub cancelled: bool,
+    /// The graphics device was lost: the run stopped there (see [`run`]).
+    pub device_lost: bool,
 }
 
 /// A row of `export_jobs`.
@@ -303,12 +305,84 @@ fn plan(catalog: &Catalog, ids: &[i64], spec: &ExportSpec) -> Result<Vec<(PhotoR
         }
         out.push((row, path));
     }
+    // Before the existing-file check, and whatever `overwrite` says: the desktop never
+    // rewrites a source file.
+    protect_originals(catalog, out.iter().map(|(_, p)| p.as_path()))?;
     if !spec.overwrite
         && let Some((_, path)) = out.iter().find(|(_, p)| p.exists())
     {
         return Err(CatalogError::Exists(path.clone()));
     }
     Ok(out)
+}
+
+/// The key two paths are compared by: canonical where the file (or else its folder) exists,
+/// lexical otherwise, and lower-cased (Windows and macOS volumes ignore case; being stricter
+/// elsewhere only refuses more).
+fn path_key(path: &Path) -> String {
+    let resolved = std::fs::canonicalize(path).ok().or_else(|| {
+        let parent = path.parent()?;
+        let parent = if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        };
+        Some(std::fs::canonicalize(parent).ok()?.join(path.file_name()?))
+    });
+    let resolved = resolved.unwrap_or_else(|| {
+        // Neither exists: a lexical clean-up (`.` dropped, `..` folded).
+        let mut out = PathBuf::new();
+        for c in path.components() {
+            match c {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    out.pop();
+                }
+                c => out.push(c),
+            }
+        }
+        out
+    });
+    resolved.to_string_lossy().to_lowercase()
+}
+
+/// A sidecar's name (`<photo file>.lensflow.json`), compared without case.
+fn is_sidecar(path: &Path) -> bool {
+    path.file_name().is_some_and(|n| {
+        n.to_string_lossy()
+            .to_lowercase()
+            .ends_with(".lensflow.json")
+    })
+}
+
+/// [`CatalogError::WouldOverwriteOriginal`] for the first output that is a sidecar or the
+/// path of any catalogued photo (the whole catalogue, not only the photos being exported).
+/// Only photos whose file name matches an output's are resolved on disk, so a large
+/// catalogue costs one string pass.
+fn protect_originals<'a>(
+    catalog: &Catalog,
+    outputs: impl Iterator<Item = &'a Path> + Clone,
+) -> Result<()> {
+    if let Some(path) = outputs.clone().find(|p| is_sidecar(p)) {
+        return Err(CatalogError::WouldOverwriteOriginal(path.to_path_buf()));
+    }
+    let lower_name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().to_lowercase());
+    let names: std::collections::HashSet<String> = outputs.clone().filter_map(lower_name).collect();
+    let mut stmt = catalog.conn.prepare("SELECT path FROM photos")?;
+    let candidates: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .filter_map(std::result::Result::ok)
+        .filter(|p| lower_name(Path::new(p)).is_some_and(|n| names.contains(&n)))
+        .collect();
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let sources: std::collections::HashSet<String> =
+        candidates.iter().map(|p| path_key(Path::new(p))).collect();
+    match outputs.into_iter().find(|p| sources.contains(&path_key(p))) {
+        Some(path) => Err(CatalogError::WouldOverwriteOriginal(path.to_path_buf())),
+        None => Ok(()),
+    }
 }
 
 fn export_one(
@@ -496,9 +570,11 @@ fn write_output(path: &Path, bytes: &[u8], overwrite: bool) -> Result<()> {
 /// just finished. A photo that fails is listed in [`ExportReport::failed`] and the run goes
 /// on. Only the up-front checks fail the whole run (`Err`), before anything is written: two
 /// photos on one path ([`CatalogError::NameCollision`]) or, unless overwriting, an existing
-/// file ([`CatalogError::Exists`]). A graphics device lost before or during a photo stops the
-/// run there with [`CatalogError::DeviceLost`] (the photos already written stay; the job row
-/// is `failed` with their count). The run is recorded in `export_jobs`.
+/// file ([`CatalogError::Exists`]); and, whatever `overwrite` says, an output that would land
+/// on any catalogued photo or a sidecar ([`CatalogError::WouldOverwriteOriginal`]). A
+/// graphics device lost before or during a photo stops the run there: the report comes back
+/// with `device_lost` set and what was written so far (the job row is `failed` with
+/// [`CatalogError::DeviceLost`]'s message). The run is recorded in `export_jobs`.
 pub fn run(
     gpu: Arc<Gpu>,
     catalog: &Catalog,
@@ -529,6 +605,7 @@ pub fn run(
         exported: Vec::with_capacity(total),
         failed: Vec::new(),
         cancelled: false,
+        device_lost: false,
     };
     let planned = match plan(catalog, photo_ids, spec) {
         Ok(p) => p,
@@ -543,22 +620,23 @@ pub fn run(
             break;
         }
         let id = photo_ids[i];
-        let device_lost = |report: &ExportReport| -> Result<ExportReport> {
+        let device_lost = |mut report: ExportReport| -> Result<ExportReport> {
             log::error!(
                 "the graphics device was lost exporting photo {id}; stopping after {} photos",
                 report.exported.len()
             );
+            report.device_lost = true;
             let e = CatalogError::DeviceLost;
             finish("failed", report.exported.len(), Some(e.to_string()))?;
-            Err(e)
+            Ok(report)
         };
         if gpu.is_lost() {
-            return device_lost(&report);
+            return device_lost(report);
         }
         match export_one(&gpu, catalog, id, &row, path, spec) {
             Ok(e) => report.exported.push(e),
-            Err(CatalogError::DeviceLost) => return device_lost(&report),
-            Err(_) if gpu.is_lost() => return device_lost(&report),
+            Err(CatalogError::DeviceLost) => return device_lost(report),
+            Err(_) if gpu.is_lost() => return device_lost(report),
             Err(e) => {
                 log::warn!("export of photo {id} ({}) failed: {e}", row.path);
                 report.failed.push((id, e));
@@ -582,4 +660,39 @@ pub fn run(
     };
     finish(status, done, error)?;
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidecar_names_are_never_export_targets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let c = Catalog::open(tmp.path()).unwrap();
+        let dir = tmp.path().to_path_buf();
+        for name in ["IMG_1.jpg.lensflow.json", "x.LENSFLOW.JSON"] {
+            let p = dir.join(name);
+            assert!(matches!(
+                protect_originals(&c, [p.as_path()].into_iter()),
+                Err(CatalogError::WouldOverwriteOriginal(_))
+            ));
+        }
+        let fine = dir.join("IMG_1.jpg");
+        assert!(protect_originals(&c, [fine.as_path()].into_iter()).is_ok());
+    }
+
+    #[test]
+    fn path_keys_ignore_case_and_dots() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("IMG_1.JPG"), b"x").unwrap();
+        let a = path_key(&dir.path().join("IMG_1.JPG"));
+        assert_eq!(a, path_key(&dir.path().join("IMG_1.jpg")));
+        assert_eq!(a, path_key(&dir.path().join(".").join("img_1.jpg")));
+        let missing = Path::new("no-such-dir/sub/../x.jpg");
+        assert_eq!(
+            path_key(missing),
+            "no-such-dir/x.jpg".replace('/', std::path::MAIN_SEPARATOR_STR)
+        );
+    }
 }

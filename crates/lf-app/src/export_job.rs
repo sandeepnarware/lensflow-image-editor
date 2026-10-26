@@ -32,8 +32,11 @@ pub struct ExportOutcome {
     pub total: usize,
     pub exported: Vec<Exported>,
     pub failed: Vec<Failed>,
-    /// Stopped (the Stop button, or the device was lost) before every photo was tried.
+    /// Stopped by the Stop button before every photo was tried.
     pub cancelled: bool,
+    /// The graphics device was lost: the run stopped there (whether the library or the
+    /// progress callback noticed it first).
+    pub device_lost: bool,
 }
 
 /// Whether files can be made in `folder`: it is a readable folder and a probe file can be
@@ -41,12 +44,15 @@ pub struct ExportOutcome {
 pub fn check_writable(folder: &Path) -> Result<(), String> {
     crate::catalog_ext::check_folder(folder).map_err(str::to_owned)?;
     let probe = folder.join(format!(".lensflow-export-probe-{}.tmp", std::process::id()));
+    // `create` + `truncate`, not `create_new`: a probe a crash left behind under this process
+    // id is simply written over.
     let made = std::fs::OpenOptions::new()
         .write(true)
-        .create_new(true)
+        .create(true)
+        .truncate(true)
         .open(&probe)
         .and_then(|mut f| std::io::Write::write_all(&mut f, b"probe"));
-    // Removed whether or not the write worked (a stale probe from a crash is replaced too).
+    // Removed whether or not the write worked.
     let _ = std::fs::remove_file(&probe);
     made.map_err(|e| {
         log::info!("{} is not writable: {e}", folder.display());
@@ -72,15 +78,22 @@ pub fn run(
     check_writable(folder)?;
     let catalog = Catalog::open(catalogue_root).map_err(|e| e.to_string())?;
     let watch = gpu.clone();
+    // The callback noticed the device was lost (between photos): the same as the library
+    // noticing it during one.
+    let mut lost_between = false;
     let report = export::run(gpu, &catalog, ids, spec, &mut |done, total| {
         progress(done, total);
-        if stop.load(Ordering::SeqCst) || watch.is_lost() {
+        if watch.is_lost() {
+            lost_between = true;
+            ControlFlow::Break(())
+        } else if stop.load(Ordering::SeqCst) {
             ControlFlow::Break(())
         } else {
             ControlFlow::Continue(())
         }
     })
     .map_err(|e| error_text(&catalog, &e))?;
+    let device_lost = report.device_lost || lost_between;
     let failed = report
         .failed
         .iter()
@@ -100,7 +113,8 @@ pub fn run(
         total: ids.len(),
         exported: report.exported,
         failed,
-        cancelled: report.cancelled,
+        cancelled: report.cancelled && !device_lost,
+        device_lost,
     })
 }
 
@@ -184,7 +198,14 @@ pub fn done_text(outcome: &ExportOutcome) -> String {
         }
     };
     let exported = outcome.exported.len();
-    if outcome.cancelled {
+    if outcome.device_lost {
+        format!(
+            "Exported {} of {} before the graphics device was reset. Reopen \
+             lensflow-ImageEditor and export the rest.",
+            count(exported),
+            photos(outcome.total)
+        )
+    } else if outcome.cancelled {
         format!("Stopped after {}.", photos(exported + outcome.failed.len()))
     } else if outcome.failed.is_empty() {
         format!("Exported {}.", photos(exported))
@@ -304,6 +325,83 @@ mod tests {
             "IMG_1.png already exists. Turn on 'Replace existing files' or choose another \
              folder."
         );
+
+        // Into the photos' own folder, replacing: refused before anything is written.
+        let folder = root.path().join("c");
+        let before = std::fs::read(folder.join("IMG_1.png")).unwrap();
+        let mut s = spec(&folder);
+        s.overwrite = true;
+        let c = Catalog::open(root.path()).unwrap();
+        let png = ids
+            .iter()
+            .copied()
+            .find(|id| c.photo(*id).unwrap().unwrap().path.ends_with("IMG_1.png"))
+            .unwrap();
+        drop(c);
+        let e = run(
+            lf_pipeline::test_support::try_shared_gpu().unwrap(),
+            root.path(),
+            &[png],
+            &s,
+            |_, _| {},
+            &stop,
+        )
+        .unwrap_err();
+        assert_eq!(
+            e,
+            "IMG_1.png is one of your photos. Choose another folder or file name pattern."
+        );
+        assert_eq!(std::fs::read(folder.join("IMG_1.png")).unwrap(), before);
+    }
+
+    const DEVICE_LOST_12_OF_40: &str = "Exported 12 of 40 photos before the graphics device \
+                                        was reset. Reopen lensflow-ImageEditor and export the \
+                                        rest.";
+
+    /// The device lost between photos: the callback's `is_lost` break reads as a loss, not
+    /// as "Stopped", and the files written so far are reported.
+    #[test]
+    fn a_device_lost_mid_run_reports_how_far_it_got() {
+        // A device of its own: destroying the shared one would break the other tests.
+        let Ok(gpu) = lf_pipeline::Gpu::new() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let ids = catalogue(root.path(), &[("f", &["a.png", "b.png", "c.png"])]);
+        let out = tempfile::tempdir().unwrap();
+        let stop = AtomicBool::new(false);
+        let device = gpu.clone();
+        let outcome = run(
+            gpu,
+            root.path(),
+            &ids,
+            &spec(out.path()),
+            |done, _| {
+                if done == 1 {
+                    use eframe::wgpu;
+                    device
+                        .device
+                        .poll(wgpu::PollType::Wait {
+                            submission_index: None,
+                            timeout: Some(std::time::Duration::from_secs(30)),
+                        })
+                        .unwrap();
+                    device.device.destroy();
+                    let _ = device.device.poll(wgpu::PollType::Poll);
+                }
+            },
+            &stop,
+        )
+        .expect("a lost device still reports what was written");
+        assert!(outcome.device_lost);
+        assert_eq!(outcome.exported.len(), 1);
+        assert_eq!(files_in(out.path()), ["a.png"]);
+        assert_eq!(
+            done_text(&outcome),
+            "Exported 1 of 3 photos before the graphics device was reset. Reopen \
+             lensflow-ImageEditor and export the rest."
+        );
     }
 
     #[test]
@@ -397,6 +495,7 @@ mod tests {
             exported: exported(1_200),
             failed: Vec::new(),
             cancelled: false,
+            device_lost: false,
         };
         assert_eq!(done_text(&all), "Exported 1,200 photos.");
         let one = ExportOutcome {
@@ -404,6 +503,7 @@ mod tests {
             exported: exported(1),
             failed: Vec::new(),
             cancelled: false,
+            device_lost: false,
         };
         assert_eq!(done_text(&one), "Exported 1 photo.");
         let stopped = ExportOutcome {
@@ -411,12 +511,33 @@ mod tests {
             exported: exported(12),
             failed: Vec::new(),
             cancelled: true,
+            device_lost: false,
         };
         assert_eq!(done_text(&stopped), "Stopped after 12 photos.");
+        // A lost device reads the same whichever side noticed it.
+        for cancelled in [false, true] {
+            let lost = ExportOutcome {
+                total: 40,
+                exported: exported(12),
+                failed: Vec::new(),
+                cancelled,
+                device_lost: true,
+            };
+            assert_eq!(done_text(&lost), DEVICE_LOST_12_OF_40);
+        }
 
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(check_writable(dir.path()), Ok(()));
         assert!(files_in(dir.path()).is_empty(), "the probe file is removed");
+        // A probe left behind by a crash (same process id) does not get in the way.
+        std::fs::write(
+            dir.path()
+                .join(format!(".lensflow-export-probe-{}.tmp", std::process::id())),
+            b"stale",
+        )
+        .unwrap();
+        assert_eq!(check_writable(dir.path()), Ok(()));
+        assert!(files_in(dir.path()).is_empty());
         assert_eq!(
             check_writable(&dir.path().join("nope")),
             Err(crate::catalog_ext::FOLDER_MISSING.to_owned())

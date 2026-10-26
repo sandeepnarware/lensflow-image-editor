@@ -30,6 +30,8 @@ pub const KEEPS_RUNNING: &str = "Closing this window does not stop the export.";
 pub const NO_FOLDER: &str = "Choose a folder to export to.";
 pub const NO_PATTERN: &str = "Enter a file name pattern.";
 pub const BAD_SIZE: &str = "Enter a size larger than 0.";
+/// Under the Percent field above 100.
+pub const ENLARGES: &str = "Above 100 % enlarges the photo.";
 /// The default JPEG quality and file name pattern.
 pub const DEFAULT_QUALITY: u8 = 93;
 pub const DEFAULT_PATTERN: &str = "{name}";
@@ -165,6 +167,11 @@ impl ExportForm {
         }
     }
 
+    /// A note under the size field.
+    pub fn size_hint(&self) -> Option<&'static str> {
+        (self.size == SizeKind::Percent && self.percent > 100.0).then_some(ENLARGES)
+    }
+
     /// The spec to export with, or the first problem (a sentence to show).
     pub fn spec(&self) -> Result<ExportSpec, &'static str> {
         let positive = |v: f32| v.is_finite() && v > 0.0;
@@ -239,6 +246,10 @@ pub struct ExportDialog {
     typed: String,
     /// A problem with the form, the folder or the last run, shown under the form.
     error: Option<String>,
+    /// Export was pressed with a typed path still to check: start once it is confirmed.
+    start_after_check: bool,
+    /// The typed path was confirmed after Export: start on the next frame.
+    start_ready: bool,
 }
 
 impl ExportDialog {
@@ -254,6 +265,8 @@ impl ExportDialog {
             checking: false,
             typed: String::new(),
             error: None,
+            start_after_check: false,
+            start_ready: false,
         }
     }
 
@@ -306,24 +319,72 @@ impl ExportDialog {
         }
         self.picking = false;
         self.checking = false;
+        let start = std::mem::take(&mut self.start_after_check);
         match result {
             Ok(Some(path)) => {
                 self.form.folder = Some(path);
                 self.typed.clear();
                 self.error = None;
+                self.start_ready = start;
             }
             Ok(None) => {}
             Err(e) => self.error = Some(e),
         }
     }
 
+    /// The Export button. A typed path not yet confirmed with "Use this folder" is checked
+    /// first (off the UI thread) and the export starts once it is confirmed
+    /// ([`ExportDialog::take_start`]); otherwise the form is validated and started.
+    pub fn press_export(&mut self) -> ExportAction {
+        let typed = self.typed.trim();
+        if !typed.is_empty() {
+            if self.checking {
+                self.start_after_check = true;
+                return ExportAction::None;
+            }
+            let path = PathBuf::from(typed);
+            let ticket = self.next_ticket();
+            self.checking = true;
+            self.start_after_check = true;
+            return ExportAction::CheckTyped(ticket, path);
+        }
+        match self.form.spec() {
+            Ok(spec) => ExportAction::Start(spec),
+            Err(e) => {
+                self.error = Some(e.to_owned());
+                ExportAction::None
+            }
+        }
+    }
+
+    /// An export to start now that a typed folder was confirmed (once).
+    pub fn take_start(&mut self) -> Option<ExportSpec> {
+        if !std::mem::take(&mut self.start_ready) {
+            return None;
+        }
+        match self.form.spec() {
+            Ok(spec) => Some(spec),
+            Err(e) => {
+                self.error = Some(e.to_owned());
+                None
+            }
+        }
+    }
+
     fn next_ticket(&mut self) -> u64 {
         self.ticket += 1;
         self.error = None;
+        // A new choice (the picker) supersedes an export waiting on a typed path.
+        self.start_after_check = false;
         self.ticket
     }
 
     pub fn show(&mut self, ctx: &egui::Context) -> ExportAction {
+        if self.stage == Stage::Form
+            && let Some(spec) = self.take_start()
+        {
+            return ExportAction::Start(spec);
+        }
         let mut action = ExportAction::None;
         let _ = egui::Modal::new(egui::Id::unique("export-dialog")).show(ctx, |ui| {
             ui.set_max_width(460.0);
@@ -391,6 +452,11 @@ impl ExportDialog {
                     }
                 });
                 ui.end_row();
+                if let Some(hint) = f.size_hint() {
+                    ui.label("");
+                    ui.label(RichText::new(hint).color(theme::MUTED).small());
+                    ui.end_row();
+                }
                 let label = ui.label("File name");
                 ui.vertical(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut f.pattern).desired_width(260.0))
@@ -452,10 +518,7 @@ impl ExportDialog {
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             if ui.button(EXPORT).clicked() {
-                match self.form.spec() {
-                    Ok(spec) => action = ExportAction::Start(spec),
-                    Err(e) => self.error = Some(e.to_owned()),
-                }
+                action = self.press_export();
             }
             if ui.button(CANCEL).clicked() {
                 action = ExportAction::Close;
@@ -636,6 +699,68 @@ mod tests {
             Format::Jpeg { quality: 1 },
             "quality is kept within 1..=100"
         );
+    }
+
+    #[test]
+    fn percent_above_100_says_it_enlarges() {
+        let mut f = ExportForm {
+            size: SizeKind::Percent,
+            percent: 150.0,
+            ..ExportForm::default()
+        };
+        assert_eq!(f.size_hint(), Some(ENLARGES));
+        f.percent = 100.0;
+        assert_eq!(f.size_hint(), None);
+        f.percent = 150.0;
+        f.size = SizeKind::Original;
+        assert_eq!(f.size_hint(), None, "only for Percent");
+    }
+
+    #[test]
+    fn a_typed_path_not_yet_used_is_checked_then_exported_to() {
+        let mut d = ExportDialog::new(vec![1], ExportForm::default());
+        d.set_typed("typed");
+        // Export with a typed path pending: it is checked first, not ignored.
+        let ticket = match d.press_export() {
+            ExportAction::CheckTyped(ticket, path) => {
+                assert_eq!(path, PathBuf::from("typed"));
+                ticket
+            }
+            other => panic!("expected a check, got {other:?}"),
+        };
+        assert_eq!(d.take_start(), None, "not before the answer");
+        d.folder_chosen(ticket, Ok(Some(PathBuf::from("typed"))));
+        match d.take_start() {
+            Some(spec) => assert_eq!(
+                spec.destination,
+                Destination::Folder(PathBuf::from("typed"))
+            ),
+            None => panic!("the export starts once the folder is confirmed"),
+        }
+        assert_eq!(d.take_start(), None, "once");
+
+        // A refused typed path does not start anything and says why.
+        let mut d = ExportDialog::new(vec![1], ExportForm::default());
+        d.set_typed("bad");
+        let ExportAction::CheckTyped(ticket, _) = d.press_export() else {
+            panic!("expected a check");
+        };
+        d.folder_chosen(ticket, Err("That folder does not exist.".into()));
+        assert_eq!(d.take_start(), None);
+        assert_eq!(d.error(), Some("That folder does not exist."));
+
+        // No typed path: the form's own folder, as before.
+        let mut d = ExportDialog::new(
+            vec![1],
+            ExportForm {
+                folder: Some(PathBuf::from("out")),
+                ..ExportForm::default()
+            },
+        );
+        assert!(matches!(d.press_export(), ExportAction::Start(_)));
+        let mut d = ExportDialog::new(vec![1], ExportForm::default());
+        assert_eq!(d.press_export(), ExportAction::None);
+        assert_eq!(d.error(), Some(NO_FOLDER));
     }
 
     #[test]

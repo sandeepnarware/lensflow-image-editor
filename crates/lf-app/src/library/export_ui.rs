@@ -135,10 +135,11 @@ impl Library {
     pub(super) fn export_done(&mut self, result: Result<ExportOutcome, String>, env: &mut Env) {
         match &result {
             Ok(o) => log::info!(
-                "export ended: {} exported, {} failed, stopped: {}",
+                "export ended: {} exported, {} failed, stopped: {}, device lost: {}",
                 o.exported.len(),
                 o.failed.len(),
-                o.cancelled
+                o.cancelled,
+                o.device_lost
             ),
             Err(e) => log::warn!("export refused or failed: {e}"),
         }
@@ -152,13 +153,16 @@ impl Library {
         self.export = None;
         match result {
             Ok(outcome) => {
-                let level = if outcome.failed.is_empty() && !outcome.cancelled {
-                    Level::Success
-                } else {
-                    Level::Warning
-                };
+                let level =
+                    if outcome.failed.is_empty() && !outcome.cancelled && !outcome.device_lost {
+                        Level::Success
+                    } else {
+                        Level::Warning
+                    };
                 env.toasts.push(level, export_job::done_text(&outcome));
             }
+            // One sentence of context, unless the message already says the export stopped.
+            Err(e) if e.contains("export stopped") => env.toasts.push(Level::Error, e),
             Err(e) => env
                 .toasts
                 .push(Level::Error, format!("The export stopped. {e}")),

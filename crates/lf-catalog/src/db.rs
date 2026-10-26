@@ -42,6 +42,13 @@ pub enum CatalogError {
          again."
     )]
     DeviceLost,
+    /// An export would write over a catalogued photo (or a sidecar): refused, whatever
+    /// `overwrite` says, before anything is written.
+    #[error(
+        "{} is one of your photos. Choose another folder or file name pattern.",
+        .0.file_name().map_or_else(|| .0.display().to_string(), |n| n.to_string_lossy().into_owned())
+    )]
+    WouldOverwriteOriginal(std::path::PathBuf),
     #[error(
         "This catalogue was made by a newer lensflow-ImageEditor. Update the app to open it \
          (catalogue schema {found}, this version understands up to {supported})."
