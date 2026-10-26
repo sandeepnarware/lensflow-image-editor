@@ -27,6 +27,7 @@ accesskit_winit v0.34.1                  Apache-2.0
 addr2line v0.25.1                        Apache-2.0 OR MIT
 adler2 v2.0.1                            0BSD OR MIT OR Apache-2.0
 adler32 v1.2.0                           Zlib
+aead v0.6.1                              MIT OR Apache-2.0
 aes v0.9.3                               MIT OR Apache-2.0
 ahash v0.8.12                            MIT OR Apache-2.0
 aho-corasick v1.1.5                      Unlicense OR MIT
@@ -85,6 +86,8 @@ calloop v0.13.0                          MIT
 calloop-wayland-source v0.3.0            MIT
 cbc v0.2.1                               MIT OR Apache-2.0
 cfg-if v1.0.5                            MIT OR Apache-2.0
+chacha20 v0.10.2                         MIT OR Apache-2.0
+chacha20poly1305 v0.11.0                 Apache-2.0 OR MIT
 chrono v0.4.45                           MIT OR Apache-2.0
 cipher v0.5.2                            MIT OR Apache-2.0
 cmov v0.5.4                              Apache-2.0 OR MIT
@@ -319,6 +322,7 @@ png v0.18.1                              MIT OR Apache-2.0
 polling v3.11.0                          Apache-2.0 OR MIT
 pollster v0.4.0                          Apache-2.0/MIT
 pollster v1.0.1                          Apache-2.0/MIT
+poly1305 v0.9.1                          Apache-2.0 OR MIT
 polycool v0.4.0                          MIT OR Apache-2.0
 portable-atomic v1.15.0                  Apache-2.0 OR MIT
 portable-atomic-util v0.2.8              Apache-2.0 OR MIT
@@ -436,6 +440,7 @@ unicode-ident v1.0.27                    (MIT OR Apache-2.0) AND Unicode-3.0
 unicode-properties v0.1.4                MIT/Apache-2.0
 unicode-segmentation v1.13.3             MIT OR Apache-2.0
 unicode-width v0.2.2                     MIT OR Apache-2.0
+universal-hash v0.6.1                    MIT OR Apache-2.0
 untrusted v0.9.0                         ISC
 url v2.5.8                               MIT OR Apache-2.0
 utf8_iter v1.0.4                         Apache-2.0 OR MIT
@@ -538,7 +543,9 @@ unmodified as a normal Cargo dependency, so you can replace it with your own bui
 option-ext (MPL-2.0, pulled in by directories) is file-level copyleft; it is used
 unmodified as a normal Cargo dependency, so you can replace it with your own build.
 The reqwest HTTP client uses rustls (no OpenSSL); the keyring crate talks to the Windows
-Credential Manager, the macOS Keychain and the Linux Secret Service. httpmock, tempfile and
+Credential Manager, the macOS Keychain and the Linux Secret Service.
+With no keychain, the token file is encrypted with the RustCrypto chacha20poly1305 and hkdf
+crates (MIT OR Apache-2.0), with random bytes from getrandom (MIT OR Apache-2.0). httpmock, tempfile and
 filetime are development-only and are not shipped.
 SQLite (bundled statically by libsqlite3-sys) is in the public domain.
 epaint_default_fonts bundles unmodified fonts: Hack (MIT), Noto Emoji (SIL Open Font
