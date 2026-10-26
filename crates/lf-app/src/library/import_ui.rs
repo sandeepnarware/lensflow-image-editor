@@ -453,9 +453,15 @@ impl Library {
                     log::info!("{shown} was read and holds none of its {n} photos; asking");
                     self.confirm_missing = Some((imported.folder_id, n));
                 }
-                self.mode = super::Mode::Library;
+                // The view moves to the imported folder only when nothing else is shown;
+                // a photographer in Develop or on another folder stays where they are.
+                let here = self.current_folder == Some(imported.folder_id);
+                let nothing_shown =
+                    self.current_folder.is_none() && self.mode == super::Mode::Library;
                 self.refresh_folders(env);
-                self.show_folder(Some(imported.folder_id), env);
+                if here || nothing_shown {
+                    self.show_folder(Some(imported.folder_id), env);
+                }
             }
             Err(e) => {
                 log::error!("import of {shown} failed: {e}");
