@@ -172,6 +172,25 @@ impl SidecarSaver {
         first_error(queued.iter().map(PendingWrite::write))
     }
 
+    /// Writes `write` now, on this thread (a batch on the `Io` lane): any older write for
+    /// the same photo still waiting or queued is dropped first, under the write lock, so it
+    /// can never land after this one.
+    pub fn write_now(&self, write: PendingWrite) -> Result<(), String> {
+        let _writing = lock(&self.writing);
+        {
+            let mut shared = lock(&self.shared);
+            shared.queued.retain(|w| w.photo_id != write.photo_id);
+            if shared
+                .debouncer
+                .peek()
+                .is_some_and(|w| w.photo_id == write.photo_id)
+            {
+                shared.debouncer.flush();
+            }
+        }
+        write.write()
+    }
+
     /// Writes everything queued and waiting, now, on this thread (quitting).
     pub fn flush(&self) -> Result<(), String> {
         let _writing = lock(&self.writing);

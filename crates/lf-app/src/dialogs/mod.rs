@@ -1,0 +1,54 @@
+//! Modal dialogs shared by Library and Develop: the group picker (copy edits), saving a
+//! preset, and applying edits to many photos.
+
+pub mod batch;
+pub mod group_picker;
+pub mod save_preset;
+
+use crate::theme;
+use eframe::egui::{self, RichText};
+
+/// A dialog was open last frame: the window's own shortcuts wait until it closes.
+pub fn modal_open(ctx: &egui::Context) -> bool {
+    ctx.memory(|m| m.top_modal_layer().is_some())
+}
+
+/// A yes-or-no question: `Some(true)` when confirmed, `Some(false)` when cancelled (also
+/// Esc or a click outside), `None` while it waits.
+pub fn confirm(
+    ctx: &egui::Context,
+    id: &str,
+    title: &str,
+    text: &str,
+    yes: &str,
+    danger: bool,
+) -> Option<bool> {
+    let mut answer = None;
+    let _ = egui::Modal::new(egui::Id::unique(id)).show(ctx, |ui| {
+        ui.set_max_width(420.0);
+        ui.heading(title);
+        ui.add_space(8.0);
+        ui.label(text);
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            let mut button = egui::Button::new(if danger {
+                RichText::new(yes).color(theme::BRAND_CONTRAST)
+            } else {
+                RichText::new(yes)
+            });
+            if danger {
+                button = button.fill(theme::DANGER);
+            }
+            if ui.add(button).clicked() {
+                answer = Some(true);
+            }
+            if ui.button("Cancel").clicked() {
+                answer = Some(false);
+            }
+        });
+    });
+    if answer.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        answer = Some(false);
+    }
+    answer
+}

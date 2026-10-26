@@ -19,6 +19,8 @@ pub enum CatalogError {
     Corrupt(String),
     #[error("export: {0}")]
     Export(String),
+    #[error("You already have a preset called {0}.")]
+    PresetNameTaken(String),
     #[error("already exists: {}", .0.display())]
     Exists(std::path::PathBuf),
     #[error(
@@ -150,6 +152,25 @@ CREATE TABLE sidecar_meta (
     // A damaged sidecar, kept apart from `error` (the file and its thumbnail): import and
     // `edits::reconcile` write it, thumbnails never touch it.
     "ALTER TABLE photos ADD COLUMN sidecar_error TEXT;",
+    // Studio presets are kept per studio (names are unique within one), and a delete leaves
+    // a tombstone (`deleted_at`) for the sync. Rows from before belong to no studio (0).
+    r#"
+CREATE TABLE presets_new (
+    id INTEGER PRIMARY KEY,
+    studio_id INTEGER NOT NULL DEFAULT 0,
+    name TEXT NOT NULL,
+    settings TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    remote_id INTEGER,
+    synced_at TEXT,
+    deleted_at TEXT,
+    UNIQUE (studio_id, name)
+);
+INSERT INTO presets_new (id, studio_id, name, settings, updated_at, remote_id, synced_at)
+    SELECT id, 0, name, settings, updated_at, remote_id, synced_at FROM presets;
+DROP TABLE presets;
+ALTER TABLE presets_new RENAME TO presets;
+"#,
 ];
 
 pub struct Catalog {

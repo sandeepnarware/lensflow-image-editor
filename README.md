@@ -12,11 +12,13 @@ that reproduces the web editor's output), Part 2b (RAW decoding and
 development, so `lf-render` opens camera files) and Part 2c-i (the grade,
 account and catalogue libraries) are built. The app itself (2c-ii) and
 packaging (2d) follow. 2c-i is libraries only: there is no UI yet.
-The application crate `lf-app` has started (2c-ii Tasks 1 to 6: window and runtime,
+The application crate `lf-app` has started (2c-ii Tasks 1 to 7: window and runtime,
 sign-in and entitlement, catalogue root, import, library grid and filmstrip, the
 Develop view's preview drawn straight into a texture egui shows, and the adjust panels
 with one history step per gesture, undo and redo, and debounced sidecar writes; the crop
-and straighten tool (`R`) and the heal and clone spot tool (`Q`)).
+and straighten tool (`R`) and the heal and clone spot tool (`Q`); looks, studio presets
+synced with LensFlow, copy and paste of edits (`Ctrl+Shift+C` / `Ctrl+Shift+V`), "Apply to N
+photos", and named versions).
 
 ## Crates
 
@@ -77,6 +79,8 @@ examples JSON must stay within 16,384 characters and the settings JSON within
 8,192, checked before sending), and
 `galleries/edit-presets` (list, create, PATCH, delete). Preset sync names a
 local preset `<name> (desktop)` (or `(desktop 2)`, ...) when the name is taken.
+Presets deleted on the desktop are tombstones until the next sync deletes them on
+the server; a synced preset deleted on the web is removed locally.
 
 How a response becomes behaviour (`client.rs`, `entitlement.rs`):
 
@@ -138,11 +142,12 @@ build is read once and re-saved encrypted. The entitlement cache is
 
 `Catalog::open(root)` creates `<catalogue root>/.lensflow/catalog.sqlite` in
 WAL mode (bundled SQLite) and migrates it under a write lock; the schema
-version is 5 (five migrations). A catalogue with a higher version was made by a
+version is 6 (six migrations). A catalogue with a higher version was made by a
 newer app and is refused (`CatalogError::NewerSchema`, "This catalogue was made
 by a newer lensflow-ImageEditor."), never downgraded. Tables: folders, photos
 (with `error`, `sidecar_error` and `missing`), edits, history and history_cursor, versions,
-thumbnails, presets, export_jobs and sidecar_meta. Each thumbnail worker opens
+thumbnails, presets (per studio, with `deleted_at` tombstones), export_jobs and
+sidecar_meta. Each thumbnail worker opens
 its own connection.
 
 Sidecars. Edits are also written beside each photo as

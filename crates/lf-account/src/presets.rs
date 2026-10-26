@@ -5,9 +5,10 @@ use serde_json::{Value, json};
 
 const PATH: &str = "galleries/edit-presets";
 
-/// A preset as the server holds it. The server's resource has `id`, `name`, `settings` and
-/// `created_at` but no `updated_at`; `updated_at` is the response's `updated_at` when present,
-/// else `created_at`, else empty. Timestamps are assumed to be ISO-8601 (UTC or with an offset).
+/// A preset as the server holds it (`id`, `name`, `settings`, `created_at`, `updated_at`).
+/// `updated_at` is the response's `updated_at` when present (older servers left it out),
+/// else `created_at`, else empty. Timestamps are assumed to be ISO-8601 (UTC or with an
+/// offset).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Preset {
     pub id: i64,
@@ -82,23 +83,53 @@ pub struct Plan {
     pub push: Vec<LocalPreset>,
     pub pull: Vec<Preset>,
     pub conflicts: Vec<(LocalPreset, Preset)>,
+    /// Server ids of presets deleted here (tombstones) to delete there; each tombstone is
+    /// purged once its delete succeeds.
+    pub delete_remote: Vec<i64>,
+    /// Names of local rows to remove for good: tombstones with nothing left to delete on
+    /// the server, and synced presets that were deleted on the server.
+    pub purge: Vec<String>,
 }
 
 pub struct Sync;
 
 impl Sync {
-    pub fn merge(local: &[LocalPreset], remote: &[Preset]) -> Plan {
+    /// Plans a sync of this computer's presets (`local`, and the tombstones of those deleted
+    /// here, `deleted`) with the server's (`remote`).
+    ///
+    /// - A local preset is matched with a remote one by its `remote_id`, else by name (a
+    ///   rename on either side follows the id). Only one side changed since `synced_at`: the
+    ///   newer wins (push, or pull). Both changed (or a time that cannot be read, or never
+    ///   synced under this name): a conflict, both kept.
+    /// - A local preset not on the server: with a `remote_id` and a `synced_at` it was
+    ///   deleted on the server, so it is purged here; otherwise it is new here and pushed.
+    /// - A tombstone whose `remote_id` is still on the server: deleted there
+    ///   (`delete_remote`). Any other tombstone: purged.
+    /// - A remote preset no local preset or tombstone matches: pulled.
+    pub fn merge(local: &[LocalPreset], deleted: &[LocalPreset], remote: &[Preset]) -> Plan {
         let mut plan = Plan::default();
+        let find = |l: &LocalPreset| match l.remote_id {
+            Some(id) => remote.iter().find(|r| r.id == id),
+            None => remote.iter().find(|r| r.name == l.name),
+        };
         for l in local {
-            let Some(r) = remote.iter().find(|r| r.name == l.name) else {
-                // Not on the server: new here (or deleted there, then re-created).
-                plan.push.push(LocalPreset {
-                    remote_id: None,
-                    ..l.clone()
-                });
+            let Some(r) = find(l) else {
+                if l.remote_id.is_some() && l.synced_at.is_some() {
+                    // Synced once and gone from the server: deleted on the web.
+                    plan.purge.push(l.name.clone());
+                } else {
+                    plan.push.push(LocalPreset {
+                        remote_id: None,
+                        ..l.clone()
+                    });
+                }
                 continue;
             };
-            if settings_equal(&l.settings, &r.settings) {
+            if r.name == l.name && settings_equal(&l.settings, &r.settings) {
+                if l.remote_id != Some(r.id) {
+                    // The same preset, never linked: the pull records its server id.
+                    plan.pull.push(r.clone());
+                }
                 continue;
             }
             let times = (
@@ -134,8 +165,18 @@ impl Sync {
                 }
             }
         }
+        for d in deleted {
+            match d.remote_id {
+                Some(id) if remote.iter().any(|r| r.id == id) => plan.delete_remote.push(id),
+                _ => plan.purge.push(d.name.clone()),
+            }
+        }
         for r in remote {
-            if !local.iter().any(|l| l.name == r.name) {
+            let known = local
+                .iter()
+                .any(|l| l.remote_id == Some(r.id) || (l.remote_id.is_none() && l.name == r.name));
+            let tombstoned = deleted.iter().any(|d| d.remote_id == Some(r.id));
+            if !known && !tombstoned {
                 plan.pull.push(r.clone());
             }
         }

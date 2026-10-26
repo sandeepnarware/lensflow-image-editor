@@ -7,6 +7,7 @@ pub mod exif_embed;
 pub mod export;
 pub mod import;
 pub mod model;
+pub mod presets;
 pub mod sidecar;
 pub mod thumbs;
 pub mod versions;

@@ -5,7 +5,9 @@ use crate::account::{Generation, Token};
 use crate::catalog_ext::{Imported, Opened, Pool};
 use crate::develop::open::OpenedPhoto;
 use crate::device_reset;
+use crate::dialogs::batch::BatchProgress;
 use crate::library::import_ui::{Chosen, Purpose};
+use crate::presets_sync::{SyncError, SyncReport};
 use crate::update::DownloadProgress;
 use eframe::egui;
 use lf_account::AccountError;
@@ -126,6 +128,11 @@ pub enum Msg {
     DeviceReset(device_reset::Choice),
     /// The `Io` lane wrote the waiting sidecars (the first error, if any).
     SidecarWritten(Result<(), String>),
+    /// A studio preset sync ended (asked in `Generation`; older answers are dropped by the
+    /// session, the library re-reads its preset list either way).
+    PresetsSynced(Generation, Result<SyncReport, SyncError>),
+    /// "Apply to N photos" moved on (or ended: `finished`).
+    BatchProgress(BatchProgress),
 
     #[cfg(test)]
     Probe(&'static str),
@@ -470,7 +477,7 @@ pub(crate) mod owners {
     /// feeds it to the owner.
     pub fn owner(msg: &Msg) -> Owner {
         match msg {
-            Msg::JobFailed { .. } => Owner::Shared,
+            Msg::JobFailed { .. } | Msg::PresetsSynced(..) => Owner::Shared,
             Msg::Resumed(..)
             | Msg::SignedIn(..)
             | Msg::Me(..)
@@ -489,7 +496,8 @@ pub(crate) mod owners {
             | Msg::FolderRemoved { .. }
             | Msg::Opened { .. }
             | Msg::Preopened { .. }
-            | Msg::SidecarWritten(..) => Owner::Library,
+            | Msg::SidecarWritten(..)
+            | Msg::BatchProgress(..) => Owner::Library,
             Msg::DeviceReset(..) => Owner::App,
             Msg::Probe(..) => Owner::Test,
         }
@@ -554,6 +562,16 @@ pub(crate) mod owners {
                 result: Ok(false),
             },
             Msg::SidecarWritten(Err("disk full".into())),
+            Msg::PresetsSynced(
+                generation,
+                Err(crate::presets_sync::SyncError::Catalog("no".into())),
+            ),
+            Msg::BatchProgress(BatchProgress {
+                done: 1,
+                total: 2,
+                failed: Vec::new(),
+                finished: true,
+            }),
             Msg::DeviceReset(device_reset::Choice::Quit),
             Msg::Probe("probe"),
         ]

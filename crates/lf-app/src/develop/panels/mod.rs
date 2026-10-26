@@ -12,8 +12,11 @@ pub mod effects;
 pub mod grading;
 pub mod hsl;
 pub mod light;
+pub mod looks;
+pub mod presets;
 pub mod raw;
 pub mod slider;
+pub mod versions;
 
 use crate::theme;
 use eframe::egui::{self, RichText};

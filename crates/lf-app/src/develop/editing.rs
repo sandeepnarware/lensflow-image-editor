@@ -243,6 +243,42 @@ impl EditSession {
         }
     }
 
+    /// The catalogue connection (opened on first use).
+    pub fn catalog(&mut self) -> Result<&Catalog, String> {
+        connect(&mut self.catalog, self.catalog_root.as_deref())
+    }
+
+    /// Runs `f` against the catalogue and the open photo's edit state (versions, a batch
+    /// reload); a sidecar it returns is handed to the writer unless `sidecar_damaged`.
+    /// An error is toasted after `what`. True when `f` succeeded.
+    pub fn with_catalog(
+        &mut self,
+        what: &str,
+        photo: Option<&Path>,
+        sidecar_damaged: bool,
+        toasts: &mut Toasts,
+        f: impl FnOnce(&Catalog, &mut EditState) -> lf_catalog::db::Result<Option<Sidecar>>,
+    ) -> bool {
+        let Some(edit) = self.edit.as_mut() else {
+            return false;
+        };
+        let result = connect(&mut self.catalog, self.catalog_root.as_deref())
+            .and_then(|c| f(c, edit).map_err(|e| e.to_string()));
+        match result {
+            Ok(sidecar) => {
+                if let Some(sidecar) = sidecar {
+                    self.save_sidecar(sidecar, photo, sidecar_damaged);
+                }
+                true
+            }
+            Err(e) => {
+                log::error!("{what} {e}");
+                toasts.push(Level::Error, format!("{what} {e}"));
+                false
+            }
+        }
+    }
+
     /// Leaving the photo (another photo, Library, quitting): commits a gesture still in
     /// progress with the full [`FINISH_TIMEOUT`] wait (the quick timeout and retry are for
     /// gestures inside the open photo; once it is left there is nothing to retry). A failure

@@ -1,7 +1,7 @@
 //! The crop tool's panel, as the web's `CropPanel.vue`: aspect ratios (with "Switch portrait /
 //! landscape" for a locked shape), rotate and flip, Straighten, and "Reset crop & rotation".
 //!
-//! The aspect and the reset are part of the crop session (committed on `Enter` or when the
+//! The aspects are the web's full list. The aspect and the reset are part of the crop session (committed on `Enter` or when the
 //! tool is left); a turn or a flip commits at once, and Straighten commits on release.
 
 use super::slider::{self, Range};
@@ -39,10 +39,9 @@ pub fn show(ui: &mut egui::Ui, s: &mut EditSettings, width: u32, height: u32) ->
     ui.label(RichText::new(ASPECT_RATIO).strong().color(theme::INK));
     ui.horizontal_wrapped(|ui| {
         for (value, label) in ASPECTS {
-            // A switched shape (5:4) lights its listed twin (4:5).
-            let on =
-                s.aspect == value || (tool::flippable(value) && tool::swapped(value) == s.aspect);
-            if ui.selectable_label(on, label).clicked() && s.aspect != value {
+            // Clicking the chosen shape again fits the frame to it again, as on the web.
+            let on = tool::aspect_lit(value, &s.aspect);
+            if ui.selectable_label(on, label).clicked() {
                 tool::set_aspect(s, value, tw, th);
                 out.changed = true;
             }

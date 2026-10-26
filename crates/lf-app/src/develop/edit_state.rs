@@ -81,6 +81,14 @@ impl EditState {
         Ok(stepped)
     }
 
+    /// Takes `settings` as what the catalogue now holds (a version used, a batch applied).
+    pub fn adopt(&mut self, settings: EditSettings, catalog: &Catalog) {
+        self.settings = settings.clone();
+        self.committed = settings;
+        self.dirty = false;
+        self.refresh_steps(catalog);
+    }
+
     /// Puts `groups` back to their defaults, as one history step.
     pub fn reset_groups(
         &mut self,

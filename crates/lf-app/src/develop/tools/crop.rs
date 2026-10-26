@@ -30,16 +30,22 @@ pub const WHOLE: Crop = Crop {
     h: 1.0,
 };
 
-/// The aspect choices (value, label), as the web's `CropPanel.vue` offers them.
-pub const ASPECTS: [(&str, &str); 8] = [
+/// The aspect choices (value, label): the web's `ASPECTS` (`geometry.ts`), same order.
+pub const ASPECTS: [(&str, &str); 14] = [
     ("original", "Original"),
     ("free", "Free"),
     ("1:1", "1:1"),
     ("4:5", "4:5"),
-    ("5:7", "5:7"),
+    ("5:4", "5:4"),
     ("2:3", "2:3"),
+    ("3:2", "3:2"),
     ("3:4", "3:4"),
+    ("4:3", "4:3"),
+    ("9:16", "9:16"),
     ("16:9", "16:9"),
+    ("5:7", "5:7"),
+    ("8:10", "8×10"),
+    ("12:18", "12×18"),
 ];
 
 /// Turns a locked aspect between portrait and landscape.
@@ -275,6 +281,15 @@ pub fn flippable(aspect: &str) -> bool {
     }
 }
 
+/// The button for `value` shows as chosen when the photo's aspect is `current`.
+/// A switched shape that is not listed itself (7:5) lights its listed twin (5:7).
+pub fn aspect_lit(value: &str, current: &str) -> bool {
+    current == value
+        || (flippable(value)
+            && swapped(value) == current
+            && !ASPECTS.iter().any(|(v, _)| *v == current))
+}
+
 /// "3:2" → "2:3".
 pub fn swapped(aspect: &str) -> String {
     match aspect.split_once(':') {
@@ -422,12 +437,21 @@ impl CropTool {
         ToolOutput::default()
     }
 
-    /// `Esc`: the settings go back to what they were when the tool was entered. Nothing is
-    /// committed unless a turn, flip or straighten was already committed in the session, in
-    /// which case putting it back is one more step (the catalogue must hold what is shown).
+    /// `Esc`: the geometry (turn, flips, straighten, frame and aspect) goes back to what it
+    /// was when the tool was entered; any other change made meanwhile (an Exposure drag in
+    /// the panels) stays. Nothing is committed unless something in the session was already
+    /// committed, in which case putting it back is one more step (the catalogue must hold
+    /// what is shown).
     pub fn cancel(&self, edit: &mut EditState) -> ToolOutput {
-        let entry = self.entry.clone();
-        edit.set(|s| *s = entry);
+        let entry = &self.entry;
+        edit.set(|s| {
+            s.rotate = entry.rotate;
+            s.flip_h = entry.flip_h;
+            s.flip_v = entry.flip_v;
+            s.angle = entry.angle;
+            s.crop = entry.crop;
+            s.aspect = entry.aspect.clone();
+        });
         ToolOutput {
             changed: true,
             commit: edit.dirty,
@@ -686,5 +710,70 @@ mod tests {
         absorb(out, &mut edit, &c);
         assert_eq!(edit.committed, *tool.entry());
         assert_eq!(edits::history_len(&c, id).unwrap(), 3);
+    }
+
+    #[test]
+    fn esc_keeps_a_light_change_made_while_cropping() {
+        let (_dir, c, id) = catalogue();
+        let mut edit = EditState::new(id, EditSettings::default_settings());
+        let mut tool = CropTool::enter(&edit.settings);
+        crop_session(&mut tool, &mut edit, &c);
+        // An Exposure drag in the adjust panels while the crop tool is open, released.
+        edit.set(|s| s.exposure = 0.7);
+        edit.commit(&c).unwrap();
+        edit.set(|s| s.flip_h = true);
+        let out = tool.cancel(&mut edit);
+        assert_eq!(edit.settings.exposure, 0.7, "the light change survives Esc");
+        let entry = tool.entry();
+        let s = &edit.settings;
+        assert_eq!(
+            (
+                s.rotate,
+                s.flip_h,
+                s.flip_v,
+                s.angle,
+                s.crop,
+                s.aspect.as_str()
+            ),
+            (
+                entry.rotate,
+                entry.flip_h,
+                entry.flip_v,
+                entry.angle,
+                entry.crop,
+                entry.aspect.as_str()
+            ),
+            "the geometry is put back"
+        );
+        // The exposure commit carried the session's crop with it: putting it back is a step.
+        assert!(out.changed && out.commit, "{out:?}");
+        absorb(out, &mut edit, &c);
+        assert_eq!(edit.committed.exposure, 0.7);
+        assert_eq!(edit.committed.crop, entry.crop);
+    }
+
+    #[test]
+    fn the_aspect_list_is_the_webs() {
+        let labels: Vec<&str> = ASPECTS.iter().map(|(_, l)| *l).collect();
+        assert_eq!(
+            labels,
+            [
+                "Original", "Free", "1:1", "4:5", "5:4", "2:3", "3:2", "3:4", "4:3", "9:16",
+                "16:9", "5:7", "8×10", "12×18"
+            ]
+        );
+        assert!(ASPECTS.contains(&("8:10", "8×10")));
+        // A photo edited on the web as 8:10 lights its own button, and only that one.
+        let lit: Vec<&str> = ASPECTS
+            .iter()
+            .filter(|(v, _)| aspect_lit(v, "8:10"))
+            .map(|(v, _)| *v)
+            .collect();
+        assert_eq!(lit, ["8:10"]);
+        // 5:4 is listed now: it lights itself, not 4:5.
+        assert!(aspect_lit("5:4", "5:4") && !aspect_lit("4:5", "5:4"));
+        // A switched shape that is not listed (7:5) lights its listed twin.
+        assert!(aspect_lit("5:7", "7:5"));
+        assert!(aspect_lit("12:18", "18:12"));
     }
 }
