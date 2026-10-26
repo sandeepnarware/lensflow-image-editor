@@ -106,11 +106,11 @@ The folders come from `directories::ProjectDirs::from("in", "lensflow",
 |------|-------|
 | Preferences | `<config dir>/prefs.json` (Edit → Preferences…) |
 | Window size and position | `<config dir>/window.ron` |
-| Cached entitlement | `<config dir>/entitlement.json` |
+| Cached entitlement | `<config dir>/entitlement.json` (the development server: `entitlement-dev.json`) |
 | Sign-in token | The system keychain; without one, an encrypted file in the config dir |
 | Log | `<data dir>/logs/app.log`, rotated at 5 MB, three old files kept (Help → Show log folder) |
 | Decoded RAW frames | `<cache dir>/frames`, 4 GB by default (Preferences: frame cache size) |
-| Catalogue | `<catalogue root>/.lensflow/catalog.sqlite`; the root is chosen on first run |
+| Catalogue | `<catalogue root>/.lensflow/catalog.sqlite`; the root is chosen on first run. Studio presets in it are kept per studio and per server (a development-server studio's key is its negated id) |
 | Edits beside each photo | `<photo>.lensflow.json` sidecars |
 
 On Windows the config and data dirs are

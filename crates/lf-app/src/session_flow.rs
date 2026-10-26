@@ -16,7 +16,7 @@ use crate::toast::{Level, Toasts};
 use crate::update::{self, DownloadProgress, UpdateError};
 use eframe::egui;
 use lf_account::auth::{SignedIn, StudioSummary, User};
-use lf_account::entitlement::{Cache, Decision};
+use lf_account::entitlement::Decision;
 use lf_account::{AccountError, Client, Instance, LockReason};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -62,6 +62,8 @@ struct AccountState {
     last_gate: Option<Instant>,
     /// Installer download progress (bytes done, total).
     download: Option<(u64, u64)>,
+    /// The server signed in to (it keys the studio presets kept in the catalogue).
+    instance: InstanceChoice,
     /// The generation whose sign-in preset sync was asked for (once per sign-in or studio);
     /// cleared when a sync fails, so the next gate answer (back online) tries again.
     presets_synced: Option<Generation>,
@@ -88,6 +90,7 @@ impl AccountState {
             checking: None,
             last_gate: None,
             download: None,
+            instance: choice,
             presets_synced: None,
             sync_offline_told: false,
         }
@@ -177,10 +180,13 @@ impl SessionFlow {
         })
     }
 
-    /// The studio signed in to (its id keys the presets kept in the catalogue).
-    pub fn studio_id(&self) -> Option<i64> {
+    /// The key the open studio's presets are kept under in the catalogue
+    /// ([`presets_key`]: the studio and the server it is on).
+    pub fn presets_key(&self) -> Option<i64> {
         match &self.session {
-            Session::Active { studio, .. } => i64::try_from(studio.id).ok(),
+            Session::Active { studio, .. } => i64::try_from(studio.id)
+                .ok()
+                .map(|id| presets_key(self.account.instance, id)),
             _ => None,
         }
     }
@@ -213,7 +219,7 @@ impl SessionFlow {
         }
         Some((
             self.account.studio_client()?,
-            self.studio_id()?,
+            self.presets_key()?,
             root?.to_path_buf(),
         ))
     }
@@ -335,7 +341,7 @@ impl SessionFlow {
     /// entitlement (the gate's offline grace), when there are both.
     fn offline_studio(&self, prefs: &Prefs) -> Option<(User, StudioSummary)> {
         let slug = prefs.studio_slug.as_deref()?;
-        let cached = Cache::new(self.account.creds.cache_dir()).load()?;
+        let cached = self.account.creds.cache().load()?;
         let summary = serde_json::json!({
             "id": cached.studio.id, "name": cached.studio.name, "slug": slug,
         });
@@ -691,6 +697,18 @@ impl SessionFlow {
     }
 }
 
+/// The key the presets of LensFlow studio `studio_id` are kept under in the catalogue: the
+/// id itself on LensFlow, and its negative on the development server. One catalogue serves
+/// both servers, and their studio and preset ids overlap, so a preset synced with one is
+/// never listed, pushed or updated on the other. (Rows from before presets were kept per
+/// studio have key 0: no studio's.)
+pub fn presets_key(instance: InstanceChoice, studio_id: i64) -> i64 {
+    match instance {
+        InstanceChoice::Prod => studio_id,
+        InstanceChoice::Dev => -studio_id,
+    }
+}
+
 /// The one quiet note when a preset sync cannot reach LensFlow (it is tried again later).
 pub const SYNC_LATER: &str = "Studio presets will sync when LensFlow can be reached.";
 
@@ -726,6 +744,7 @@ mod tests {
                 checking: None,
                 last_gate: None,
                 download: None,
+                instance: InstanceChoice::Dev,
                 presets_synced: None,
                 sync_offline_told: false,
             },
@@ -918,8 +937,9 @@ mod tests {
             flow.account.decision = Some(decision);
             let target = flow.sync_target(Some(dir.path()));
             assert_eq!(target.is_some(), syncs, "{standing:?}");
-            if let Some((_, studio_id, _)) = target {
-                assert_eq!(studio_id, 7);
+            if let Some((_, key, _)) = target {
+                // Signed in to the development server: its own key for studio 7.
+                assert_eq!(key, -7);
             }
             assert!(flow.sync_target(None).is_none(), "no catalogue root yet");
         }

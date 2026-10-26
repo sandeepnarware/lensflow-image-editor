@@ -242,6 +242,64 @@ mod tests {
             .collect()
     }
 
+    /// One catalogue serves both servers: a preset synced with the development server (its
+    /// remote id 9 there) is never sent to LensFlow, where preset 9 is another studio's
+    /// preset with the same studio id.
+    #[test]
+    fn a_dev_preset_never_patches_prod() {
+        use crate::prefs::InstanceChoice;
+        use crate::session_flow::presets_key;
+        let server = MockServer::start();
+        let (_d, c) = catalogue();
+        let (dev, prod) = (
+            presets_key(InstanceChoice::Dev, STUDIO),
+            presets_key(InstanceChoice::Prod, STUDIO),
+        );
+        assert_ne!(dev, prod);
+        local::upsert(
+            &c,
+            dev,
+            "Warm",
+            &json!({"v": 2, "temperature": 20}),
+            "2026-10-12T00:00:00.000Z",
+            Some(9),
+            Some(T0),
+        )
+        .unwrap();
+        server.mock(|w, t| {
+            w.method(GET).path("/api/galleries/edit-presets");
+            t.status(200).json_body(json!({"data": [
+                {"id": 9, "name": "Cool", "settings": {"v": 2, "temperature": -20},
+                 "created_at": T0, "updated_at": "2026-10-11T00:00:00+00:00"}
+            ]}));
+        });
+        let patch = server.mock(|w, t| {
+            w.method(PATCH);
+            t.status(500);
+        });
+        let post = server.mock(|w, t| {
+            w.method(POST);
+            t.status(500);
+        });
+        let delete = server.mock(|w, t| {
+            w.method(DELETE);
+            t.status(500);
+        });
+        let report = run(&client(&server), &c, prod).unwrap();
+        assert_eq!(patch.calls(), 0, "no PATCH to LensFlow");
+        assert_eq!(post.calls() + delete.calls(), 0);
+        assert_eq!(report.pulled, 1);
+        let names = |key| -> Vec<String> {
+            local::list(&c, key)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.name)
+                .collect()
+        };
+        assert_eq!(names(prod), ["Cool"]);
+        assert_eq!(names(dev), ["Warm"], "the development server's copy stays");
+    }
+
     #[test]
     fn sync_pushes_new_local_and_pulls_new_remote() {
         let server = MockServer::start();

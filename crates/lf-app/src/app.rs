@@ -458,7 +458,7 @@ impl eframe::App for App {
         self.flow.tick(Instant::now(), &self.jobs);
         self.shortcuts(ctx);
         if let Some(lib) = &mut self.library {
-            lib.set_studio(self.flow.studio_id());
+            lib.set_studio(self.flow.presets_key());
             // Match a reference: its cost line reads the gate; a fit asked for gets the AI
             // link, whose fresh check before each AI request goes through the session.
             lib.set_match_gate(self.flow.gate());
