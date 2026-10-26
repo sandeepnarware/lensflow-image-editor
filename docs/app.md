@@ -19,8 +19,11 @@ Each `Renderer` call reports its own errors through per-call error scopes (in
 handler. The app's `gpu.take_error()` tap only counts these errors. Three in a
 minute show one toast: "The graphics device reported several errors. If a photo
 looks wrong, reopen it." A lost device (driver reset, sleep) shows the banner
-"The graphics device was reset. Reopen the photo to continue." and offers a
-restart. The app never panics on it.
+"The graphics device was reset. Restart lensflow-ImageEditor to continue." and
+offers a restart. The app never panics on it. A device error that stops only the
+thumbnails says "Thumbnails stopped because of a graphics error. They will
+restart when you change folders." An export cut short by a lost device logs how
+far it got.
 
 Every frame, `logic()` drains the jobs' messages, ticks the session, reads the
 keyboard map, and taps the device. `ui()` then draws the menu bar, the banners,

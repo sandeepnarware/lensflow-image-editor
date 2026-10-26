@@ -28,7 +28,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub const SOFTWARE_BANNER: &str = "No graphics driver found: previews will be slow.";
-pub const DEVICE_LOST_BANNER: &str = "The graphics device was reset. Reopen the photo to continue.";
+pub const DEVICE_LOST_BANNER: &str =
+    "The graphics device was reset. Restart lensflow-ImageEditor to continue.";
+/// The library's banner when a graphics error (not a lost device) stopped the thumbnails.
+pub const THUMBS_STOPPED_BANNER: &str = "Thumbnails stopped because of a graphics error. They \
+     will restart when you change folders.";
 
 /// This build's version, sent to the server and compared with its releases.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

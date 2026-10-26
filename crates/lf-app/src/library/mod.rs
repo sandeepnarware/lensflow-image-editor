@@ -11,7 +11,7 @@ pub mod grid;
 pub mod import_ui;
 pub mod selection;
 
-use crate::app::DEVICE_LOST_BANNER;
+use crate::app::THUMBS_STOPPED_BANNER;
 use crate::catalog_ext::{self, count};
 use crate::clipboard::{self, Clipboard};
 use crate::develop::{self, Develop, Outcome};
@@ -972,7 +972,7 @@ impl Library {
         if self.thumbs.stopped() && !self.gpu.is_lost() {
             egui::Panel::top("library-device").show(ui, |ui| {
                 ui.add_space(4.0);
-                ui.label(RichText::new(DEVICE_LOST_BANNER).color(theme::DANGER));
+                ui.label(RichText::new(THUMBS_STOPPED_BANNER).color(theme::WARNING));
                 ui.add_space(4.0);
             });
         }
@@ -1616,6 +1616,19 @@ mod tests {
         assert_eq!(status_text(1_200, 0), "1,200 photos");
         assert_eq!(status_text(1, 1), "1 photo · 1 selected");
         assert!(remove_folder_text(2).contains("No files are deleted"));
+    }
+
+    #[test]
+    fn graphics_banners_say_what_to_do() {
+        assert_eq!(
+            crate::app::DEVICE_LOST_BANNER,
+            "The graphics device was reset. Restart lensflow-ImageEditor to continue."
+        );
+        assert_eq!(
+            THUMBS_STOPPED_BANNER,
+            "Thumbnails stopped because of a graphics error. They will restart when you \
+             change folders."
+        );
     }
 
     #[test]

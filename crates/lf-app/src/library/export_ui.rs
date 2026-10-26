@@ -143,6 +143,13 @@ impl Library {
             ),
             Err(e) => log::warn!("export refused or failed: {e}"),
         }
+        // A lost device may end the app before this is read (the restart question comes
+        // first): the log keeps how far the export got.
+        if let Ok(o) = &result
+            && o.device_lost
+        {
+            log::warn!("{}", export_job::done_text(o));
+        }
         let Some(dialog) = &mut self.export else {
             return;
         };
