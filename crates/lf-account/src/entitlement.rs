@@ -210,12 +210,16 @@ impl Decision {
 pub struct Gate;
 
 impl Gate {
-    /// Pure decision from the cached and the fresh result.
+    /// Pure decision from the cached and the fresh result for the studio `studio_id`. A
+    /// cached entitlement for any other studio counts as no cache: one studio's answer is
+    /// never replayed for another.
     pub fn evaluate(
         now: SystemTime,
+        studio_id: u64,
         cached: Option<&Entitlement>,
         fresh: Result<Entitlement, AccountError>,
     ) -> Decision {
+        let cached = cached.filter(|c| c.studio.id == studio_id);
         match fresh {
             Ok(e) => match Self::lock_for(&e) {
                 Some((reason, msg)) => Decision::Lock(reason, msg),
@@ -270,8 +274,9 @@ impl Gate {
         }
     }
 
-    /// Checks with the server, updates the cache on success, and decides.
-    pub fn refresh(client: &Client, cache: &Cache, now: SystemTime) -> Decision {
+    /// Checks with the server for the studio `studio_id` (the client's `X-Studio`),
+    /// updates the cache on success, and decides.
+    pub fn refresh(client: &Client, cache: &Cache, studio_id: u64, now: SystemTime) -> Decision {
         let fresh = check(client);
         match &fresh {
             Ok(e) => cache.save(e),
@@ -284,7 +289,7 @@ impl Gate {
             Err(_) => {}
         }
         let cached = cache.load();
-        Self::evaluate(now, cached.as_ref(), fresh)
+        Self::evaluate(now, studio_id, cached.as_ref(), fresh)
     }
 }
 

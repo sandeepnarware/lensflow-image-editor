@@ -4,6 +4,8 @@ use lf_account::{AccountError, Client, Instance, LockReason, download_link};
 use serde_json::json;
 use std::time::{Duration, SystemTime};
 
+/// The studio every test asks about (`Entitlement::example` and `body` both use it).
+const STUDIO: u64 = 1;
 const DAY: Duration = Duration::from_secs(86_400);
 
 fn client(server: &MockServer) -> Client {
@@ -17,7 +19,7 @@ fn body(enabled: bool, standing: &str) -> serde_json::Value {
     json!({"data": {
         "enabled": enabled, "standing": standing,
         "ai": {"available": true, "remaining": 12},
-        "studio": {"id": 3, "name": "Frames", "logo_url": null},
+        "studio": {"id": STUDIO, "name": "Frames", "logo_url": null},
         "min_version": "0.2.0",
         "latest": {"version": "0.3.0", "notes": "n", "published_at": "2026-10-01T00:00:00+00:00"}
     }})
@@ -105,6 +107,7 @@ fn download_link_parses() {
 fn fresh_active_allows() {
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         None,
         Ok(ent(Standing::Active, true, Duration::ZERO)),
     );
@@ -117,6 +120,7 @@ fn network_error_with_a_two_day_cache_is_allowed_stale() {
     let cached = ent(Standing::Active, true, 2 * DAY);
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         Some(&cached),
         Err(AccountError::Network("down".into())),
     );
@@ -132,6 +136,7 @@ fn server_error_counts_like_a_network_error() {
     let cached = ent(Standing::Active, true, DAY);
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         Some(&cached),
         Err(AccountError::Server(503, "x".into())),
     );
@@ -143,6 +148,7 @@ fn network_error_with_an_eight_day_cache_locks_offline() {
     let cached = ent(Standing::Active, true, 8 * DAY);
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         Some(&cached),
         Err(AccountError::Network("down".into())),
     );
@@ -156,6 +162,7 @@ fn network_error_with_an_eight_day_cache_locks_offline() {
 fn network_error_without_a_cache_locks_offline() {
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         None,
         Err(AccountError::Network("down".into())),
     );
@@ -167,6 +174,7 @@ fn stale_read_only_cache_keeps_its_flags_off() {
     let cached = ent(Standing::ReadOnly, true, DAY);
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         Some(&cached),
         Err(AccountError::Network("down".into())),
     );
@@ -179,6 +187,7 @@ fn stale_cache_that_was_locked_stays_locked() {
     let cached = ent(Standing::Paused, true, DAY);
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         Some(&cached),
         Err(AccountError::Network("down".into())),
     );
@@ -190,6 +199,7 @@ fn fresh_locked_error_locks_with_the_server_message() {
     let cached = ent(Standing::Active, true, Duration::ZERO);
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         Some(&cached),
         Err(AccountError::Locked(
             LockReason::Paused,
@@ -203,12 +213,14 @@ fn fresh_locked_error_locks_with_the_server_message() {
 fn fresh_paused_standing_locks() {
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         None,
         Ok(ent(Standing::Paused, true, Duration::ZERO)),
     );
     assert!(matches!(d, Decision::Lock(LockReason::Paused, _)));
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         None,
         Ok(ent(Standing::Suspended, true, Duration::ZERO)),
     );
@@ -219,6 +231,7 @@ fn fresh_paused_standing_locks() {
 fn fresh_disabled_locks_not_enabled() {
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         None,
         Ok(ent(Standing::Active, false, Duration::ZERO)),
     );
@@ -229,6 +242,7 @@ fn fresh_disabled_locks_not_enabled() {
 fn read_only_allows_with_ai_export_and_sync_off() {
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         None,
         Ok(ent(Standing::ReadOnly, true, Duration::ZERO)),
     );
@@ -240,7 +254,7 @@ fn read_only_allows_with_ai_export_and_sync_off() {
 fn ai_needs_availability_too() {
     let mut e = ent(Standing::Active, true, Duration::ZERO);
     e.ai.available = false;
-    let d = Gate::evaluate(SystemTime::now(), None, Ok(e));
+    let d = Gate::evaluate(SystemTime::now(), STUDIO, None, Ok(e));
     assert!(!d.ai_allowed() && d.gallery_export_allowed());
 }
 
@@ -249,6 +263,7 @@ fn fresh_unauthorized_means_sign_in() {
     let cached = ent(Standing::Active, true, DAY);
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         Some(&cached),
         Err(AccountError::Unauthorized),
     );
@@ -266,7 +281,7 @@ fn cache_round_trips_and_refresh_updates_it_on_ok() {
         when.method(GET).path("/api/desktop/entitlement");
         then.status(200).json_body(body(true, "active"));
     });
-    let d = Gate::refresh(&client(&server), &cache, SystemTime::now());
+    let d = Gate::refresh(&client(&server), &cache, STUDIO, SystemTime::now());
     assert!(matches!(d, Decision::Allow(_)));
     let saved = cache.load().expect("saved on fresh ok");
     assert_eq!(saved.studio.name, "Frames");
@@ -277,7 +292,7 @@ fn cache_round_trips_and_refresh_updates_it_on_ok() {
         then.status(503);
     });
     assert!(matches!(
-        Gate::refresh(&client(&server), &cache, SystemTime::now()),
+        Gate::refresh(&client(&server), &cache, STUDIO, SystemTime::now()),
         Decision::AllowStale(..)
     ));
     // A corrupt cache reads as none.
@@ -299,7 +314,7 @@ fn a_403_without_a_code_locks_as_refused_even_with_a_fresh_cache() {
     cache.save(&ent(Standing::Active, true, Duration::ZERO));
     let server = MockServer::start();
     refuse_mock(&server, 403, json!({"message": "You may not do that."}));
-    let d = Gate::refresh(&client(&server), &cache, SystemTime::now());
+    let d = Gate::refresh(&client(&server), &cache, STUDIO, SystemTime::now());
     assert!(
         matches!(&d, Decision::Lock(LockReason::Refused, m) if m == "You may not do that."),
         "{d:?}"
@@ -317,7 +332,7 @@ fn studio_not_found_asks_to_choose_a_studio() {
         404,
         json!({"message": "Studio not found.", "code": "studio_not_found"}),
     );
-    let d = Gate::refresh(&client(&server), &cache, SystemTime::now());
+    let d = Gate::refresh(&client(&server), &cache, STUDIO, SystemTime::now());
     assert!(matches!(d, Decision::ChooseStudio), "{d:?}");
     assert!(!d.gallery_export_allowed());
     assert!(cache.load().is_none());
@@ -331,7 +346,7 @@ fn definite_refusals_do_not_use_the_grace() {
         AccountError::Server(400, "bad".into()),
         AccountError::Validation(Default::default()),
     ] {
-        let d = Gate::evaluate(SystemTime::now(), Some(&cached), Err(err));
+        let d = Gate::evaluate(SystemTime::now(), STUDIO, Some(&cached), Err(err));
         assert!(matches!(d, Decision::Lock(LockReason::Refused, _)), "{d:?}");
     }
     for err in [
@@ -339,7 +354,7 @@ fn definite_refusals_do_not_use_the_grace() {
         AccountError::Server(502, "x".into()),
         AccountError::BadReply("unexpected reply".into()),
     ] {
-        let d = Gate::evaluate(SystemTime::now(), Some(&cached), Err(err));
+        let d = Gate::evaluate(SystemTime::now(), STUDIO, Some(&cached), Err(err));
         assert!(matches!(d, Decision::AllowStale(..)), "{d:?}");
     }
 }
@@ -354,7 +369,7 @@ fn fresh_locked_then_network_error_stays_locked() {
         then.status(200).json_body(body(true, "active"));
     });
     assert!(matches!(
-        Gate::refresh(&client(&server), &cache, SystemTime::now()),
+        Gate::refresh(&client(&server), &cache, STUDIO, SystemTime::now()),
         Decision::Allow(_)
     ));
     ok.delete();
@@ -364,7 +379,7 @@ fn fresh_locked_then_network_error_stays_locked() {
             .json_body(json!({"message": "paused", "code": "subscription_paused"}));
     });
     assert!(matches!(
-        Gate::refresh(&client(&server), &cache, SystemTime::now()),
+        Gate::refresh(&client(&server), &cache, STUDIO, SystemTime::now()),
         Decision::Lock(LockReason::Paused, _)
     ));
     locked.delete();
@@ -372,7 +387,7 @@ fn fresh_locked_then_network_error_stays_locked() {
         when.method(GET).path("/api/desktop/entitlement");
         then.status(503);
     });
-    let d = Gate::refresh(&client(&server), &cache, SystemTime::now());
+    let d = Gate::refresh(&client(&server), &cache, STUDIO, SystemTime::now());
     assert!(matches!(d, Decision::Lock(LockReason::Offline, _)), "{d:?}");
 }
 
@@ -384,7 +399,7 @@ fn unauthorized_clears_the_cache() {
     let server = MockServer::start();
     refuse_mock(&server, 401, json!({"message": "Unauthenticated."}));
     assert!(matches!(
-        Gate::refresh(&client(&server), &cache, SystemTime::now()),
+        Gate::refresh(&client(&server), &cache, STUDIO, SystemTime::now()),
         Decision::SignIn
     ));
     assert!(cache.load().is_none());
@@ -396,6 +411,7 @@ fn a_cache_dated_in_the_future_is_expired() {
     cached.checked_at = SystemTime::now() + Duration::from_secs(3600);
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         Some(&cached),
         Err(AccountError::Network("x".into())),
     );
@@ -404,6 +420,7 @@ fn a_cache_dated_in_the_future_is_expired() {
     cached.checked_at = SystemTime::now() + Duration::from_secs(60);
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         Some(&cached),
         Err(AccountError::Network("x".into())),
     );
@@ -419,6 +436,7 @@ fn a_cache_without_checked_at_is_ancient() {
     let cached = Cache::new(dir.path()).load().unwrap();
     let d = Gate::evaluate(
         SystemTime::now(),
+        STUDIO,
         Some(&cached),
         Err(AccountError::Network("x".into())),
     );
@@ -434,7 +452,7 @@ fn an_unknown_standing_is_read_only_not_a_lock() {
     });
     let e = entitlement::check(&client(&server)).unwrap();
     assert_eq!(e.standing, Standing::Unknown);
-    let d = Gate::evaluate(SystemTime::now(), None, Ok(e));
+    let d = Gate::evaluate(SystemTime::now(), STUDIO, None, Ok(e));
     assert!(matches!(d, Decision::Allow(_)), "{d:?}");
     assert!(!d.ai_allowed() && !d.gallery_export_allowed() && !d.sync_allowed());
 }
@@ -476,7 +494,40 @@ fn an_unreadable_200_reply_is_transient_and_uses_the_grace() {
     });
     let err = entitlement::check(&client(&server)).unwrap_err();
     assert!(matches!(err, AccountError::BadReply(_)), "{err:?}");
-    let d = Gate::refresh(&client(&server), &cache, SystemTime::now());
+    let d = Gate::refresh(&client(&server), &cache, STUDIO, SystemTime::now());
     assert!(matches!(d, Decision::AllowStale(..)), "{d:?}");
     assert!(cache.load().is_some(), "the cache is kept");
+}
+
+#[test]
+fn a_cached_entitlement_for_another_studio_counts_as_no_cache() {
+    let mut other = ent(Standing::Active, true, DAY);
+    other.studio.id = STUDIO + 1;
+    let d = Gate::evaluate(
+        SystemTime::now(),
+        STUDIO,
+        Some(&other),
+        Err(AccountError::Network("down".into())),
+    );
+    assert!(matches!(d, Decision::Lock(LockReason::Offline, _)), "{d:?}");
+    let own = ent(Standing::Active, true, DAY);
+    let d = Gate::evaluate(
+        SystemTime::now(),
+        STUDIO,
+        Some(&own),
+        Err(AccountError::Network("down".into())),
+    );
+    assert!(matches!(d, Decision::AllowStale(..)), "{d:?}");
+
+    // Through refresh: studio B's first check hits a blip with studio A's cache on disk.
+    let dir = tempfile::tempdir().unwrap();
+    let cache = Cache::new(dir.path());
+    cache.save(&other);
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET).path("/api/desktop/entitlement");
+        then.status(503);
+    });
+    let d = Gate::refresh(&client(&server), &cache, STUDIO, SystemTime::now());
+    assert!(matches!(d, Decision::Lock(LockReason::Offline, _)), "{d:?}");
 }

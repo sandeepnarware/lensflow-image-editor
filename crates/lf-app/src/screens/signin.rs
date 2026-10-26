@@ -22,7 +22,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, view: &View) -> Option<Act
     };
     let mut action = None;
     let toggle = KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::D);
-    if ui.input_mut(|i| i.consume_shortcut(&toggle)) {
+    if !*busy && ui.input_mut(|i| i.consume_shortcut(&toggle)) {
         action = Some(Action::ToggleInstance);
     }
     ui.vertical_centered(|ui| {
