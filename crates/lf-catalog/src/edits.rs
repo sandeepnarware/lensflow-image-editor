@@ -234,6 +234,28 @@ pub fn history_len(catalog: &Catalog, photo_id: i64) -> Result<i64> {
     )?)
 }
 
+/// How many steps [`undo`] and [`redo`] can take from where the photo's history stands:
+/// `(back, forward)`; `(0, 0)` for a photo never edited.
+pub fn history_steps(catalog: &Catalog, photo_id: i64) -> Result<(i64, i64)> {
+    let cursor: Option<i64> = catalog
+        .conn
+        .query_row(
+            "SELECT history_id FROM history_cursor WHERE photo_id = ?1",
+            [photo_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(cursor) = cursor else {
+        return Ok((0, 0));
+    };
+    Ok(catalog.conn.query_row(
+        "SELECT COALESCE(SUM(id < ?2), 0), COALESCE(SUM(id > ?2), 0) FROM history
+         WHERE photo_id = ?1",
+        (photo_id, cursor),
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?)
+}
+
 fn step(catalog: &Catalog, photo_id: i64, back: bool) -> Result<Option<Sidecar>> {
     let tx = catalog.write_tx()?;
     check_photo(&tx, photo_id)?;

@@ -119,6 +119,9 @@ pub enum Msg {
     },
     /// The answer to the device-reset message box.
     DeviceReset(device_reset::Choice),
+    /// The `Io` lane wrote the waiting sidecars (the first error, if any).
+    SidecarWritten(Result<(), String>),
+
     #[cfg(test)]
     Probe(&'static str),
 }
@@ -433,5 +436,153 @@ mod tests {
             "returned at the bound ({took:?})"
         );
         release.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Who handles each message, and one of each, for the tests that check every message reaches
+/// its owner (`session_flow`, `library`).
+#[cfg(test)]
+pub(crate) mod owners {
+    use super::*;
+    use crate::update::DownloadProgress;
+    use std::collections::HashSet;
+    use std::mem::{Discriminant, discriminant};
+    use std::path::Path;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Owner {
+        Session,
+        Library,
+        /// `App::handle` itself, before the library and the session see it.
+        App,
+        /// Both look at it: the library resets its own waits and passes it on.
+        Shared,
+        Test,
+    }
+
+    /// Exhaustive on purpose: a new `Msg` variant does not compile until it is placed here.
+    /// Then add one to [`every_message`] (the count test fails until it is there), and the
+    /// owner's test feeds it to the owner.
+    pub fn owner(msg: &Msg) -> Owner {
+        match msg {
+            Msg::JobFailed { .. } => Owner::Shared,
+            Msg::Resumed(..)
+            | Msg::SignedIn(..)
+            | Msg::Me(..)
+            | Msg::Gate(..)
+            | Msg::Cleared
+            | Msg::Download(..) => Owner::Session,
+            Msg::FolderChosen { .. }
+            | Msg::CatalogueOpened { .. }
+            | Msg::PoolReady(..)
+            | Msg::MarkedMissing { .. }
+            | Msg::Scanned { .. }
+            | Msg::ImportProgress(..)
+            | Msg::ImportDone(..)
+            | Msg::Folders(..)
+            | Msg::Photos { .. }
+            | Msg::FolderRemoved { .. }
+            | Msg::Opened { .. }
+            | Msg::Preopened { .. }
+            | Msg::SidecarWritten(..) => Owner::Library,
+            Msg::DeviceReset(..) => Owner::App,
+            Msg::Probe(..) => Owner::Test,
+        }
+    }
+
+    /// How many `Msg` variants there are (bumped with each new one).
+    pub const VARIANTS: usize = 22;
+
+    /// One of every variant: account answers at `generation`; paths under `dir`. None of
+    /// them reaches the network, the keychain or a real catalogue from a fresh session or
+    /// library.
+    pub fn every_message(generation: Generation, dir: &Path) -> Vec<Msg> {
+        use crate::library::import_ui::Purpose;
+        use lf_catalog::import::{Progress, Scan};
+        vec![
+            Msg::JobFailed {
+                name: "test".into(),
+                message: "boom".into(),
+            },
+            Msg::Resumed(generation, None),
+            Msg::SignedIn(generation, Err(AccountError::Network("offline".into()))),
+            Msg::Me(generation, Err(AccountError::Server(400, "no".into()))),
+            Msg::Gate(generation, Decision::ChooseStudio),
+            Msg::Cleared,
+            Msg::Download(DownloadProgress::Progress { done: 1, total: 2 }),
+            Msg::FolderChosen {
+                purpose: Purpose::AddFolder,
+                ticket: 99,
+                result: Ok(None),
+            },
+            Msg::CatalogueOpened {
+                root: dir.join("elsewhere"),
+                result: Err("no".into()),
+            },
+            Msg::PoolReady(Err("no".into())),
+            Msg::MarkedMissing {
+                folder_id: 1,
+                result: Err("no".into()),
+            },
+            Msg::Scanned {
+                folder: dir.join("gone"),
+                scan: Scan {
+                    candidates: Vec::new(),
+                    root_readable: false,
+                },
+            },
+            Msg::ImportProgress(Progress { done: 0, total: 1 }),
+            Msg::ImportDone(Err("no".into())),
+            Msg::Folders(Err("no".into())),
+            Msg::Photos {
+                folder_id: 1,
+                result: Err("no".into()),
+            },
+            Msg::FolderRemoved {
+                folder_id: 1,
+                result: Err("no".into()),
+            },
+            Msg::Opened {
+                photo_id: 1,
+                generation: 99,
+                result: Err("stale".into()),
+            },
+            Msg::Preopened {
+                photo_id: 1,
+                result: Ok(false),
+            },
+            Msg::SidecarWritten(Err("disk full".into())),
+            Msg::DeviceReset(device_reset::Choice::Quit),
+            Msg::Probe("probe"),
+        ]
+    }
+
+    /// The variants (as discriminants) of `owners`.
+    pub fn kinds_owned_by(owners: &[Owner]) -> HashSet<Discriminant<Msg>> {
+        every_message(0, Path::new("."))
+            .iter()
+            .filter(|m| owners.contains(&owner(m)))
+            .map(discriminant)
+            .collect()
+    }
+
+    /// `every_message` filtered to `owners`.
+    pub fn messages_owned_by(owners: &[Owner], generation: Generation, dir: &Path) -> Vec<Msg> {
+        every_message(generation, dir)
+            .into_iter()
+            .filter(|m| owners.contains(&owner(m)))
+            .collect()
+    }
+
+    #[test]
+    fn every_message_holds_each_variant_once() {
+        let all = every_message(0, Path::new("."));
+        let kinds: HashSet<_> = all.iter().map(discriminant).collect();
+        assert_eq!(kinds.len(), all.len(), "a variant is listed twice");
+        assert_eq!(
+            all.len(),
+            VARIANTS,
+            "every_message must hold one of each Msg variant"
+        );
     }
 }

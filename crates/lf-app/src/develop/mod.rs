@@ -6,10 +6,27 @@
 //! decoded (through the frame cache for RAW) and its renderer built there, so the UI thread
 //! receives a renderer ready to draw. Each request bumps a generation; an answer from an
 //! older one is dropped.
+//!
+//! Editing: the adjust panels change the open photo's [`EditState`] on every frame of a
+//! gesture (the preview redraws through [`Develop::settings_changed`], the histogram follows
+//! 200 ms after the last change), and the gesture's end commits it once to the catalogue
+//! (one history step), then hands the sidecar to the debounced [`SidecarSaver`], which
+//! writes it on the `Io` lane a quiet second later. Nothing on the drag path renders or
+//! reads pixels back (Review Focus 1).
+//!
+//! The catalogue connection for commits, undo and redo lives here, on the UI thread: each is
+//! a single-row transaction of a few milliseconds, undo and redo must change the settings
+//! the next frame draws (a lane would answer later, and the `Io` lane can be busy with an
+//! import for minutes), and a commit must be in the catalogue before a RAW reopen reads it
+//! on the `Open` lane. The connection waits up to the catalogue's busy timeout behind an
+//! import batch's write.
 
+pub mod debounce;
+pub mod edit_state;
 pub mod histogram;
 pub mod info;
 pub mod open;
+pub mod panels;
 pub mod preview;
 pub mod view;
 
@@ -17,17 +34,26 @@ use crate::app::DEVICE_LOST_BANNER;
 use crate::jobs::{Jobs, Lane};
 use crate::theme;
 use crate::toast::{Level, Toasts};
+use debounce::{PendingWrite, SidecarSaver};
+use edit_state::EditState;
 use eframe::egui::{self, Key, Modifiers, RichText, Sense};
 use eframe::egui_wgpu::RenderState;
 use histogram::Throttle;
 use lf_catalog::PhotoRow;
+use lf_catalog::{Catalog, Sidecar};
 use lf_pipeline::renderer::{DrawOptions, Histogram, View};
 use lf_pipeline::{Gpu, PipelineError};
 use lf_raw::cache::FrameCache;
 use lf_raw::demosaic::Quality;
+use lf_raw::open::Kind;
+use lf_settings::DevelopSettings;
+use lf_settings::groups::GroupKey;
 use open::OpenedPhoto;
+use panels::{PanelContext, PanelOutput, PanelState};
 use preview::Preview;
+use std::collections::HashSet;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -41,6 +67,85 @@ pub const CANT_OPEN: &str = "Can't open";
 pub const BEFORE: &str = "Before";
 /// Shown where the preview would be when the window has no graphics device to share.
 pub const NO_PREVIEW: &str = "The preview needs the graphics device.";
+
+/// The warning for a photo whose edit file cannot be read: `name` is the photo's file name.
+pub fn damaged_text(name: &str) -> String {
+    format!(
+        "This photo's edit file is damaged, so edits are kept in the catalogue only. Fix or \
+         remove {name}.lensflow.json to save beside the photo again."
+    )
+}
+
+/// The damaged-sidecar warning's button.
+pub const SHOW_FILE: &str = "Show file";
+
+/// The toast when the sidecar beside a photo could not be written.
+pub fn write_failed_text(message: &str) -> String {
+    format!(
+        "The edit file beside the photo could not be saved, so the edit is kept in the \
+         catalogue only. {message}"
+    )
+}
+
+/// Shows `path` in the system's file manager (selected where the system can).
+pub fn show_in_folder(path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        std::process::Command::new("explorer")
+            .raw_arg(format!("/select,\"{}\"", path.display()))
+            .spawn()
+            .map(|_| ())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path.parent().unwrap_or(path))
+            .spawn()
+            .map(|_| ())
+    }
+}
+
+/// The damaged-sidecar warning showing now.
+#[derive(Debug, Clone)]
+struct Damaged {
+    photo_id: i64,
+    /// The photo's file name.
+    name: String,
+    /// The edit file beside it.
+    sidecar: PathBuf,
+}
+
+/// A change to the edits that goes through the catalogue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditOp {
+    Commit,
+    Undo,
+    Redo,
+    Reset(&'static [GroupKey]),
+}
+
+/// Opens the catalogue connection once (see the module docs).
+fn connect<'a>(
+    catalog: &'a mut Option<Catalog>,
+    root: Option<&Path>,
+) -> Result<&'a Catalog, String> {
+    if catalog.is_none() {
+        let root = root.ok_or_else(|| "no catalogue is open".to_owned())?;
+        *catalog = Some(Catalog::open(root).map_err(|e| e.to_string())?);
+    }
+    catalog
+        .as_ref()
+        .ok_or_else(|| "no catalogue is open".to_owned())
+}
 
 /// The start of the toast for a photo that cannot be opened.
 pub fn cant_open_text(message: &str) -> String {
@@ -94,6 +199,22 @@ pub struct Develop {
     last_change: Instant,
     last_histogram: Option<Instant>,
     lost_logged: bool,
+    /// The open photo's settings being edited (one history step per gesture).
+    edit: Option<EditState>,
+    /// The catalogue connection for commits, undo and redo (see the module docs).
+    catalog: Option<Catalog>,
+    catalog_root: Option<PathBuf>,
+    /// The photo shown or being opened (its sidecar sits beside it).
+    photo_path: Option<PathBuf>,
+    saver: SidecarSaver,
+    panels: PanelState,
+    /// Photos whose damaged-sidecar warning was shown this session.
+    warned: HashSet<i64>,
+    damaged: Option<Damaged>,
+    /// The open photo must be decoded again (its RAW develop settings changed).
+    reopen: bool,
+    /// A failed sidecar write was shown; quiet until one succeeds.
+    write_failed: bool,
 }
 
 impl Develop {
@@ -113,6 +234,174 @@ impl Develop {
             last_change: Instant::now(),
             last_histogram: None,
             lost_logged: false,
+            edit: None,
+            catalog: None,
+            catalog_root: None,
+            photo_path: None,
+            saver: SidecarSaver::new(),
+            panels: PanelState::default(),
+            warned: HashSet::new(),
+            damaged: None,
+            reopen: false,
+            write_failed: false,
+        }
+    }
+
+    /// The sidecar writer (the app flushes it when quitting).
+    pub fn saver(&self) -> SidecarSaver {
+        self.saver.clone()
+    }
+
+    /// The open photo's edit state.
+    pub fn edit_state(&self) -> Option<&EditState> {
+        self.edit.as_ref()
+    }
+
+    /// The one entry point for "the settings changed": the preview draws again and the
+    /// histogram is remade 200 ms after the last change.
+    pub fn settings_changed(&mut self) {
+        self.dirty = true;
+        self.last_change = Instant::now();
+    }
+
+    /// Changes the live settings (a gesture in progress) and redraws.
+    pub fn edit(&mut self, f: impl FnOnce(&mut lf_settings::EditSettings)) {
+        if let Some(edit) = self.edit.as_mut() {
+            edit.set(f);
+            self.settings_changed();
+        }
+    }
+
+    /// Ends a gesture: one history step when the settings changed.
+    pub fn commit(&mut self, toasts: &mut Toasts) {
+        self.run_edit(EditOp::Commit, toasts);
+    }
+
+    /// Commits a gesture still in progress (leaving the photo, quitting).
+    pub fn finish_edit(&mut self, toasts: &mut Toasts) {
+        if self.edit.as_ref().is_some_and(|e| e.dirty) {
+            self.run_edit(EditOp::Commit, toasts);
+        }
+    }
+
+    pub fn undo(&mut self, toasts: &mut Toasts) {
+        self.run_edit(EditOp::Undo, toasts);
+    }
+
+    pub fn redo(&mut self, toasts: &mut Toasts) {
+        self.run_edit(EditOp::Redo, toasts);
+    }
+
+    /// Puts `groups` back to their defaults (one history step).
+    pub fn reset_groups(&mut self, groups: &'static [GroupKey], toasts: &mut Toasts) {
+        self.run_edit(EditOp::Reset(groups), toasts);
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.edit.as_ref().is_some_and(EditState::can_undo)
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.edit.as_ref().is_some_and(EditState::can_redo)
+    }
+
+    /// The photo's RAW develop settings changed: it must be opened again (the library asks).
+    pub fn wants_reopen(&self) -> bool {
+        self.reopen && self.is_ready()
+    }
+
+    fn run_edit(&mut self, op: EditOp, toasts: &mut Toasts) {
+        let Some(edit) = self.edit.as_mut() else {
+            return;
+        };
+        let catalog = match connect(&mut self.catalog, self.catalog_root.as_deref()) {
+            Ok(catalog) => catalog,
+            Err(e) => {
+                log::error!("could not open the catalogue for an edit: {e}");
+                toasts.push(
+                    Level::Error,
+                    format!("The edit could not be saved in the catalogue. {e}"),
+                );
+                return;
+            }
+        };
+        let result = match op {
+            EditOp::Commit => edit.commit(catalog),
+            EditOp::Undo => edit.undo(catalog),
+            EditOp::Redo => edit.redo(catalog),
+            EditOp::Reset(groups) => edit.reset_groups(groups, catalog),
+        };
+        if op != EditOp::Commit {
+            self.settings_changed();
+        }
+        match result {
+            Ok(Some(sidecar)) => {
+                self.save_sidecar(sidecar);
+                self.check_develop_change();
+            }
+            Ok(None) => {}
+            Err(e) => {
+                log::error!("could not record an edit ({op:?}): {e}");
+                toasts.push(
+                    Level::Error,
+                    format!("The edit could not be saved in the catalogue. {e}"),
+                );
+            }
+        }
+    }
+
+    /// Hands a committed sidecar to the debounced writer, unless the photo's sidecar could
+    /// not be read: that file is left alone until it has been fixed (the edit is in the
+    /// catalogue either way).
+    fn save_sidecar(&mut self, sidecar: Sidecar) {
+        let (Some(edit), Some(path)) = (&self.edit, &self.photo_path) else {
+            return;
+        };
+        if let State::Ready(opened, _) = &self.state
+            && opened.sidecar_error.is_some()
+        {
+            log::debug!(
+                "photo {}: its sidecar is damaged; not writing",
+                edit.photo_id
+            );
+            return;
+        }
+        self.saver.push(
+            PendingWrite::new(edit.photo_id, path, sidecar),
+            Instant::now(),
+        );
+    }
+
+    /// A RAW whose develop settings (profile, highlights) no longer match what it was
+    /// decoded with is opened again.
+    fn check_develop_change(&mut self) {
+        if let (State::Ready(opened, _), Some(edit)) = (&self.state, &self.edit)
+            && opened.kind == Kind::Raw
+            && DevelopSettings::from_settings(&edit.settings) != opened.develop
+        {
+            self.reopen = true;
+        }
+    }
+
+    /// Puts due sidecar writes on the `Io` lane and wakes the UI when the next falls due.
+    pub fn tick(&mut self, ctx: &egui::Context, jobs: &Jobs) {
+        let now = Instant::now();
+        self.saver.pump(now, jobs);
+        if let Some(due) = self.saver.next_due() {
+            ctx.request_repaint_after(due.saturating_duration_since(now));
+        }
+    }
+
+    /// The `Io` lane wrote the waiting sidecars.
+    pub fn sidecar_written(&mut self, result: Result<(), String>, toasts: &mut Toasts) {
+        match result {
+            Ok(()) => self.write_failed = false,
+            Err(e) => {
+                if !self.write_failed {
+                    toasts.push(Level::Warning, write_failed_text(&e));
+                }
+                self.write_failed = true;
+            }
         }
     }
 
@@ -165,19 +454,35 @@ impl Develop {
         cache: Option<Arc<FrameCache>>,
         quality: Quality,
         jobs: &Jobs,
+        toasts: &mut Toasts,
     ) {
-        if self.photo_id() == Some(photo.id) && !matches!(self.state, State::Failed(..)) {
+        let same = self.photo_id() == Some(photo.id);
+        if same && !matches!(self.state, State::Failed(..)) && !self.wants_reopen() {
             return;
         }
         if self.check_lost() {
             return;
         }
+        // Reopening the shown photo (its RAW develop settings changed) keeps it on screen,
+        // with its edits and zoom, until the new decode arrives.
+        let reopening = same && self.wants_reopen();
+        self.reopen = false;
+        if !reopening {
+            self.finish_edit(toasts);
+            self.edit = None;
+            self.damaged = None;
+            self.state = State::Opening(photo.id);
+            self.preview = None;
+            self.histogram = None;
+            self.viewport = Viewport::default();
+            self.before_toggled = false;
+        }
+        if self.catalog_root.as_deref() != Some(root) {
+            self.catalog = None;
+            self.catalog_root = Some(root.to_path_buf());
+        }
+        self.photo_path = Some(photo.path.clone());
         let generation = self.latest.fetch_add(1, Ordering::SeqCst) + 1;
-        self.state = State::Opening(photo.id);
-        self.preview = None;
-        self.histogram = None;
-        self.viewport = Viewport::default();
-        self.before_toggled = false;
         let req = open::Request {
             photo_id: photo.id,
             path: photo.path.clone(),
@@ -220,8 +525,13 @@ impl Develop {
         }
     }
 
-    /// Leaves Develop: the renderer and canvas are freed; queued opens are skipped.
-    pub fn close(&mut self) {
+    /// Leaves Develop: a gesture in progress is committed, the renderer and canvas are
+    /// freed; queued opens are skipped.
+    pub fn close(&mut self, toasts: &mut Toasts) {
+        self.finish_edit(toasts);
+        self.edit = None;
+        self.damaged = None;
+        self.reopen = false;
         self.latest.fetch_add(1, Ordering::SeqCst);
         self.preview = None;
         self.last_drawn = None;
@@ -248,13 +558,30 @@ impl Develop {
         }
         match result {
             Ok(photo) => {
+                let reopened = matches!(&self.state, State::Ready(_, id) if *id == photo_id)
+                    && self.edit.as_ref().is_some_and(|e| e.photo_id == photo_id);
+                if !reopened {
+                    let mut edit = EditState::new(photo_id, photo.settings.clone());
+                    match connect(&mut self.catalog, self.catalog_root.as_deref()) {
+                        Ok(catalog) => edit.refresh_steps(catalog),
+                        Err(e) => log::warn!("could not open the catalogue for edits: {e}"),
+                    }
+                    self.edit = Some(edit);
+                    self.viewport = Viewport::default();
+                    self.histogram = None;
+                    if photo.sidecar_error.is_some() && self.warned.insert(photo_id) {
+                        let path = self.photo_path.clone().unwrap_or_default();
+                        self.damaged = Some(Damaged {
+                            photo_id,
+                            name: photo.file_name.clone(),
+                            sidecar: lf_catalog::sidecar::path_for(&path),
+                        });
+                    }
+                }
                 self.state = State::Ready(photo, photo_id);
-                self.viewport = Viewport::default();
                 self.last_drawn = None;
-                self.dirty = true;
-                self.histogram = None;
-                self.last_change = Instant::now();
                 self.last_histogram = None;
+                self.settings_changed();
                 Outcome::Shown(photo_id)
             }
             Err(message) => {
@@ -301,8 +628,9 @@ impl Develop {
         toasts.push(Level::Error, format!("{what}. {e}"));
     }
 
-    /// The side panel: histogram, info strip and the Before button.
-    pub fn side_ui(&mut self, ui: &mut egui::Ui, photo: Option<&PhotoRow>) {
+    /// The side panel: histogram, info strip, the damaged-sidecar warning, the Before button
+    /// and the adjust panels.
+    pub fn side_ui(&mut self, ui: &mut egui::Ui, photo: Option<&PhotoRow>, toasts: &mut Toasts) {
         ui.add_space(8.0);
         histogram::show(ui, self.histogram.as_ref());
         ui.add_space(8.0);
@@ -323,17 +651,79 @@ impl Develop {
                 let edge = opened.renderer.width.max(opened.renderer.height);
                 ui.label(RichText::new(info::reduced_note(edge)).color(theme::WARNING));
             }
-            if let Some(error) = &opened.sidecar_error {
-                ui.add_space(8.0);
-                ui.label(RichText::new(error).color(theme::WARNING));
-            }
-            ui.add_space(12.0);
-            let before = self.before();
-            if ui.selectable_label(before, BEFORE).clicked() {
-                self.before_toggled = !self.before_toggled;
-            }
         } else if let Some(photo) = photo {
             ui.label(RichText::new(open::file_name(&photo.path)).strong());
+            return;
+        } else {
+            return;
+        }
+        self.damaged_ui(ui, toasts);
+        ui.add_space(8.0);
+        let before = self.before();
+        if ui.selectable_label(before, BEFORE).clicked() {
+            self.before_toggled = !self.before_toggled;
+        }
+        ui.separator();
+        self.panels_ui(ui, toasts);
+    }
+
+    /// The damaged-sidecar warning, once per photo per session, until dismissed.
+    fn damaged_ui(&mut self, ui: &mut egui::Ui, toasts: &mut Toasts) {
+        let Some(damaged) = self.damaged.clone() else {
+            return;
+        };
+        if self.photo_id() != Some(damaged.photo_id) {
+            return;
+        }
+        ui.add_space(8.0);
+        let mut dismiss = false;
+        egui::Frame::new()
+            .fill(theme::SURFACE_2)
+            .stroke(egui::Stroke::new(1.0, theme::WARNING))
+            .corner_radius(4)
+            .inner_margin(8)
+            .show(ui, |ui| {
+                ui.label(RichText::new(damaged_text(&damaged.name)).color(theme::WARNING));
+                ui.horizontal(|ui| {
+                    if ui.button(SHOW_FILE).clicked()
+                        && let Err(e) = show_in_folder(&damaged.sidecar)
+                    {
+                        toasts.push(Level::Error, format!("The file could not be shown. {e}"));
+                    }
+                    if ui.button("Dismiss").clicked() {
+                        dismiss = true;
+                    }
+                });
+            });
+        if dismiss {
+            self.damaged = None;
+        }
+    }
+
+    /// The adjust panels for the open photo; a gesture's end commits it.
+    fn panels_ui(&mut self, ui: &mut egui::Ui, toasts: &mut Toasts) {
+        let (State::Ready(opened, _), Some(edit)) = (&self.state, self.edit.as_mut()) else {
+            return;
+        };
+        let ctx = PanelContext {
+            raw: opened.kind == Kind::Raw,
+            histogram: self.histogram.as_ref(),
+        };
+        let panels = &mut self.panels;
+        let mut out = PanelOutput::default();
+        egui::ScrollArea::vertical()
+            .id_salt("adjust-panels")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                edit.set(|s| out = panels::show(ui, panels, s, &ctx));
+            });
+        if out.changed {
+            self.settings_changed();
+        }
+        if let Some(groups) = out.reset {
+            self.reset_groups(groups, toasts);
+        } else if out.commit {
+            self.commit(toasts);
         }
     }
 
@@ -376,7 +766,8 @@ impl Develop {
         }
         let output = match &self.state {
             State::Ready(photo, _) => {
-                let (w, h) = photo.renderer.output_size(&photo.settings);
+                let settings = self.edit.as_ref().map_or(&photo.settings, |e| &e.settings);
+                let (w, h) = photo.renderer.output_size(settings);
                 (f64::from(w), f64::from(h))
             }
             _ => return,
@@ -417,7 +808,8 @@ impl Develop {
                     crop: None,
                     view: placement.view,
                 };
-                if let Err(e) = photo.renderer.draw(&photo.settings, &opts, canvas) {
+                let settings = self.edit.as_ref().map_or(&photo.settings, |e| &e.settings);
+                if let Err(e) = photo.renderer.draw(settings, &opts, canvas) {
                     failed = Some(e);
                 }
             }
@@ -474,7 +866,7 @@ impl Develop {
         });
         self.before_held = held;
         if space || response.double_clicked() {
-            self.viewport.toggle_fit_100();
+            self.viewport.toggle_fit_100(output, panel);
         }
         if let Some(pos) = response.hover_pos() {
             let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta().y, i.zoom_delta()));
@@ -508,7 +900,8 @@ impl Develop {
         let State::Ready(photo, _) = &mut self.state else {
             return;
         };
-        match photo.renderer.histogram(&photo.settings) {
+        let settings = self.edit.as_ref().map_or(&photo.settings, |e| &e.settings);
+        match photo.renderer.histogram(settings) {
             Ok(h) => {
                 self.histogram = Some(h);
                 // The side panel was drawn before the preview this frame.

@@ -401,3 +401,187 @@ fn a_photo_that_cannot_be_opened_says_so() {
         "the toast names the problem"
     );
 }
+
+/// Opens the only photo of a fresh one-photo folder in Develop; its path.
+fn develop_one(h: &mut Harness<'static, State>, dir: &Path) -> PathBuf {
+    let shoot = dir.join("shoot");
+    pngs(&shoot, 1);
+    import_folder(h, &shoot, 1);
+    let id = h.state().lib.photos()[0].id;
+    h.state_mut().lib.selection.click(id);
+    h.key_press(Key::D);
+    step_until(h, "the photo to open", |s| s.lib.develop().is_ready());
+    h.state().lib.photos()[0].path.clone()
+}
+
+/// Drags the slider labelled `label` by `dx` points, a few frames at a time.
+fn drag_slider(h: &mut Harness<'static, State>, label: &str, dx: f32) {
+    let rect = h.get_by_label(label).rect();
+    let start = rect.center();
+    h.drag_at(start);
+    h.step();
+    for i in 1..=4 {
+        h.hover_at(start + egui::vec2(dx * i as f32 / 4.0, 0.0));
+        h.step();
+    }
+    h.drop_at(start + egui::vec2(dx, 0.0));
+    h.step();
+    h.step();
+}
+
+fn exposure(h: &Harness<'static, State>) -> f64 {
+    h.state()
+        .lib
+        .develop()
+        .edit_state()
+        .unwrap()
+        .settings
+        .exposure
+}
+
+#[test]
+fn a_drag_is_one_history_step_undone_with_ctrl_z_and_saved_beside_the_photo() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let photo = develop_one(&mut h, dir.path());
+    let id = h.state().lib.photos()[0].id;
+    let root = dir.path().join("catalogue");
+    assert!(!h.state().lib.develop().can_undo());
+
+    drag_slider(&mut h, "Exposure", 60.0);
+    let dragged = exposure(&h);
+    assert!(dragged > 0.0, "the drag moved exposure");
+    assert!(!h.state().lib.develop().edit_state().unwrap().dirty);
+    let catalog = lf_catalog::Catalog::open(&root).unwrap();
+    assert_eq!(
+        lf_catalog::edits::history_len(&catalog, id).unwrap(),
+        2,
+        "the photo before, and one step for the whole drag"
+    );
+    assert!(h.state().lib.develop().can_undo());
+
+    // The sidecar is written a quiet second later, on the Io lane.
+    let sidecar = lf_catalog::sidecar::path_for(&photo);
+    step_until(&mut h, "the sidecar", |_| sidecar.exists());
+    let written = lf_catalog::sidecar::read(&sidecar).unwrap().unwrap();
+    assert_eq!(written.settings.exposure, dragged);
+
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::Z);
+    h.step();
+    assert_eq!(exposure(&h), 0.0, "Ctrl+Z undid the drag");
+    assert!(h.state().lib.develop().can_redo());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::Y);
+    h.step();
+    assert_eq!(exposure(&h), dragged, "Ctrl+Y redid it");
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::Z);
+    h.step();
+    assert_eq!(exposure(&h), dragged, "nothing more to redo");
+    assert_eq!(
+        lf_catalog::edits::get_settings(&catalog, id)
+            .unwrap()
+            .unwrap()
+            .exposure,
+        dragged
+    );
+
+    // Reset puts the section back as one more step.
+    h.get_by_label("Reset Light").click();
+    h.step();
+    assert_eq!(exposure(&h), 0.0);
+    assert_eq!(lf_catalog::edits::history_len(&catalog, id).unwrap(), 3);
+}
+
+#[test]
+fn a_damaged_edit_file_is_never_overwritten_and_the_warning_shows_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 1);
+    let sidecar = lf_catalog::sidecar::path_for(&shoot.join("p0.png"));
+    std::fs::write(&sidecar, b"{ not json").unwrap();
+    import_folder(&mut h, &shoot, 1);
+    let id = h.state().lib.photos()[0].id;
+    h.state_mut().lib.selection.click(id);
+    h.key_press(Key::D);
+    step_until(&mut h, "the photo to open", |s| s.lib.develop().is_ready());
+    let warning = lf_app::develop::damaged_text("p0.png");
+    h.get_by_label(&warning);
+    h.get_by_role_and_label(Role::Button, lf_app::develop::SHOW_FILE);
+
+    drag_slider(&mut h, "Exposure", 60.0);
+    assert!(exposure(&h) > 0.0);
+    // Well past the quiet second: nothing was written over the damaged file.
+    let waited = Instant::now();
+    while waited.elapsed() < Duration::from_millis(1500) {
+        h.step();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(std::fs::read(&sidecar).unwrap(), b"{ not json");
+    assert!(!h.state().lib.sidecar_saver().has_pending());
+    // The edit is in the catalogue.
+    let catalog = lf_catalog::Catalog::open(&dir.path().join("catalogue")).unwrap();
+    assert!(
+        lf_catalog::edits::get_settings(&catalog, id)
+            .unwrap()
+            .unwrap()
+            .exposure
+            > 0.0
+    );
+
+    // Back to the library and in again: the warning was shown once this session.
+    h.key_press(Key::G);
+    h.step();
+    h.key_press(Key::D);
+    step_until(&mut h, "the photo to open again", |s| {
+        s.lib.develop().is_ready()
+    });
+    assert!(h.query_by_label(&warning).is_none());
+}
+
+/// A RAW's profile change commits and decodes the photo again with it, keeping it on
+/// screen meanwhile (skipped when the RAW corpus has not been fetched, as in CI).
+#[test]
+fn a_raw_profile_change_reopens_the_photo_with_it() {
+    let corpus =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/raw-samples/files/nikon-d40.nef");
+    if !corpus.exists() {
+        eprintln!("RAW corpus not fetched: skipped");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    std::fs::create_dir_all(&shoot).unwrap();
+    std::fs::copy(&corpus, shoot.join("d40.nef")).unwrap();
+    import_folder(&mut h, &shoot, 1);
+    let id = h.state().lib.photos()[0].id;
+    h.state_mut().lib.selection.click(id);
+    h.key_press(Key::D);
+    step_until(&mut h, "the RAW to open", |s| s.lib.develop().is_ready());
+    let profile = |s: &State| s.lib.develop().opened().map(|o| o.develop.profile);
+    assert_eq!(profile(h.state()), Some(lf_settings::Profile::Camera));
+    h.get_by_label(lf_app::develop::panels::RAW);
+    h.get_by_label("Linear").click();
+    h.step();
+    assert!(
+        h.state().lib.develop().is_ready(),
+        "still shown while it reopens"
+    );
+    step_until(&mut h, "the RAW to reopen as linear", |s| {
+        profile(s) == Some(lf_settings::Profile::Linear)
+    });
+    let catalog = lf_catalog::Catalog::open(&dir.path().join("catalogue")).unwrap();
+    let stored = lf_catalog::edits::get_settings(&catalog, id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        lf_settings::DevelopSettings::from_settings(&stored).profile,
+        lf_settings::Profile::Linear
+    );
+}

@@ -14,7 +14,6 @@ use eframe::egui::{self, RichText};
 use lf_account::entitlement::Decision;
 use lf_pipeline::Gpu;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 pub const SOFTWARE_BANNER: &str = "No graphics driver found: previews will be slow.";
@@ -45,8 +44,9 @@ pub struct App {
     toasts: Toasts,
     logo: Option<egui::TextureHandle>,
     lost_logged: bool,
-    /// Set once the window starts closing (the device-reset dialog's thread watches it).
-    closing: Arc<AtomicBool>,
+    /// The device-reset answer was taken (the dialog's thread watches it), and whether to
+    /// start again at the end of `on_exit`.
+    exit: device_reset::Exit,
     ctx: egui::Context,
     flow: SessionFlow,
     /// The catalogue, grid and filmstrip (none without a graphics device).
@@ -87,7 +87,7 @@ impl App {
             toasts: Toasts::default(),
             logo: load_logo(&cc.egui_ctx),
             lost_logged: false,
-            closing: Arc::new(AtomicBool::new(false)),
+            exit: device_reset::Exit::default(),
             ctx: cc.egui_ctx.clone(),
             flow,
             dirs,
@@ -127,20 +127,21 @@ impl App {
         }
     }
 
-    /// The device-reset dialog (or the banner's button) answered.
+    /// The device-reset dialog (or the banner's button) answered. The answer is marked
+    /// taken first, so the dialog's thread never ends the process while this window runs;
+    /// a restart happens at the end of `on_exit`, after the jobs stop and the sidecars are
+    /// written.
     fn device_reset(&mut self, choice: device_reset::Choice) {
-        if choice == device_reset::Choice::Restart
-            && let Err(e) = device_reset::restart()
-        {
-            log::error!("could not restart lensflow-ImageEditor: {e}");
-            self.toasts.push(
-                crate::toast::Level::Error,
-                format!("lensflow-ImageEditor could not restart itself. Start it again. {e}"),
-            );
-            return;
-        }
-        self.closing.store(true, Ordering::SeqCst);
+        self.exit.answer(choice);
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// What the device-reset dialog's thread does if this window never takes its answer.
+    fn force_exit(&self) -> device_reset::ForceExit {
+        device_reset::ForceExit {
+            stop_import: self.library.as_ref().map(Library::import_stop_flag),
+            saver: self.library.as_ref().map(Library::sidecar_saver),
+        }
     }
 
     fn view(&self) -> View {
@@ -236,7 +237,11 @@ impl eframe::App for App {
                 // ask through a native message box as well.
                 log::error!("the graphics device was lost");
                 self.lost_logged = true;
-                device_reset::ask(self.jobs.reporter(), self.closing.clone());
+                device_reset::ask(
+                    self.jobs.reporter(),
+                    self.exit.answered.clone(),
+                    self.force_exit(),
+                );
             }
         }
     }
@@ -285,14 +290,22 @@ impl eframe::App for App {
         self.toasts.show(ui.ctx());
     }
 
+    /// Review Focus 4: a gesture in progress is committed, a running import stops after its
+    /// batch (each batch commits), the lanes finish their running jobs, then the waiting
+    /// sidecars are written here, synchronously. A restart asked for starts last.
     fn on_exit(&mut self) {
-        self.closing.store(true, Ordering::SeqCst);
-        if let Some(lib) = &self.library {
-            // A running import stops after the batch in progress (each batch commits).
+        if let Some(lib) = &mut self.library {
+            lib.finish_edits(&mut self.toasts);
             lib.stop_import();
         }
         self.jobs.shutdown(Duration::from_secs(10));
+        if let Some(lib) = &self.library
+            && let Err(e) = lib.sidecar_saver().flush()
+        {
+            log::error!("an edit file could not be written before quitting: {e}");
+        }
         self.save_prefs();
+        self.exit.finish();
     }
 
     /// Only the window's size and position persist (in `window.ron`), not egui's memory.

@@ -29,6 +29,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// The Edit menu's undo and redo, with their shortcuts (`Ctrl+Y` redoes too).
+pub const UNDO: &str = "Undo";
+pub const REDO: &str = "Redo";
+pub const UNDO_KEY: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
+pub const REDO_KEY: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z);
+
 /// Shown on a photo whose sidecar could not be read (Develop explains it).
 pub const SIDECAR_BADGE: &str = "Edit file damaged";
 /// Shown on a photo whose thumbnail could not be made.
@@ -208,6 +216,21 @@ impl Library {
         self.stop_import.store(true, Ordering::SeqCst);
     }
 
+    /// The flag [`Library::stop_import`] sets (for the device-reset dialog's thread).
+    pub fn import_stop_flag(&self) -> Arc<AtomicBool> {
+        self.stop_import.clone()
+    }
+
+    /// The sidecar writer (flushed when the app quits).
+    pub fn sidecar_saver(&self) -> develop::debounce::SidecarSaver {
+        self.develop.saver()
+    }
+
+    /// Commits a gesture still in progress (the app is quitting).
+    pub fn finish_edits(&mut self, toasts: &mut Toasts) {
+        self.develop.finish_edit(toasts);
+    }
+
     /// Handles the library's messages; anything else is handed back.
     pub fn handle(&mut self, msg: Msg, env: &mut Env) -> Option<Msg> {
         match msg {
@@ -274,6 +297,7 @@ impl Library {
                     .handle_opened(photo_id, generation, result, env.toasts);
                 self.opened_in_develop(outcome, env);
             }
+            Msg::SidecarWritten(result) => self.develop.sidecar_written(result, env.toasts),
             Msg::Preopened { photo_id, result } => match result {
                 Ok(true) => log::debug!("photo {photo_id} pre-opened into the frame cache"),
                 Ok(false) => log::debug!("pre-opening photo {photo_id} skipped"),
@@ -441,8 +465,14 @@ impl Library {
             return;
         };
         let quality = develop::open::quality(env.prefs.develop_quality);
-        self.develop
-            .request(&photo, &root, self.frames.clone(), quality, env.jobs);
+        self.develop.request(
+            &photo,
+            &root,
+            self.frames.clone(),
+            quality,
+            env.jobs,
+            env.toasts,
+        );
     }
 
     /// After an open answer: pre-open the neighbours of a shown photo; badge one that
@@ -477,15 +507,18 @@ impl Library {
         match self.mode {
             Mode::Library => {
                 if self.develop.photo_id().is_some() {
-                    self.develop.close();
+                    self.develop.close(env.toasts);
                 }
             }
             Mode::Develop(id) => {
                 if self.photo(id).is_none() {
                     // The photo left the folder (a folder change, a rescan).
                     self.mode = Mode::Library;
-                    self.develop.close();
-                } else if self.develop.photo_id() != Some(id) && !self.develop.is_lost() {
+                    self.develop.close(env.toasts);
+                } else if (self.develop.photo_id() != Some(id) || self.develop.wants_reopen())
+                    && !self.develop.is_lost()
+                {
+                    // A new photo, or the shown RAW's develop settings changed.
                     self.request_develop(id, env);
                 }
             }
@@ -514,6 +547,7 @@ impl Library {
         }
         self.keys(ui.ctx(), env);
         self.sync_develop(env);
+        self.develop.tick(ui.ctx(), env.jobs);
 
         if self.thumbs.stopped() && !self.gpu.is_lost() {
             egui::Panel::top("library-device").show(ui, |ui| {
@@ -530,6 +564,25 @@ impl Library {
                         .clicked()
                     {
                         self.add_folder(env);
+                    }
+                });
+                ui.menu_button("Edit", |ui| {
+                    let editing = matches!(self.mode, Mode::Develop(_));
+                    let undo =
+                        egui::Button::new(UNDO).shortcut_text(ui.ctx().format_shortcut(&UNDO_KEY));
+                    if ui
+                        .add_enabled(editing && self.develop.can_undo(), undo)
+                        .clicked()
+                    {
+                        self.develop.undo(env.toasts);
+                    }
+                    let redo =
+                        egui::Button::new(REDO).shortcut_text(ui.ctx().format_shortcut(&REDO_KEY));
+                    if ui
+                        .add_enabled(editing && self.develop.can_redo(), redo)
+                        .clicked()
+                    {
+                        self.develop.redo(env.toasts);
                     }
                 });
             });
@@ -549,7 +602,7 @@ impl Library {
             let develop = &mut self.develop;
             egui::Panel::right("develop-side")
                 .exact_size(histogram_panel_width())
-                .show(ui, |ui| develop.side_ui(ui, photo));
+                .show(ui, |ui| develop.side_ui(ui, photo, env.toasts));
         }
         match self.mode {
             Mode::Library => {
@@ -574,6 +627,20 @@ impl Library {
             || self.adding
         {
             return;
+        }
+        if matches!(self.mode, Mode::Develop(_)) {
+            // Ctrl+Shift+Z first: Ctrl+Z also matches it.
+            let (redo, undo) = ctx.input_mut(|i| {
+                let redo =
+                    i.consume_shortcut(&REDO_KEY) || i.consume_key(Modifiers::COMMAND, Key::Y);
+                (redo, i.consume_shortcut(&UNDO_KEY))
+            });
+            if redo {
+                self.develop.redo(env.toasts);
+            }
+            if undo {
+                self.develop.undo(env.toasts);
+            }
         }
         let (left, right, up, down, all, develop, library) = ctx.input_mut(|i| {
             (
@@ -880,9 +947,10 @@ mod tests {
     #[test]
     fn handle_consumes_every_library_message() {
         use crate::jobs::Jobs;
-        use crate::library::import_ui::Purpose;
+        use crate::jobs::owners::{Owner, kinds_owned_by, messages_owned_by};
         use crate::toast::Toasts;
-        use lf_catalog::import::{Progress, Scan};
+        use std::collections::HashSet;
+        use std::mem::discriminant;
         let Some(gpu) = lf_pipeline::test_support::try_shared_gpu() else {
             eprintln!("no GPU adapter: skipped");
             return;
@@ -899,54 +967,16 @@ mod tests {
             prefs: &mut prefs,
             config_dir: &config,
         };
-        let messages = vec![
-            Msg::FolderChosen {
-                purpose: Purpose::AddFolder,
-                ticket: 99,
-                result: Ok(None),
-            },
-            Msg::CatalogueOpened {
-                root: dir.path().join("elsewhere"),
-                result: Err("no".into()),
-            },
-            Msg::PoolReady(Err("no".into())),
-            Msg::MarkedMissing {
-                folder_id: 1,
-                result: Err("no".into()),
-            },
-            Msg::Scanned {
-                folder: dir.path().join("gone"),
-                scan: Scan {
-                    candidates: Vec::new(),
-                    root_readable: false,
-                },
-            },
-            Msg::ImportProgress(Progress { done: 0, total: 1 }),
-            Msg::ImportDone(Err("no".into())),
-            Msg::Folders(Err("no".into())),
-            Msg::Photos {
-                folder_id: 1,
-                result: Err("no".into()),
-            },
-            Msg::FolderRemoved {
-                folder_id: 1,
-                result: Err("no".into()),
-            },
-            Msg::Opened {
-                photo_id: 1,
-                generation: 99,
-                result: Err("stale".into()),
-            },
-            Msg::Opened {
-                photo_id: 1,
-                generation: 0,
-                result: Err("current".into()),
-            },
-            Msg::Preopened {
-                photo_id: 1,
-                result: Ok(false),
-            },
-        ];
+        // Every library message, derived from the owners table (so a variant classified as
+        // the library's is fed here without being listed again), and a current open answer.
+        let mut messages = messages_owned_by(&[Owner::Library], 0, dir.path());
+        let fed: HashSet<_> = messages.iter().map(discriminant).collect();
+        assert_eq!(fed, kinds_owned_by(&[Owner::Library]));
+        messages.push(Msg::Opened {
+            photo_id: 1,
+            generation: 0,
+            result: Err("current".into()),
+        });
         for msg in messages {
             let shown = format!("{msg:?}");
             assert!(
