@@ -768,3 +768,78 @@ fn changing_photo_mid_gesture_saves_it_past_a_busy_catalogue() {
         .collect();
     assert!(errors.is_empty(), "{errors:?}");
 }
+
+fn settings(h: &Harness<'static, State>) -> lf_settings::EditSettings {
+    h.state()
+        .lib
+        .develop()
+        .edit_state()
+        .unwrap()
+        .settings
+        .clone()
+}
+
+#[test]
+fn the_crop_tool_commits_once_on_enter_and_esc_puts_it_back() {
+    use lf_app::develop::tools::ToolKind;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    let id = h.state().lib.photos()[0].id;
+    let catalog = lf_catalog::Catalog::open(&dir.path().join("catalogue")).unwrap();
+    let steps = |c: &lf_catalog::Catalog| lf_catalog::edits::history_len(c, id).unwrap();
+    let entry = settings(&h);
+
+    // R opens the crop tool; an aspect is part of the session, a turn commits at once.
+    h.key_press(Key::R);
+    h.step();
+    assert_eq!(h.state().lib.develop().tool(), Some(ToolKind::Crop));
+    h.get_by_label("1:1").click();
+    h.step();
+    assert_eq!(settings(&h).aspect, "1:1");
+    assert_eq!(steps(&catalog), 0, "the aspect waits for Enter");
+    h.get_by_label("Rotate right").click();
+    h.step();
+    assert_eq!(settings(&h).rotate, lf_settings::Rotate::R90);
+    assert_eq!(steps(&catalog), 2, "the photo before, and the turn");
+
+    // Esc puts back what the tool was entered with (one more step, as the turn was saved).
+    h.key_press(Key::Escape);
+    h.step();
+    assert_eq!(h.state().lib.develop().tool(), None);
+    assert_eq!(settings(&h), entry);
+    assert_eq!(steps(&catalog), 3);
+
+    // A whole session is one step on Enter.
+    h.key_press(Key::R);
+    h.step();
+    h.get_by_label("4:5").click();
+    h.step();
+    h.get_by_label("Switch portrait / landscape").click();
+    h.step();
+    assert_eq!(settings(&h).aspect, "5:4");
+    assert_eq!(steps(&catalog), 3);
+    h.key_press(Key::Enter);
+    h.step();
+    assert_eq!(h.state().lib.develop().tool(), None);
+    assert_eq!(steps(&catalog), 4);
+    assert_eq!(
+        lf_catalog::edits::get_settings(&catalog, id)
+            .unwrap()
+            .unwrap()
+            .aspect,
+        "5:4"
+    );
+
+    // Q opens the spot tool, Esc leaves it with nothing to save.
+    h.key_press(Key::Q);
+    h.step();
+    assert_eq!(h.state().lib.develop().tool(), Some(ToolKind::Spots));
+    h.get_by_label("0 of 48 spots");
+    h.key_press(Key::Escape);
+    h.step();
+    assert_eq!(h.state().lib.develop().tool(), None);
+    assert_eq!(steps(&catalog), 4);
+}

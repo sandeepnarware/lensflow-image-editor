@@ -5,6 +5,7 @@
 //! redraws.
 
 pub mod color;
+pub mod crop;
 pub mod curve;
 pub mod detail;
 pub mod effects;
