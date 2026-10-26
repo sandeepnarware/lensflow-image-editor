@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=lensflow-ImageEditor
+GenericName=RAW Photo Editor
+Comment=Edit and grade RAW photos
+Exec=lensflow-image-editor
+Icon=lensflow-image-editor
+Terminal=false
+Categories=Graphics;Photography;
+StartupWMClass=lensflow-image-editor

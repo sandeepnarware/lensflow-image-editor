@@ -1,1 +1,4 @@
 tests/fixtures/** -text
+*.sh text eol=lf
+packaging/linux/AppRun text eol=lf
+packaging/linux/*.desktop text eol=lf
