@@ -145,11 +145,13 @@ pub fn upsert(
     Ok(id)
 }
 
-/// Saves a preset made on this computer, now. A live row of that name is replaced and keeps
-/// its link to the server, so the sync updates it there; a tombstone of that name comes back
-/// as a plainly new preset (no link), since its server copy is on its way out.
+/// Saves a preset made on this computer, now. A row of that name, a tombstone too, is
+/// replaced and keeps its link to the server (`remote_id`, `synced_at`) with a new
+/// `updated_at`, so the next sync reads it as changed here: an unchanged server copy is
+/// updated in place (the replace the user meant), one deleted on the web is created again,
+/// one changed on the web is a conflict (both kept).
 pub fn save(catalog: &Catalog, studio_id: i64, name: &str, settings: &Value) -> Result<i64> {
-    let existing = find(catalog, studio_id, name)?.filter(|r| r.deleted_at.is_none());
+    let existing = find(catalog, studio_id, name)?;
     let (remote_id, synced_at) = existing.map_or((None, None), |r| (r.remote_id, r.synced_at));
     upsert(
         catalog,
