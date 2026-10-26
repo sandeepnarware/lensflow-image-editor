@@ -9,18 +9,68 @@ web editor produces.
 
 Part 2a (core pipeline parity: the settings model and a headless GPU renderer
 that reproduces the web editor's output), Part 2b (RAW decoding and
-development, so `lf-render` opens camera files) and Part 2c-i (the grade,
-account and catalogue libraries) are built. The app itself (2c-ii) and
-packaging (2d) follow. 2c-i is libraries only: there is no UI yet.
-The application crate `lf-app` has started (2c-ii Tasks 1 to 9: window and runtime,
-sign-in and entitlement, catalogue root, import, library grid and filmstrip, the
-Develop view's preview drawn straight into a texture egui shows, and the adjust panels
-with one history step per gesture, undo and redo, and debounced sidecar writes; the crop
-and straighten tool (`R`) and the heal and clone spot tool (`Q`); looks, studio presets
-synced with LensFlow, copy and paste of edits (`Ctrl+Shift+C` / `Ctrl+Shift+V`), "Apply to N
-photos", named versions, export to disk (`Ctrl+Shift+E`), and "Match a reference…" in the
-Photo menu, which shows its AI cost first, checks the studio again before each AI request,
-and fits from measurements alone when AI is off).
+development, so `lf-render` opens camera files), Part 2c-i (the grade, account
+and catalogue libraries) and Part 2c-ii (the desktop application, `lf-app`) are
+built. Packaging (2d) follows.
+
+The application signs in with LensFlow and enforces the studio's entitlement,
+catalogues folders, and shows a library grid and filmstrip. Its Develop view
+draws the preview straight into a texture egui shows, with every web control:
+the adjust panels, the crop and straighten tool, and the heal and clone spot
+tool. It keeps one history step per gesture, with undo and redo, and writes
+sidecars after a quiet second. It also has looks, studio presets synced with
+LensFlow, copy and paste of edits, "Apply to N photos", named versions,
+"Match a reference…", and export to disk. The window has one menu bar (File,
+Edit, View, Photo, Account and Help), one status bar, Preferences, an About box
+and a keyboard map. CI builds the app for Windows, macOS and Linux. How it is
+put together is in [docs/app.md](docs/app.md).
+
+## Running the app
+
+```bash
+cargo run --release -p lf-app
+```
+
+This opens the `lensflow-image-editor` window. Sign in with a LensFlow account
+whose studio has lensflow-ImageEditor, then choose a folder for the catalogue.
+Photos stay where they are; the catalogue only remembers them. Add a folder of
+photos with File → Add folder…, then press `D` (or double-click a photo) to
+develop it. Preferences, the log folder and the keyboard map are in the Edit and
+Help menus.
+
+Each CI run uploads a release build per platform as an artifact:
+`lensflow-image-editor-windows`, `lensflow-image-editor-macos` and
+`lensflow-image-editor-linux`. They are unsigned test builds; installers
+come with packaging (2d). On Linux the folder picker uses the XDG desktop
+portal (or zenity). Typing a folder path always works.
+
+The window needs a graphics adapter. With no driver it runs on a software
+adapter (WARP on Windows, lavapipe on Linux) and says "No graphics driver found:
+previews will be slow."
+
+### Keyboard map
+
+The keys follow Lightroom's defaults where Lightroom has one. On macOS, `Ctrl`
+reads as `Cmd`. Keys do nothing while you type in a field or a dialog is open,
+and the tool keys work only in Develop.
+
+| Key | Action |
+|-----|--------|
+| `G` / `D` | Library / Develop |
+| `Ctrl+Shift+E` | Export… |
+| `R` | Crop and straighten |
+| `Q` | Heal and clone spots |
+| `\` (held) | Before/After |
+| `Ctrl+Z` | Undo |
+| `Ctrl+Shift+Z`, `Ctrl+Y` | Redo |
+| `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copy settings… / paste settings |
+| `Ctrl+A` | Select all |
+| `←` / `→` | Previous / next photo (`↑` / `↓` move by a row in the grid) |
+| `Space` | Fit ⇄ 100 % |
+| `Esc` | Leave the tool |
+| `Enter` | Apply the crop |
+| `Delete` | Remove the selected spot |
+| `F1` | About |
 
 ## Crates
 

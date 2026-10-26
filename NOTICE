@@ -558,3 +558,5 @@ rfd (file dialogs): on Linux the picker uses the XDG desktop portal over D-Bus (
 loaded at run time, not linked) and falls back to zenity; there is no GTK. Windows uses the
 common dialogs and macOS the open panel. Typing a folder path always works, with or without
 a picker.
+
+This notice is compiled into lensflow-ImageEditor and shown under Help > About.
