@@ -41,6 +41,21 @@ pub enum CatalogError {
     NewerSchema { found: i64, supported: i64 },
 }
 
+impl CatalogError {
+    /// Another connection held the catalogue's write lock past the busy timeout
+    /// (`SQLITE_BUSY` or `SQLITE_LOCKED`): worth trying again shortly.
+    pub fn is_busy(&self) -> bool {
+        matches!(
+            self,
+            CatalogError::Sqlite(rusqlite::Error::SqliteFailure(e, _))
+                if matches!(
+                    e.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                )
+        )
+    }
+}
+
 pub type Result<T> = std::result::Result<T, CatalogError>;
 
 /// Each entry is one migration; the schema version is the number applied.
@@ -147,6 +162,13 @@ impl Catalog {
         let dir = root.join(".lensflow");
         fs::create_dir_all(&dir)?;
         Self::from_connection(Connection::open(dir.join("catalog.sqlite"))?)
+    }
+
+    /// How long a write waits for another connection's write lock before it fails as busy
+    /// ([`CatalogError::is_busy`]); 10 s by default.
+    pub fn set_busy_timeout(&self, timeout: std::time::Duration) -> Result<()> {
+        self.conn.busy_timeout(timeout)?;
+        Ok(())
     }
 
     fn from_connection(mut conn: Connection) -> Result<Catalog> {

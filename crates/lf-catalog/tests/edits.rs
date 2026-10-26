@@ -404,3 +404,19 @@ fn history_steps_count_what_undo_and_redo_can_do() {
     while edits::undo(&c, id).unwrap().is_some() {}
     assert_eq!(edits::history_steps(&c, id).unwrap(), (0, 3));
 }
+
+#[test]
+fn a_short_busy_timeout_fails_as_busy_while_another_connection_writes() {
+    let (d, c, id) = setup();
+    c.set_busy_timeout(std::time::Duration::from_millis(100))
+        .unwrap();
+    let other = rusqlite::Connection::open(d.path().join(".lensflow/catalog.sqlite")).unwrap();
+    other.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let began = std::time::Instant::now();
+    let err = edits::set_settings(&c, id, &with_exposure(0.5)).unwrap_err();
+    assert!(err.is_busy(), "{err}");
+    assert!(began.elapsed() < std::time::Duration::from_secs(5));
+    other.execute_batch("ROLLBACK").unwrap();
+    edits::set_settings(&c, id, &with_exposure(0.5)).unwrap();
+    assert!(!lf_catalog::CatalogError::NotFound("x".into()).is_busy());
+}

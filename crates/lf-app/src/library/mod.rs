@@ -547,7 +547,7 @@ impl Library {
         }
         self.keys(ui.ctx(), env);
         self.sync_develop(env);
-        self.develop.tick(ui.ctx(), env.jobs);
+        self.develop.tick(ui.ctx(), env.jobs, env.toasts);
 
         if self.thumbs.stopped() && !self.gpu.is_lost() {
             egui::Panel::top("library-device").show(ui, |ui| {
@@ -947,10 +947,8 @@ mod tests {
     #[test]
     fn handle_consumes_every_library_message() {
         use crate::jobs::Jobs;
-        use crate::jobs::owners::{Owner, kinds_owned_by, messages_owned_by};
+        use crate::jobs::owners::{Owner, messages_owned_by};
         use crate::toast::Toasts;
-        use std::collections::HashSet;
-        use std::mem::discriminant;
         let Some(gpu) = lf_pipeline::test_support::try_shared_gpu() else {
             eprintln!("no GPU adapter: skipped");
             return;
@@ -967,11 +965,9 @@ mod tests {
             prefs: &mut prefs,
             config_dir: &config,
         };
-        // Every library message, derived from the owners table (so a variant classified as
-        // the library's is fed here without being listed again), and a current open answer.
+        // Every library message (`every_message` holds one of each variant, checked against
+        // strum's list; `owner()` picks the library's), and a current open answer.
         let mut messages = messages_owned_by(&[Owner::Library], 0, dir.path());
-        let fed: HashSet<_> = messages.iter().map(discriminant).collect();
-        assert_eq!(fed, kinds_owned_by(&[Owner::Library]));
         messages.push(Msg::Opened {
             photo_id: 1,
             generation: 0,

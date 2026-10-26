@@ -552,10 +552,8 @@ impl SessionFlow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jobs::owners::{Owner, kinds_owned_by, messages_owned_by, owner};
+    use crate::jobs::owners::{Owner, messages_owned_by, owner};
     use crate::toast::Toasts;
-    use std::collections::HashSet;
-    use std::mem::discriminant;
 
     fn flow(dir: &Path) -> SessionFlow {
         let instance = Instance::Dev;
@@ -598,14 +596,11 @@ mod tests {
             dirs: &dirs,
             ctx: &ctx,
         };
-        // Every message the session owns (or shares), derived from the owners table, so a
-        // variant classified as the session's is fed here without being listed again.
+        // Every message the session owns (or shares): `every_message` holds one of each
+        // variant (checked against strum's list) and `owner()` picks the session's.
         let session = [Owner::Session, Owner::Shared];
         for generation in [3, 2] {
-            let messages = messages_owned_by(&session, generation, dir.path());
-            let fed: HashSet<_> = messages.iter().map(discriminant).collect();
-            assert_eq!(fed, kinds_owned_by(&session));
-            for msg in messages {
+            for msg in messages_owned_by(&session, generation, dir.path()) {
                 let shown = format!("{msg:?}");
                 assert!(
                     flow.handle(msg, &mut env).is_none(),

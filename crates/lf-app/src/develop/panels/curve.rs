@@ -106,6 +106,25 @@ pub struct CurveState {
     selected: Option<usize>,
     /// Something changed during the current press.
     moved: bool,
+    /// A click added a point at this time (egui seconds): its commit waits out the
+    /// double-click window, so a double-click that takes it back records nothing.
+    pending_add: Option<f64>,
+}
+
+impl CurveState {
+    /// The point `Delete` would remove.
+    pub fn selected(&self) -> Option<usize> {
+        self.selected
+    }
+
+    /// Forgets the selected and dragged point (the points changed under it: another photo,
+    /// undo, redo, reset).
+    pub fn clear_selection(&mut self) {
+        self.selected = None;
+        self.dragging = None;
+        self.moved = false;
+        self.pending_add = None;
+    }
 }
 
 /// What the editor did this frame.
@@ -192,24 +211,42 @@ pub fn edit(
         }
         state.selected = None;
         state.dragging = None;
-    } else if (response.drag_started() || (response.clicked() && state.dragging.is_none()))
+        if state.pending_add.take().is_some() {
+            // The click before added the point just taken back: commit the net (no) change.
+            out.released = true;
+        }
+    } else if response.drag_started() {
+        // Grab what was under the press, not where the pointer is once the drag starts.
+        if let Some(at) = ui.input(|i| i.pointer.press_origin()).or(pointer) {
+            state.moved = false;
+            match near(points, at) {
+                Some(i) => state.dragging = Some(i),
+                None => {
+                    state.dragging = add_point(points, to_curve(at));
+                    state.moved = state.dragging.is_some();
+                    out.changed |= state.moved;
+                }
+            }
+            state.selected = state.dragging;
+        }
+    } else if response.clicked()
         && let Some(at) = pointer
     {
-        state.moved = false;
         match near(points, at) {
-            Some(i) => state.dragging = Some(i),
+            Some(i) => state.selected = Some(i),
             None => {
-                state.dragging = add_point(points, to_curve(at));
-                state.moved = state.dragging.is_some();
-                out.changed |= state.moved;
+                state.selected = add_point(points, to_curve(at));
+                if state.selected.is_some() {
+                    out.changed = true;
+                    state.pending_add = Some(ui.input(|i| i.time));
+                }
             }
         }
-        state.selected = state.dragging;
     }
     if response.dragged()
         && let (Some(i), Some(at)) = (state.dragging, pointer)
     {
-        let outside = at.y < rect.top() - DROP_OFF || at.y > rect.bottom() + DROP_OFF;
+        let outside = !rect.expand(DROP_OFF).contains(at);
         if outside {
             if remove_point(points, i) {
                 state.moved = true;
@@ -226,11 +263,23 @@ pub fn edit(
             }
         }
     }
-    // A plain click (added a point) ends at once; a drag ends on release.
-    if response.drag_stopped() || (response.clicked() && !response.dragged()) {
+    // A drag ends on release.
+    if response.drag_stopped() {
         out.released |= state.moved;
         state.moved = false;
         state.dragging = None;
+    }
+    // A point added by a click commits once the double-click window has passed.
+    if let Some(added) = state.pending_add {
+        let now = ui.input(|i| i.time);
+        let window = ui.ctx().options(|o| o.input_options.max_double_click_delay);
+        if now - added > window {
+            state.pending_add = None;
+            out.released = true;
+        } else {
+            ui.ctx()
+                .request_repaint_after_secs((window - (now - added)) as f32 + 0.02);
+        }
     }
     if let Some(i) = state.selected
         && !ui.ctx().egui_wants_keyboard_input()

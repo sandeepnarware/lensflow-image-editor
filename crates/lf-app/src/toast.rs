@@ -41,6 +41,11 @@ pub struct Toasts {
 }
 
 impl Toasts {
+    /// How many toasts are up (or waiting to be drawn).
+    pub fn count(&self) -> usize {
+        self.toasts.len()
+    }
+
     pub fn push(&mut self, level: Level, text: impl Into<String>) {
         self.toasts.push(Toast {
             id: self.next_id,

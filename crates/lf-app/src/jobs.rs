@@ -50,6 +50,11 @@ impl Lane {
 
 /// What a job sends back to the UI. Later screens add their own variants.
 #[derive(Debug)]
+#[cfg_attr(
+    test,
+    derive(strum_macros::EnumDiscriminants),
+    strum_discriminants(derive(strum_macros::EnumIter, Hash))
+)]
 pub enum Msg {
     /// The job named `name` panicked; `message` is the panic's text.
     JobFailed { name: String, message: String },
@@ -446,7 +451,6 @@ pub(crate) mod owners {
     use super::*;
     use crate::update::DownloadProgress;
     use std::collections::HashSet;
-    use std::mem::{Discriminant, discriminant};
     use std::path::Path;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -461,8 +465,9 @@ pub(crate) mod owners {
     }
 
     /// Exhaustive on purpose: a new `Msg` variant does not compile until it is placed here.
-    /// Then add one to [`every_message`] (the count test fails until it is there), and the
-    /// owner's test feeds it to the owner.
+    /// Then add one to [`every_message`] (`every_message_holds_each_variant_once` compares it
+    /// with every variant strum lists, and fails until it is there); the owner's test then
+    /// feeds it to the owner.
     pub fn owner(msg: &Msg) -> Owner {
         match msg {
             Msg::JobFailed { .. } => Owner::Shared,
@@ -489,9 +494,6 @@ pub(crate) mod owners {
             Msg::Probe(..) => Owner::Test,
         }
     }
-
-    /// How many `Msg` variants there are (bumped with each new one).
-    pub const VARIANTS: usize = 22;
 
     /// One of every variant: account answers at `generation`; paths under `dir`. None of
     /// them reaches the network, the keychain or a real catalogue from a fresh session or
@@ -557,15 +559,6 @@ pub(crate) mod owners {
         ]
     }
 
-    /// The variants (as discriminants) of `owners`.
-    pub fn kinds_owned_by(owners: &[Owner]) -> HashSet<Discriminant<Msg>> {
-        every_message(0, Path::new("."))
-            .iter()
-            .filter(|m| owners.contains(&owner(m)))
-            .map(discriminant)
-            .collect()
-    }
-
     /// `every_message` filtered to `owners`.
     pub fn messages_owned_by(owners: &[Owner], generation: Generation, dir: &Path) -> Vec<Msg> {
         every_message(generation, dir)
@@ -576,13 +569,14 @@ pub(crate) mod owners {
 
     #[test]
     fn every_message_holds_each_variant_once() {
+        use strum::IntoEnumIterator as _;
         let all = every_message(0, Path::new("."));
-        let kinds: HashSet<_> = all.iter().map(discriminant).collect();
-        assert_eq!(kinds.len(), all.len(), "a variant is listed twice");
+        let listed: HashSet<MsgDiscriminants> = all.iter().map(MsgDiscriminants::from).collect();
+        assert_eq!(listed.len(), all.len(), "a variant is listed twice");
+        let every: HashSet<MsgDiscriminants> = MsgDiscriminants::iter().collect();
         assert_eq!(
-            all.len(),
-            VARIANTS,
-            "every_message must hold one of each Msg variant"
+            listed, every,
+            "every_message must hold one of each Msg variant (Probe included)"
         );
     }
 }

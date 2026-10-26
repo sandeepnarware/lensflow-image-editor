@@ -10,6 +10,7 @@ pub mod gpu;
 pub mod jobs;
 pub mod library;
 pub mod logging;
+pub mod platform;
 pub mod prefs;
 pub mod screens;
 pub mod session;

@@ -132,3 +132,119 @@ fn clicking_a_value_types_it_and_double_click_resets() {
     assert_eq!(h.state().settings.exposure, 0.0);
     assert_eq!(h.state().commits, 2);
 }
+
+/// The panels over a real edit state and catalogue: each gesture's commit is recorded.
+struct Recorded {
+    panels: PanelState,
+    edit: lf_app::develop::edit_state::EditState,
+    catalog: lf_catalog::Catalog,
+    photo: i64,
+    _dir: tempfile::TempDir,
+}
+
+fn recorded() -> Harness<'static, Recorded> {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = lf_catalog::Catalog::open(dir.path()).unwrap();
+    let folder = catalog.add_folder("shoot").unwrap();
+    let photo = catalog
+        .add_photo(
+            folder,
+            &lf_catalog::NewPhoto {
+                path: "shoot/a.jpg".into(),
+                kind: "jpeg".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let state = Recorded {
+        panels: PanelState::default(),
+        edit: lf_app::develop::edit_state::EditState::new(photo, EditSettings::default_settings()),
+        catalog,
+        photo,
+        _dir: dir,
+    };
+    let mut h = Harness::builder()
+        .with_size([300.0, 1400.0])
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, s: &mut Recorded| {
+                let ctx = PanelContext {
+                    raw: false,
+                    histogram: None,
+                };
+                let mut out = PanelOutput::default();
+                let panels = &mut s.panels;
+                s.edit.set(|e| out = panels::show(ui, panels, e, &ctx));
+                if out.commit {
+                    s.edit.commit(&s.catalog).unwrap();
+                }
+            },
+            state,
+        );
+    h.run();
+    h.get_by_label("Tone curve").click();
+    h.run();
+    // Half a second, so egui does not count the next clicks with this one.
+    h.run_steps(30);
+    h
+}
+
+fn steps(h: &Harness<'static, Recorded>) -> i64 {
+    lf_catalog::edits::history_len(&h.state().catalog, h.state().photo).unwrap()
+}
+
+fn curve<'a>(h: &'a Harness<'static, Recorded>) -> egui_kittest::Node<'a> {
+    h.get_by_label_contains("Tone curve: click to add a point")
+}
+
+#[test]
+fn a_double_click_on_empty_curve_space_records_nothing() {
+    let mut h = recorded();
+    for _ in 0..2 {
+        curve(&h).click();
+        h.step();
+    }
+    h.run_steps(40);
+    assert_eq!(
+        h.state().edit.settings.curve.rgb,
+        lf_settings::identity_curve()
+    );
+    assert_eq!(
+        steps(&h),
+        0,
+        "no history step for an add taken back at once"
+    );
+}
+
+#[test]
+fn dragging_an_inner_point_off_the_side_removes_it() {
+    let mut h = recorded();
+    let rect = curve(&h).rect();
+    curve(&h).click();
+    h.run_steps(40);
+    assert_eq!(
+        h.state().edit.settings.curve.rgb.len(),
+        3,
+        "a point was added"
+    );
+    assert_eq!(h.state().panels.curve.selected(), Some(1));
+    let added = steps(&h);
+    assert_eq!(added, 2, "the photo before, and the added point");
+
+    let at = rect.center();
+    h.drag_at(at);
+    h.step();
+    for x in [at.x - 40.0, at.x - 120.0, rect.left() - 60.0] {
+        h.hover_at(egui::pos2(x, at.y));
+        h.step();
+    }
+    h.drop_at(egui::pos2(rect.left() - 60.0, at.y));
+    h.run_steps(5);
+    assert_eq!(
+        h.state().edit.settings.curve.rgb,
+        lf_settings::identity_curve(),
+        "dragged out past the left edge"
+    );
+    assert_eq!(steps(&h), added + 1);
+    assert_eq!(h.state().panels.curve.selected(), None);
+}
