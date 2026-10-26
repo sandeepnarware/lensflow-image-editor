@@ -1065,7 +1065,9 @@ fn copy_then_paste_onto_one_photo_and_then_on_many() {
             .map(|s| s.exposure)
     };
     assert_eq!(exposure_of(ids[1]), Some(dragged));
-    assert!(lf_catalog::sidecar::path_for(&paths[1]).exists());
+    // Its edit file follows a quiet second later, off the UI thread.
+    let pasted = lf_catalog::sidecar::path_for(&paths[1]);
+    step_until(&mut h, "the pasted photo's edit file", |_| pasted.exists());
 
     // Every photo: "Apply to 3 photos".
     h.key_press_modifiers(egui::Modifiers::COMMAND, Key::A);
@@ -1125,7 +1127,8 @@ fn paste_works_in_the_library_before_any_photo_is_opened() {
         "pasted: {:?}",
         h.state().toasts.texts().collect::<Vec<_>>()
     );
-    assert!(lf_catalog::sidecar::path_for(&second).exists());
+    let written = lf_catalog::sidecar::path_for(&second);
+    step_until(&mut h, "the edit file", |_| written.exists());
 }
 
 #[test]

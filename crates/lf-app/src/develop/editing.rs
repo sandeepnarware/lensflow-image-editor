@@ -89,6 +89,22 @@ fn connect<'a>(
         .ok_or_else(|| "no catalogue is open".to_owned())
 }
 
+/// Runs `f` with the [`FINISH_TIMEOUT`] wait for the write lock, then puts the quick
+/// timeout back.
+fn patiently<T>(
+    catalog: &Catalog,
+    f: impl FnOnce(&Catalog) -> Result<T, String>,
+) -> Result<T, String> {
+    if let Err(e) = catalog.set_busy_timeout(FINISH_TIMEOUT) {
+        log::warn!("could not lengthen the catalogue's busy timeout: {e}");
+    }
+    let result = f(catalog);
+    if let Err(e) = catalog.set_busy_timeout(BUSY_TIMEOUT) {
+        log::warn!("could not restore the catalogue's busy timeout: {e}");
+    }
+    result
+}
+
 #[derive(Default)]
 pub struct EditSession {
     /// The open photo's settings being edited (one history step per gesture).
@@ -254,6 +270,22 @@ impl EditSession {
         connect(&mut self.catalog, self.catalog_root.as_deref())
     }
 
+    /// Runs a one-shot change `f` (a preset saved or deleted, a paste onto another photo, a
+    /// version added, used or deleted) with the full [`FINISH_TIMEOUT`] wait for the write
+    /// lock: unlike a gesture it is never tried again, so it waits out an import batch
+    /// rather than give up after the quick timeout.
+    pub fn patient<T>(
+        &mut self,
+        f: impl FnOnce(&Catalog) -> Result<T, String>,
+    ) -> Result<T, String> {
+        patiently(connect(&mut self.catalog, self.catalog_root.as_deref())?, f)
+    }
+
+    /// Hands a sidecar for a photo that is not open to the debounced writer.
+    pub fn save_later(&mut self, write: PendingWrite) {
+        self.saver.push(write, Instant::now());
+    }
+
     /// Runs `f` against the catalogue and the open photo's edit state (versions, a batch
     /// reload); a sidecar it returns is handed to the writer unless `sidecar_damaged`.
     /// An error is toasted after `what`. True when `f` succeeded.
@@ -269,7 +301,7 @@ impl EditSession {
             return false;
         };
         let result = connect(&mut self.catalog, self.catalog_root.as_deref())
-            .and_then(|c| f(c, edit).map_err(|e| e.to_string()));
+            .and_then(|c| patiently(c, |c| f(c, edit).map_err(|e| e.to_string())));
         match result {
             Ok(sidecar) => {
                 if let Some(sidecar) = sidecar {
@@ -301,16 +333,8 @@ impl EditSession {
         let Some(edit) = self.edit.as_mut().filter(|e| e.dirty) else {
             return false;
         };
-        let result = connect(&mut self.catalog, self.catalog_root.as_deref()).and_then(|c| {
-            if let Err(e) = c.set_busy_timeout(FINISH_TIMEOUT) {
-                log::warn!("could not lengthen the catalogue's busy timeout: {e}");
-            }
-            let result = edit.commit(c).map_err(|e| e.to_string());
-            if let Err(e) = c.set_busy_timeout(BUSY_TIMEOUT) {
-                log::warn!("could not restore the catalogue's busy timeout: {e}");
-            }
-            result
-        });
+        let result = connect(&mut self.catalog, self.catalog_root.as_deref())
+            .and_then(|c| patiently(c, |c| edit.commit(c).map_err(|e| e.to_string())));
         match result {
             Ok(Some(sidecar)) => {
                 self.save_sidecar(sidecar, photo, sidecar_damaged);
@@ -456,6 +480,29 @@ mod tests {
         assert!(!session.run(EditOp::Commit, None, false, &mut toasts));
         assert!(began.elapsed() < Duration::from_secs(2));
         other.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn a_one_shot_change_waits_out_a_busy_catalogue() {
+        let (dir, c, _id, mut session) = editing();
+        let db = dir.path().join(".lensflow/catalog.sqlite");
+        let (locked_tx, locked) = std::sync::mpsc::channel();
+        // An import batch holds the write lock for 600 ms, longer than the quick timeout.
+        let holder = std::thread::spawn(move || {
+            let other = rusqlite::Connection::open(db).unwrap();
+            other.execute_batch("BEGIN IMMEDIATE").unwrap();
+            locked_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(600));
+            other.execute_batch("ROLLBACK").unwrap();
+        });
+        locked.recv().unwrap();
+        let saved = session.patient(|c| {
+            lf_catalog::presets::save(c, 7, "Warm", &serde_json::json!({"v": 2}))
+                .map_err(|e| e.to_string())
+        });
+        holder.join().unwrap();
+        assert!(saved.is_ok(), "{saved:?}");
+        assert_eq!(lf_catalog::presets::list(&c, 7).unwrap().len(), 1);
     }
 
     #[test]

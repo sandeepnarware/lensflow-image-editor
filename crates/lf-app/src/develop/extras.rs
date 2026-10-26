@@ -85,7 +85,7 @@ impl Develop {
         name: &str,
         partial: &serde_json::Value,
     ) -> Result<bool, String> {
-        let saved = self.session.catalog().and_then(|c| {
+        let saved = self.session.patient(|c| {
             match local::find(c, studio, name).map_err(|e| e.to_string())? {
                 Some(row) if row.deleted_at.is_none() => Ok(false),
                 _ => local::save(c, studio, name, partial)
@@ -126,21 +126,24 @@ impl Develop {
         }
     }
 
-    /// Pastes `partial` onto one photo that is not open, at once (its sidecar is written
-    /// now). True when it was recorded.
+    /// Pastes `partial` onto one photo that is not open, at once (its sidecar goes to the
+    /// debounced writer, off the UI thread). True when it was recorded.
     pub fn apply_to_photo(
         &mut self,
         photo_id: i64,
         recipe: &crate::clipboard::Recipe,
         toasts: &mut Toasts,
     ) -> bool {
-        let saver = self.saver();
-        let result = self
-            .session
-            .catalog()
-            .and_then(|c| crate::dialogs::batch::apply_one(c, photo_id, recipe, &saver));
+        let result = self.session.patient(|c| {
+            crate::dialogs::batch::record(c, photo_id, |_, current| Ok(recipe.apply(current)))
+        });
         match result {
-            Ok(()) => true,
+            Ok(write) => {
+                if let Some(write) = write {
+                    self.session.save_later(write);
+                }
+                true
+            }
             Err(e) => {
                 toasts.push(Level::Error, format!("The edits could not be pasted. {e}"));
                 false
@@ -240,8 +243,7 @@ impl Develop {
                 if yes {
                     match self
                         .session
-                        .catalog()
-                        .and_then(|c| local::delete(c, row.id).map_err(|e| e.to_string()))
+                        .patient(|c| local::delete(c, row.id).map_err(|e| e.to_string()))
                     {
                         Ok(()) => {
                             self.extras.presets.stale = true;

@@ -73,6 +73,21 @@ pub fn apply_with(
     saver: &SidecarSaver,
     next: impl FnOnce(&lf_catalog::PhotoRow, &EditSettings) -> Result<EditSettings, String>,
 ) -> Result<(), String> {
+    match record(catalog, photo_id, next)? {
+        Some(write) => saver.write_now(write),
+        None => Ok(()),
+    }
+}
+
+/// Records `next(photo, current)` as the photo's settings (one `set_settings`) and returns
+/// the sidecar to write beside it (`None` when that file is damaged and left alone); the
+/// caller writes it now (a batch) or hands it to the debounced writer (a paste on the UI
+/// thread).
+pub fn record(
+    catalog: &Catalog,
+    photo_id: i64,
+    next: impl FnOnce(&lf_catalog::PhotoRow, &EditSettings) -> Result<EditSettings, String>,
+) -> Result<Option<PendingWrite>, String> {
     let text = |e: CatalogError| e.to_string();
     let photo = catalog
         .photo(photo_id)
@@ -85,9 +100,9 @@ pub fn apply_with(
     let sidecar = edits::set_settings(catalog, photo_id, &next).map_err(text)?;
     if photo.sidecar_error.is_some() {
         log::debug!("photo {photo_id}: its sidecar is damaged; not writing");
-        return Ok(());
+        return Ok(None);
     }
-    saver.write_now(PendingWrite::new(photo_id, &photo.path, sidecar))
+    Ok(Some(PendingWrite::new(photo_id, &photo.path, sidecar)))
 }
 
 /// Applies `partial` to each of `ids` in turn, reporting after each photo; stops before the
