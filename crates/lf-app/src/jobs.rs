@@ -1,6 +1,7 @@
 //! Background work: one serial worker thread per [`Lane`], answering through one channel
 //! of [`Msg`] values that the UI drains every frame.
 
+use crate::account::{Generation, Token};
 use crate::catalog_ext::{Imported, Opened, Pool};
 use crate::update::DownloadProgress;
 use eframe::egui;
@@ -45,14 +46,18 @@ impl Lane {
 pub enum Msg {
     /// The job named `name` panicked; `message` is the panic's text.
     JobFailed { name: String, message: String },
-    /// `auth/login` answered (`TwoFactorRequired` means ask for the code).
-    SignedIn(Result<SignedIn, AccountError>),
+    /// At launch: the stored token, if there is one. Account answers carry the
+    /// [`Generation`] they were asked in; the app drops answers from an older one.
+    Resumed(Generation, Option<Token>),
+    /// `auth/login` answered (`TwoFactorRequired` means ask for the code); a token that
+    /// came back is already stored.
+    SignedIn(Generation, Result<SignedIn, AccountError>),
     /// `auth/me` answered (at launch, with the stored token).
-    Me(Result<User, AccountError>),
+    Me(Generation, Result<User, AccountError>),
     /// The entitlement gate decided.
-    Gate(Decision),
-    /// `auth/logout` was sent (its answer does not matter).
-    SignedOut,
+    Gate(Generation, Decision),
+    /// The account lane cleared stored credentials (sign-out, studio switch, a 401).
+    Cleared,
     /// The installer download moved on or finished.
     Download(DownloadProgress),
     /// The catalogue-root picker closed: the folder chosen, and whether it is on a network

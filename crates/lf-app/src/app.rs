@@ -2,7 +2,7 @@
 //! draws the current screen. The session's rules live in `session.rs`, the screens in
 //! `screens/`, the account calls in `account.rs`; this file wires them together.
 
-use crate::account::{self, Credentials};
+use crate::account::{self, Credentials, Generation, Token};
 use crate::jobs::{Jobs, Lane, Msg};
 use crate::library::{self, Library};
 use crate::prefs::{Dirs, InstanceChoice, Prefs};
@@ -44,13 +44,20 @@ pub struct App {
 
 /// Who is signed in, where, and what the account lane is doing.
 struct AccountState {
-    creds: Credentials,
+    /// Shared with the account-lane jobs, which do every keychain and cache access.
+    creds: Arc<Credentials>,
     /// The API client without a token.
     client: Client,
+    /// Bumped on a studio switch, a sign-out, a 401 and a server switch; answers from an
+    /// older generation are dropped.
+    generation: Generation,
     /// Kept in memory so each call can carry it; never logged.
     token: Option<String>,
     user: Option<User>,
     studio: Option<StudioSummary>,
+    /// The user and studio were rebuilt from the cache because `auth/me` was unreachable;
+    /// `me` runs again after the first fresh gate answer.
+    offline_user: bool,
     /// The gate's last answer, for the feature gates.
     decision: Option<Decision>,
     /// An account call is in flight; the text says which.
@@ -61,17 +68,19 @@ struct AccountState {
 }
 
 impl AccountState {
-    fn connect(choice: InstanceChoice, config_dir: &Path) -> AccountState {
+    fn connect(choice: InstanceChoice, config_dir: &Path, generation: Generation) -> AccountState {
         let instance = match choice {
             InstanceChoice::Prod => Instance::Prod,
             InstanceChoice::Dev => Instance::Dev,
         };
         AccountState {
-            creds: Credentials::open(&instance, config_dir),
+            creds: Arc::new(Credentials::open(&instance, config_dir)),
             client: Client::new(instance, VERSION),
+            generation,
             token: None,
             user: None,
             studio: None,
+            offline_user: false,
             decision: None,
             checking: None,
             last_gate: None,
@@ -86,12 +95,19 @@ impl AccountState {
         Some(self.client.with_token(token).with_studio(&studio.slug))
     }
 
+    /// Starts a new generation: answers to anything asked before are dropped.
+    fn new_generation(&mut self) {
+        self.generation += 1;
+        self.checking = None;
+    }
+
     fn sign_out_locally(&mut self) {
+        self.new_generation();
         self.token = None;
         self.user = None;
         self.studio = None;
+        self.offline_user = false;
         self.decision = None;
-        self.checking = None;
         self.last_gate = None;
     }
 }
@@ -104,7 +120,7 @@ impl App {
             log::error!("{e}");
         }
         let prefs = Prefs::load(&dirs.config);
-        let account = AccountState::connect(prefs.instance, &dirs.config);
+        let account = AccountState::connect(prefs.instance, &dirs.config, 0);
         let library = gpu
             .as_ref()
             .ok()
@@ -138,12 +154,23 @@ impl App {
         self.spawn_gate();
     }
 
-    /// At launch: with a stored token, ask who it belongs to; otherwise the sign-in form.
+    /// Queues an account job; `f` gets the current generation and the credentials.
+    fn spawn_account(
+        &self,
+        name: &str,
+        f: impl FnOnce(Generation, &Credentials) -> Msg + Send + 'static,
+    ) {
+        let generation = self.account.generation;
+        let creds = Arc::clone(&self.account.creds);
+        self.jobs
+            .spawn(Lane::Account, name, move || f(generation, &creds));
+    }
+
+    /// At launch: read the stored token on the account lane; with one, ask who it belongs
+    /// to (`Msg::Resumed`), otherwise the sign-in form.
     fn resume(&mut self) {
-        if let Some(token) = self.account.creds.token() {
-            self.account.token = Some(token);
-            self.spawn_me();
-        }
+        self.account.checking = Some("Checking your account…");
+        self.spawn_account("resume", account::resume);
     }
 
     fn spawn_me(&mut self) {
@@ -152,18 +179,20 @@ impl App {
         };
         let client = self.account.client.with_token(token);
         self.account.checking = Some("Checking your account…");
-        self.jobs
-            .spawn(Lane::Account, "me", move || account::me(&client));
+        self.spawn_account("me", move |generation, creds| {
+            account::me(generation, &client, creds)
+        });
     }
 
     fn spawn_gate(&mut self) {
-        let Some(client) = self.account.studio_client() else {
+        let (Some(client), Some(studio)) = (self.account.studio_client(), &self.account.studio)
+        else {
             return;
         };
-        let cache_dir = self.account.creds.cache_dir().to_path_buf();
+        let studio_id = studio.id;
         self.account.checking = Some("Checking your studio…");
-        self.jobs.spawn(Lane::Account, "entitlement", move || {
-            account::gate(&client, &cache_dir)
+        self.spawn_account("entitlement", move |generation, creds| {
+            account::gate(generation, &client, creds, studio_id)
         });
     }
 
@@ -173,14 +202,26 @@ impl App {
         }
     }
 
-    /// A 401 from any call: back to sign-in, token and cache forgotten. False for any
-    /// other error.
+    /// The answer belongs to the current generation; older ones are dropped.
+    fn is_current(&self, generation: Generation) -> bool {
+        let current = generation == self.account.generation;
+        if !current {
+            log::debug!("dropping an account answer from an earlier session");
+        }
+        current
+    }
+
+    /// A 401 from any call: back to sign-in, and the token and cache are forgotten on the
+    /// account lane. False for any other error.
     fn signed_out_by(&mut self, err: &AccountError) -> bool {
-        if !self.account.creds.signed_out_by(&mut self.session, err) {
+        if !matches!(err, AccountError::Unauthorized) {
             return false;
         }
         log::info!("the server signed this device out");
         self.account.sign_out_locally();
+        self.spawn_account("forget", |_, creds| account::forget(creds));
+        let session = std::mem::replace(&mut self.session, Session::signing_in());
+        self.session = session.on_unauthorized();
         true
     }
 
@@ -248,10 +289,21 @@ impl App {
                     format!("Something went wrong ({name}). {message}"),
                 );
             }
-            Msg::SignedIn(result) => self.signed_in(result),
-            Msg::Me(result) => self.me_answered(result),
-            Msg::Gate(decision) => self.gate_decided(decision),
-            Msg::SignedOut => {}
+            Msg::Resumed(generation, token) if self.is_current(generation) => {
+                self.account.checking = None;
+                if let Some(Token(token)) = token {
+                    self.account.token = Some(token);
+                    self.spawn_me();
+                }
+            }
+            Msg::SignedIn(generation, result) if self.is_current(generation) => {
+                self.signed_in(result)
+            }
+            Msg::Me(generation, result) if self.is_current(generation) => self.me_answered(result),
+            Msg::Gate(generation, decision) if self.is_current(generation) => {
+                self.gate_decided(decision)
+            }
+            Msg::Resumed(..) | Msg::SignedIn(..) | Msg::Me(..) | Msg::Gate(..) | Msg::Cleared => {}
             Msg::Download(progress) => self.download(progress),
             // The library's own messages (handled above when there is a library).
             Msg::RootPicked(_)
@@ -284,9 +336,9 @@ impl App {
         *busy = false;
         match result {
             Ok(signed) => {
+                // The account lane has already stored the token.
                 password.clear();
                 code.clear();
-                self.account.creds.save_token(&signed.token);
                 self.account.token = Some(signed.token);
                 self.account.user = Some(signed.user);
                 self.studios_known();
@@ -303,12 +355,14 @@ impl App {
         self.account.checking = None;
         match result {
             Ok(user) => {
+                self.account.offline_user = false;
                 self.account.user = Some(user);
                 self.studios_known();
             }
             Err(e) if self.signed_out_by(&e) => {}
             Err(e) if account::is_transient(&e) => match self.offline_studio() {
                 Some((user, studio)) => {
+                    self.account.offline_user = true;
                     self.account.user = Some(user);
                     self.account.studio = Some(studio);
                     self.spawn_gate();
@@ -337,11 +391,10 @@ impl App {
         };
         let signs_out = matches!(decision, Decision::SignIn);
         let choose = matches!(decision, Decision::ChooseStudio);
+        let back_online = self.account.offline_user && matches!(decision, Decision::Allow(_));
         let session = std::mem::replace(&mut self.session, Session::signing_in());
-        self.session = self
-            .account
-            .creds
-            .settle(session, decision.clone(), user, studio, VERSION);
+        // A `SignIn` decision: the account lane has already forgotten the credentials.
+        self.session = session.on_decision(decision.clone(), user, studio, VERSION);
         self.account.decision = Some(decision);
         if signs_out {
             self.account.sign_out_locally();
@@ -349,6 +402,9 @@ impl App {
             self.account.studio = None;
             self.prefs.studio_slug = None;
             self.save_prefs();
+        } else if back_online {
+            // Launched offline: now that the server answers, fetch the real studio list.
+            self.spawn_me();
         }
     }
 
@@ -387,13 +443,18 @@ impl App {
                 }
             }
             Action::ToggleInstance => {
+                if matches!(self.session, Session::SigningIn { busy: true, .. }) {
+                    return;
+                }
                 self.prefs.instance = match self.prefs.instance {
                     InstanceChoice::Prod => InstanceChoice::Dev,
                     InstanceChoice::Dev => InstanceChoice::Prod,
                 };
                 self.save_prefs();
                 log::info!("server switched to {:?}", self.prefs.instance);
-                self.account = AccountState::connect(self.prefs.instance, &self.dirs.config);
+                let generation = self.account.generation + 1;
+                self.account =
+                    AccountState::connect(self.prefs.instance, &self.dirs.config, generation);
                 self.session = Session::signing_in();
                 self.resume();
             }
@@ -408,8 +469,12 @@ impl App {
                 }
             }
             Action::SwitchStudio => {
-                // Never replay one studio's cached entitlement for another.
-                self.account.creds.forget_entitlement();
+                // Drop any answer for the old studio, and clear its cached entitlement on
+                // the account lane, after any check already queued there.
+                self.account.new_generation();
+                self.spawn_account("forget entitlement", |_, creds| {
+                    account::forget_entitlement(creds)
+                });
                 self.account.studio = None;
                 self.account.decision = None;
                 self.prefs.studio_slug = None;
@@ -419,21 +484,23 @@ impl App {
                 }
             }
             Action::SignOut => {
-                if let Some(token) = self.account.token.as_deref() {
-                    let client = self.account.client.with_token(token);
-                    self.jobs.spawn(Lane::Account, "sign out", move || {
-                        lf_account::auth::sign_out(&client);
-                        Msg::SignedOut
-                    });
-                }
-                self.account.creds.forget();
+                let client = self
+                    .account
+                    .token
+                    .as_deref()
+                    .map(|token| self.account.client.with_token(token));
                 self.account.sign_out_locally();
+                self.spawn_account("sign out", move |_, creds| {
+                    account::sign_out(client.as_ref(), creds)
+                });
                 self.prefs.studio_slug = None;
                 self.save_prefs();
                 self.session = Session::signing_in();
             }
             Action::Retry => {
-                if self.account.user.is_none() {
+                if self.account.token.is_none() {
+                    self.resume();
+                } else if self.account.user.is_none() {
                     self.spawn_me();
                 } else if self.account.studio.is_some() {
                     self.spawn_gate();
@@ -474,8 +541,15 @@ impl App {
         let password = password.clone();
         let code = two_factor.then(|| code.trim().to_owned());
         let client = self.account.client.clone();
-        self.jobs.spawn(Lane::Account, "sign in", move || {
-            account::sign_in(&client, &email, &password, code.as_deref())
+        self.spawn_account("sign in", move |generation, creds| {
+            account::sign_in(
+                generation,
+                &client,
+                creds,
+                &email,
+                &password,
+                code.as_deref(),
+            )
         });
     }
 
