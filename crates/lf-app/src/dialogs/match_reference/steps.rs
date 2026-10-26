@@ -368,15 +368,25 @@ pub fn run(ctx: MatchCtx<'_>) -> Result<Outcome, MatchError> {
                 return Err(MatchError::Cancelled);
             }
             progress(ASKING);
-            match ask(link, cancel, Mode::Extract, &ref_jpeg, &sheet_jpeg, None)? {
-                Ok(p) => {
+            let asked = match ask(link, cancel, Mode::Extract, &ref_jpeg, &sheet_jpeg, None) {
+                // Locked (or not checked) just before the request: nothing was sent, the fit
+                // goes on from measurements alone and the note says why, as for the review.
+                Err(MatchError::Failed(message)) => {
+                    ai_note = Some(message);
+                    None
+                }
+                other => Some(other?),
+            };
+            match asked {
+                None => {}
+                Some(Ok(p)) => {
                     requests_used += p.requests_used;
                     start = merged(&defaults, &p.settings);
                     scene_bands = p.scene_hues;
                     notes = p.notes;
                     reference_jpeg = Some(ref_jpeg);
                 }
-                Err(failed) => match failed.error {
+                Some(Err(failed)) => match failed.error {
                     AccountError::Unauthorized => {
                         return Err(MatchError::Unauthorized(link.generation));
                     }
@@ -750,6 +760,8 @@ pub(crate) mod tests {
         grade.assert_calls(0);
     }
 
+    /// Locked by the fresh check just before the first request: nothing is sent, the fit
+    /// goes on from measurements alone and its note gives the lock's words.
     #[test]
     fn a_decision_that_flips_to_locked_before_the_call_sends_nothing() {
         let server = MockServer::start();
@@ -767,10 +779,9 @@ pub(crate) mod tests {
             false,
             &cancel,
         );
-        match result {
-            Err(MatchError::Failed(m)) => assert_eq!(m, READ_ONLY),
-            other => panic!("expected the lock copy, got {other:?}"),
-        }
+        let outcome = result.expect("matched by measurement");
+        assert_eq!(outcome.ai_note.as_deref(), Some(READ_ONLY));
+        assert_eq!(outcome.requests_used, 0);
         assert_eq!(checks.load(Ordering::SeqCst), 1);
         grade.assert_calls(0);
 
@@ -787,10 +798,8 @@ pub(crate) mod tests {
             false,
             &cancel,
         );
-        assert!(
-            matches!(&result, Err(MatchError::Failed(m)) if m.starts_with("Your studio is paused.")),
-            "{result:?}"
-        );
+        let note = result.unwrap().ai_note.unwrap_or_default();
+        assert!(note.starts_with("Your studio is paused."), "{note}");
         grade.assert_calls(0);
 
         // The check could not be had at all: nothing is sent either.
@@ -807,7 +816,7 @@ pub(crate) mod tests {
             false,
             &cancel,
         );
-        assert!(matches!(&result, Err(MatchError::Failed(m)) if m == NOT_CHECKED));
+        assert_eq!(result.unwrap().ai_note.as_deref(), Some(NOT_CHECKED));
         grade.assert_calls(0);
     }
 
@@ -983,7 +992,7 @@ pub(crate) mod tests {
         assert_eq!(result.unwrap().ai_note.as_deref(), Some(USED_UP));
         assert_eq!(checks.load(Ordering::SeqCst), 0);
 
-        // Used up by the time of the call: stopped with the used-up copy.
+        // Used up by the time of the call: measured only, with the used-up copy.
         let (mut ai, _) = link(&server, allowed(), none_left);
         let (result, _) = fit(
             &noisy(300, 200, 25),
@@ -992,7 +1001,7 @@ pub(crate) mod tests {
             true,
             &cancel,
         );
-        assert!(matches!(&result, Err(MatchError::Failed(m)) if m == USED_UP));
+        assert_eq!(result.unwrap().ai_note.as_deref(), Some(USED_UP));
         grade.assert_calls(0);
     }
 
