@@ -6,8 +6,10 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use lf_account::LockReason;
 use lf_account::entitlement::{Entitlement, Release, Standing};
+use lf_app::menu::{self, MenuState};
 use lf_app::screens::{self, Action, View};
 use lf_app::session::{PAUSED_MESSAGE, READ_ONLY_BANNER, Session};
+use lf_app::shortcuts::Action as MenuAction;
 
 struct Screen {
     session: Session,
@@ -146,9 +148,11 @@ fn chrome(session: Session, can_switch: bool) -> Harness<'static, Screen> {
     };
     Harness::new_ui_state(
         |ui, s: &mut Screen| {
-            let top = screens::active_top(ui, &s.session, &s.view);
-            let status = screens::status_bar(ui, &s.session, &s.view);
-            if let Some(action) = top.or(status) {
+            screens::read_only_banner(ui, &s.session);
+            let status = screens::status_bar(ui, &s.session, &s.view, |ui| {
+                ui.label("4 photos · 1 selected");
+            });
+            if let Some(action) = status {
                 s.actions.push(action);
             }
         },
@@ -156,29 +160,66 @@ fn chrome(session: Session, can_switch: bool) -> Harness<'static, Screen> {
     )
 }
 
+/// The menu bar over `session`, with the Account menu's actions the app enables there.
+fn menus(session: Session, can_switch: bool) -> Harness<'static, (MenuState, Vec<MenuAction>)> {
+    let studio = match &session {
+        Session::Active { studio, .. } => Some(studio.name.clone()),
+        _ => None,
+    };
+    let state = MenuState {
+        enabled: menu::account_actions(&session, can_switch)
+            .into_iter()
+            .collect(),
+        studio,
+        before: false,
+    };
+    Harness::new_ui_state(
+        |ui, (state, clicked): &mut (MenuState, Vec<MenuAction>)| {
+            if let Some(action) = menu::bar(ui, state) {
+                clicked.push(action);
+            }
+        },
+        (state, Vec::new()),
+    )
+}
+
 #[test]
-fn account_menu_offers_switch_studio_and_sign_out() {
-    let mut h = chrome(active(false, None), true);
+fn account_menu_offers_switch_studio_check_and_sign_out() {
+    let mut h = menus(active(false, None), true);
     h.run();
     h.get_by_label("Account").click();
     h.run();
     h.get_by_role_and_label(Role::Button, "Sign out");
+    h.get_by_role_and_label(Role::Button, "Check entitlement now");
     h.get_by_role_and_label(Role::Button, "Switch studio")
         .click();
     h.run();
-    assert_eq!(h.state().actions, [Action::SwitchStudio]);
+    assert_eq!(h.state().1, [MenuAction::SwitchStudio]);
 
-    let mut h = chrome(active(false, None), false);
+    let mut h = menus(active(false, None), false);
     h.run();
     h.get_by_label("Account").click();
     h.run();
-    assert!(
-        h.query_by_label("Switch studio").is_none(),
-        "one studio: nothing to switch to"
-    );
+    // One studio: nothing to switch to (shown, but does nothing).
+    h.get_by_role_and_label(Role::Button, "Switch studio")
+        .click();
+    h.run();
+    assert!(h.state().1.is_empty());
+    h.get_by_label("Account").click();
+    h.run();
     h.get_by_role_and_label(Role::Button, "Sign out").click();
     h.run();
-    assert_eq!(h.state().actions, [Action::SignOut]);
+    assert_eq!(h.state().1, [MenuAction::SignOut]);
+
+    // Signed out: the Account menu offers nothing.
+    let mut h = menus(Session::signing_in(), true);
+    h.run();
+    h.get_by_label("Account").click();
+    h.run();
+    h.get_by_label(menu::NOT_SIGNED_IN);
+    h.get_by_role_and_label(Role::Button, "Sign out").click();
+    h.run();
+    assert!(h.state().1.is_empty());
 }
 
 #[test]
@@ -187,6 +228,8 @@ fn status_bar_shows_standing_last_checked_and_the_update_offer() {
     h.run();
     h.get_by_label("Active");
     h.get_by_label("Last checked just now");
+    // One status bar: the library's counts sit in it with the studio's standing.
+    h.get_by_label("4 photos · 1 selected");
     assert!(h.query_by_label(READ_ONLY_BANNER).is_none());
     h.get_by_label("Version 1.3.0 is ready — Update").click();
     h.run();

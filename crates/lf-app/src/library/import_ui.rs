@@ -21,6 +21,8 @@ use std::path::{Path, PathBuf};
 
 /// The first-run screen's text.
 pub const FIRST_RUN: &str = "Choose a folder for your catalogue. Photos stay where they are; the catalogue only remembers them.";
+/// After Preferences → Change…: go back to the catalogue in use.
+pub const KEEP_ROOT: &str = "Keep the current catalogue";
 /// The label of the typed-path field.
 pub const TYPE_PATH: &str = "Or type a folder path";
 
@@ -267,6 +269,13 @@ impl Library {
                     ui.label(RichText::new(FIRST_RUN).size(16.0));
                     ui.add_space(12.0);
                     self.chooser_ui(ui, Purpose::Root, env);
+                    if let Some(keep) = self.keep.clone() {
+                        ui.add_space(12.0);
+                        ui.label(RichText::new(keep.display().to_string()).color(theme::MUTED));
+                        if ui.button(KEEP_ROOT).clicked() {
+                            self.use_root(keep, env);
+                        }
+                    }
                 }
                 Stage::NetworkWarning(path) => {
                     ui.label(RichText::new(NETWORK_WARNING).color(theme::WARNING));
@@ -303,6 +312,7 @@ impl Library {
     }
 
     fn use_root(&mut self, path: PathBuf, env: &mut Env) {
+        self.keep = None;
         env.prefs.catalogue_root = Some(path.clone());
         env.save_prefs();
         self.root = Some(path);

@@ -859,11 +859,14 @@ mod tests {
             let shown = format!("{msg:?}");
             assert!(flow.handle(msg, &mut env).is_some(), "{shown} was consumed");
         }
-        let library = Msg::Folders(Ok(Vec::new()));
+        let library = Msg::Folders {
+            root: PathBuf::new(),
+            result: Ok(Vec::new()),
+        };
         assert_eq!(owner(&library), Owner::Library);
         assert!(matches!(
             flow.handle(library, &mut env),
-            Some(Msg::Folders(Ok(_)))
+            Some(Msg::Folders { result: Ok(_), .. })
         ));
     }
 }

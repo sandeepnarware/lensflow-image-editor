@@ -102,8 +102,11 @@ pub enum Msg {
     ImportProgress(Progress),
     /// An import finished.
     ImportDone(Result<Imported, String>),
-    /// The catalogue's folders, with their photo counts.
-    Folders(Result<Vec<Folder>, String>),
+    /// The catalogue's folders, with their photo counts (`root`: the catalogue asked).
+    Folders {
+        root: PathBuf,
+        result: Result<Vec<Folder>, String>,
+    },
     /// A folder's photos, in capture order.
     Photos {
         folder_id: i64,
@@ -560,7 +563,7 @@ pub(crate) mod owners {
             | Msg::Scanned { .. }
             | Msg::ImportProgress(..)
             | Msg::ImportDone(..)
-            | Msg::Folders(..)
+            | Msg::Folders { .. }
             | Msg::Photos { .. }
             | Msg::FolderRemoved { .. }
             | Msg::Opened { .. }
@@ -615,7 +618,10 @@ pub(crate) mod owners {
             },
             Msg::ImportProgress(Progress { done: 0, total: 1 }),
             Msg::ImportDone(Err("no".into())),
-            Msg::Folders(Err("no".into())),
+            Msg::Folders {
+                root: dir.to_path_buf(),
+                result: Err("no".into()),
+            },
             Msg::Photos {
                 folder_id: 1,
                 result: Err("no".into()),

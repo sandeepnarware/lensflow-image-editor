@@ -32,12 +32,13 @@ pub mod view;
 
 use crate::app::DEVICE_LOST_BANNER;
 use crate::jobs::{Jobs, Lane};
+use crate::shortcuts::Action;
 use crate::theme;
 use crate::toast::{Level, Toasts};
 use debounce::SidecarSaver;
 use edit_state::EditState;
 use editing::{EditOp, EditSession};
-use eframe::egui::{self, Key, Modifiers, RichText, Sense};
+use eframe::egui::{self, RichText, Sense};
 use eframe::egui_wgpu::RenderState;
 use histogram::Throttle;
 use lf_catalog::PhotoRow;
@@ -57,7 +58,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
-use view::Viewport;
+use view::{Viewport, Zoom};
 
 /// Shown while a photo opens.
 pub const OPENING: &str = "Opening…";
@@ -117,6 +118,8 @@ pub struct Develop {
     /// "Before" clicked on (the `\` key shows it only while held).
     before_toggled: bool,
     before_held: bool,
+    /// View → Fit, 100 % or `Space`, applied when the preview is next laid out.
+    zoom_asked: Option<Action>,
     preview: Option<Preview>,
     last_drawn: Option<DrawKey>,
     /// The settings changed: draw again.
@@ -148,6 +151,7 @@ impl Develop {
             viewport: Viewport::default(),
             before_toggled: false,
             before_held: false,
+            zoom_asked: None,
             preview: None,
             last_drawn: None,
             dirty: false,
@@ -330,6 +334,39 @@ impl Develop {
     /// Before/after is showing the photo as it was.
     pub fn before(&self) -> bool {
         self.before_toggled || self.before_held
+    }
+
+    /// View → Before/After (or the side panel's "Before").
+    pub fn toggle_before(&mut self) {
+        self.before_toggled = !self.before_toggled;
+    }
+
+    /// The `\` key is held (the app reads it each frame).
+    pub fn set_before_held(&mut self, held: bool) {
+        self.before_held = held;
+    }
+
+    /// View → Fit, View → 100 % or `Space` (fit ⇄ 100 %).
+    pub fn zoom(&mut self, action: Action) {
+        self.zoom_asked = Some(action);
+    }
+
+    /// Photo → Reset all edits: every setting back to its default (one history step, so
+    /// undo brings the edit back).
+    pub fn reset_all(&mut self, toasts: &mut Toasts) {
+        if self.session.edit().is_some() {
+            self.leave_tool(toasts);
+            self.replace_settings(lf_settings::EditSettings::default_settings(), toasts);
+            self.panels.curve.clear_selection();
+            self.tools.clear_selection();
+            self.check_develop_change();
+        }
+    }
+
+    /// Starts this view's generations after `from` (a library restarted on another
+    /// catalogue): an open answer meant for the old view is never taken for a new one.
+    pub fn carry_generation(&mut self, from: u64) {
+        self.latest.fetch_max(from, Ordering::SeqCst);
     }
 
     /// Opens `photo` (no-op when it is already shown or opening). On a lost device nothing
@@ -544,7 +581,7 @@ impl Develop {
         ui.add_space(8.0);
         let before = self.before();
         if ui.selectable_label(before, BEFORE).clicked() {
-            self.before_toggled = !self.before_toggled;
+            self.toggle_before();
         }
         ui.separator();
         self.tool_ui(ui, toasts);
@@ -650,7 +687,6 @@ impl Develop {
         if panel.0 < 1.0 || panel.1 < 1.0 {
             return;
         }
-        self.tool_keys(ui.ctx(), toasts);
         let draw_crop = self.draw_crop();
         let output = match &self.state {
             State::Ready(photo, _) => {
@@ -751,8 +787,8 @@ impl Develop {
         self.update_histogram(ui.ctx(), toasts);
     }
 
-    /// Scroll zooms at the cursor, drag pans, double-click and `Space` toggle fit and 100 %,
-    /// `\` held shows the photo as it was. An open tool owns drags (and the wheel over a
+    /// Scroll zooms at the cursor, drag pans, double-click (and `Space`, through
+    /// [`Develop::zoom`]) toggles fit and 100 %. An open tool owns drags (and the wheel over a
     /// spot).
     fn interact(
         &mut self,
@@ -764,16 +800,13 @@ impl Develop {
         tool: tools::ToolInput,
     ) {
         let ppp = ui.ctx().pixels_per_point();
-        let keys_free =
-            !ui.ctx().egui_wants_keyboard_input() && !crate::dialogs::modal_open(ui.ctx());
-        let (space, held) = ui.input_mut(|i| {
-            (
-                keys_free && i.consume_key(Modifiers::NONE, Key::Space),
-                keys_free && i.key_down(Key::Backslash),
-            )
-        });
-        self.before_held = held;
-        if space || (response.double_clicked() && !tool.owns_drag) {
+        match self.zoom_asked.take() {
+            Some(Action::Fit) => self.viewport.zoom = Zoom::Fit,
+            Some(Action::ActualSize) => self.viewport.zoom = Zoom::Scale(1.0),
+            Some(_) => self.viewport.toggle_fit_100(output, panel),
+            None => {}
+        }
+        if response.double_clicked() && !tool.owns_drag {
             self.viewport.toggle_fit_100(output, panel);
         }
         if let Some(pos) = response.hover_pos()

@@ -1,6 +1,7 @@
 //! The screens before the editor (sign-in, studio choice, locks, updates) and the chrome
-//! around it (account menu, read-only banner, status bar). Each screen draws from the
-//! [`Session`] and returns what the user asked for as an [`Action`]; the app does the rest.
+//! around it (read-only banner, status bar; the Account menu is in `menu.rs`). Each screen
+//! draws from the [`Session`] and returns what the user asked for as an [`Action`]; the app
+//! does the rest.
 
 pub mod locked;
 pub mod signin;
@@ -121,43 +122,29 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, view: &View) -> Option<Act
     }
 }
 
-/// The top bar (studio name and the account menu) and the read-only banner.
-pub fn active_top(ui: &mut egui::Ui, session: &Session, view: &View) -> Option<Action> {
-    let Session::Active {
-        studio, read_only, ..
+/// The read-only banner, under the menu bar (the Account menu is in the menu bar).
+pub fn read_only_banner(ui: &mut egui::Ui, session: &Session) {
+    if let Session::Active {
+        read_only: true, ..
     } = session
-    else {
-        return None;
-    };
-    let mut action = None;
-    egui::Panel::top("account-bar").show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(&studio.name).strong());
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.menu_button("Account", |ui| {
-                    if view.can_switch && ui.button("Switch studio").clicked() {
-                        action = Some(Action::SwitchStudio);
-                    }
-                    if ui.button("Sign out").clicked() {
-                        action = Some(Action::SignOut);
-                    }
-                });
-            });
-        });
-    });
-    if *read_only {
+    {
         egui::Panel::top("read-only").show(ui, |ui| {
             ui.add_space(4.0);
             ui.label(RichText::new(READ_ONLY_BANNER).color(theme::WARNING));
             ui.add_space(4.0);
         });
     }
-    action
 }
 
-/// The 24 px status bar: studio, standing, when the entitlement was last checked, and the
-/// update offer.
-pub fn status_bar(ui: &mut egui::Ui, session: &Session, view: &View) -> Option<Action> {
+/// The window's one 24 px status bar: what the library says (`library`: photos, selection,
+/// imports and exports), then the studio, its standing, when the entitlement was last
+/// checked, and the update offer.
+pub fn status_bar(
+    ui: &mut egui::Ui,
+    session: &Session,
+    view: &View,
+    library: impl FnOnce(&mut egui::Ui),
+) -> Option<Action> {
     let Session::Active {
         studio,
         entitlement,
@@ -173,6 +160,8 @@ pub fn status_bar(ui: &mut egui::Ui, session: &Session, view: &View) -> Option<A
         .exact_size(24.0)
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
+                library(ui);
+                ui.separator();
                 ui.label(&studio.name);
                 ui.separator();
                 ui.label(standing_text(entitlement.standing, *read_only));
