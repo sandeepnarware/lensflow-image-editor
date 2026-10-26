@@ -11,6 +11,7 @@ pub mod logging;
 pub mod prefs;
 pub mod screens;
 pub mod session;
+pub mod session_flow;
 pub mod theme;
 pub mod thumbs_ui;
 pub mod toast;
