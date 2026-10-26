@@ -621,3 +621,57 @@ fn overwrite_replaces_through_a_temp_file_and_leaves_nothing_else() {
         .collect();
     assert_eq!(names, ["a.png"]);
 }
+
+/// A device lost mid-run stops the export at once and is the run's error: the photos after
+/// it are never tried (each would only fail the same way).
+#[test]
+fn a_lost_device_stops_the_run_and_is_its_error() {
+    // A device of its own: destroying the shared one would break the other tests.
+    let Ok(gpu) = lf_pipeline::Gpu::new() else {
+        return;
+    };
+    let src = tempfile::tempdir().unwrap();
+    for name in ["a.png", "b.png", "c.png"] {
+        png(&src.path().join(name), 32, 32);
+    }
+    let (c, ids) = catalogue(src.path());
+    let out = tempfile::tempdir().unwrap();
+    let device = gpu.clone();
+    let mut calls = Vec::new();
+    let result = export::run(
+        gpu.clone(),
+        &c,
+        &ids,
+        &spec(Format::Png, out.path()),
+        &mut |done, _| {
+            calls.push(done);
+            if done == 1 {
+                // The driver resets after the first photo; the progress callback never
+                // asks to stop, so the library must stop by itself.
+                device
+                    .device
+                    .poll(wgpu::PollType::Wait {
+                        submission_index: None,
+                        timeout: Some(std::time::Duration::from_secs(30)),
+                    })
+                    .unwrap();
+                device.device.destroy();
+                let _ = device.device.poll(wgpu::PollType::Poll);
+            }
+            ControlFlow::Continue(())
+        },
+    );
+    assert!(gpu.is_lost());
+    match result {
+        Err(e @ CatalogError::DeviceLost) => {
+            assert!(e.to_string().contains("graphics device was reset"), "{e}");
+        }
+        other => panic!("expected DeviceLost, got {other:?}"),
+    }
+    assert_eq!(calls, [0, 1], "no photo is tried after the loss");
+    let written: Vec<_> = std::fs::read_dir(out.path()).unwrap().collect();
+    assert_eq!(written.len(), 1, "only the first photo was written");
+    let job = export::last_job(&c).unwrap().unwrap();
+    assert_eq!((job.status.as_str(), job.done), ("failed", 1));
+    assert!(job.error.unwrap().contains("graphics device"));
+}

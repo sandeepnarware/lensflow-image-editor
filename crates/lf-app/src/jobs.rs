@@ -7,6 +7,7 @@ use crate::develop::open::OpenedPhoto;
 use crate::device_reset;
 use crate::dialogs::batch::BatchProgress;
 use crate::dialogs::match_reference::MatchStep;
+use crate::export_job::ExportOutcome;
 use crate::library::import_ui::{Chosen, Purpose};
 use crate::presets_sync::{SyncError, SyncReport};
 use crate::update::DownloadProgress;
@@ -137,6 +138,11 @@ pub enum Msg {
     /// "Match a reference…": the picker, the fit's progress and answer, the apply's. A
     /// sign-out found during a fit (`MatchStep::SignedOut`) goes on to the session.
     Match(MatchStep),
+    /// An export to disk moved on: `done` photos handled of `total`.
+    ExportProgress { done: usize, total: usize },
+    /// An export to disk ended (finished or stopped), or why it was refused (the sentence to
+    /// show).
+    ExportDone(Result<ExportOutcome, String>),
 
     #[cfg(test)]
     Probe(&'static str),
@@ -561,7 +567,9 @@ pub(crate) mod owners {
             | Msg::Preopened { .. }
             | Msg::SidecarWritten(..)
             | Msg::BatchProgress(..)
-            | Msg::Match(..) => Owner::Library,
+            | Msg::Match(..)
+            | Msg::ExportProgress { .. }
+            | Msg::ExportDone(..) => Owner::Library,
             Msg::DeviceReset(..) => Owner::App,
             Msg::Probe(..) => Owner::Test,
         }
@@ -640,6 +648,8 @@ pub(crate) mod owners {
                 run: 99,
                 text: "stale".into(),
             }),
+            Msg::ExportProgress { done: 1, total: 2 },
+            Msg::ExportDone(Err("no".into())),
             Msg::DeviceReset(device_reset::Choice::Quit),
             Msg::Probe("probe"),
         ]
