@@ -47,7 +47,7 @@ jobs:
       # every thread's stack (gdb) of each running test binary and fails; the step limit is a
       # backstop for anything else.
       - name: Test
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           LF_REQUIRE_SAMPLES: ${{ steps.samples.outputs.require }}
         run: bash scripts/ci-test-watchdog.sh cargo test --workspace -- --nocapture

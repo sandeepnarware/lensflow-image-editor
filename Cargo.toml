@@ -27,8 +27,15 @@ uuid = { version = "1", features = ["v4"] }
 # (CR2); `lf_raw::open::summary` relies on that path, so keep rawler free of debug assertions.
 [profile.dev.package.rawler]
 debug-assertions = false
+opt-level = 3
 [profile.test.package.rawler]
 debug-assertions = false
+opt-level = 3
+
+[profile.dev.package.lf-raw]
+opt-level = 3
+[profile.test.package.lf-raw]
+opt-level = 3
 
 # `panic` stays `unwind`: lf-catalog's workers catch panics.
 [profile.release]
