@@ -4,10 +4,15 @@
 use eframe::egui;
 use lf_app::app::App;
 use lf_app::prefs::Dirs;
-use lf_app::{gpu, logging, startup, theme};
+use lf_app::{cli, gpu, logging, single_instance, startup, theme};
 use rfd::MessageLevel;
 
 fn main() -> eframe::Result {
+    // `--version` and `--help` answer before any window or graphics work.
+    match cli::parse(std::env::args_os().skip(1)) {
+        cli::Cli::Run => {}
+        other => std::process::exit(cli::answer(&other)),
+    }
     let dirs = Dirs::locate();
     let log = match logging::init(&dirs.data) {
         Ok(path) => Some(path),
@@ -19,6 +24,23 @@ fn main() -> eframe::Result {
             None
         }
     };
+
+    // One app at a time: a second launch says so and exits.
+    let lock =
+        match single_instance::acquire_waiting(&dirs.config, single_instance::wait_for_launch()) {
+            Ok(guard) => Some(guard),
+            Err(single_instance::Refused::AlreadyRunning) => {
+                log::info!("another lensflow-ImageEditor is open; this launch exits");
+                startup::tell(MessageLevel::Info, single_instance::ALREADY_OPEN);
+                return Ok(());
+            }
+            Err(single_instance::Refused::Io(e)) => {
+                log::warn!(
+                    "could not take the instance lock, so a second launch is not stopped: {e}"
+                );
+                None
+            }
+        };
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("lensflow-ImageEditor")
@@ -39,7 +61,7 @@ fn main() -> eframe::Result {
     let result = eframe::run_native(
         "lensflow-ImageEditor",
         options,
-        Box::new(move |cc| Ok(Box::new(App::new(cc, dirs)))),
+        Box::new(move |cc| Ok(Box::new(App::new(cc, dirs, lock)))),
     );
     if let Err(e) = &result {
         log::error!("the window could not open: {e}");

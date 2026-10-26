@@ -1,5 +1,7 @@
 //! The studio presets kept on this computer, per studio, for the sync with LensFlow
-//! (`galleries/edit-presets`). Names are unique within a studio. A delete leaves a
+//! (`galleries/edit-presets`). `studio_id` is a key, not the server's id as it is: the
+//! studio's id for the production server, negative for the development server (the app's
+//! `presets_key`), so the two servers' presets never mix. Names are unique within a studio. A delete leaves a
 //! tombstone (`deleted_at`) so the next sync can delete the preset on the server too;
 //! [`list`] hides tombstones, [`purge`] removes a row for good.
 
@@ -315,4 +317,19 @@ pub fn purge(catalog: &Catalog, id: i64) -> Result<()> {
     tx.execute("DELETE FROM presets WHERE id = ?1", [id])?;
     tx.commit()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod doc_tests {
+    #[test]
+    fn the_module_doc_says_what_studio_id_is() {
+        let doc: String = include_str!("presets.rs")
+            .lines()
+            .take_while(|l| l.starts_with("//!"))
+            .map(|l| l.trim_start_matches("//!").trim())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(doc.contains("`studio_id`"), "{doc}");
+        assert!(doc.contains("negative for the development server"), "{doc}");
+    }
 }

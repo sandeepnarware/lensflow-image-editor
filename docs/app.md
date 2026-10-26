@@ -5,6 +5,58 @@
 (lanes), the session state machine, how the Develop preview reaches the screen,
 where files live, and the keyboard map.
 
+## Starting, one at a time, and quitting
+
+`main.rs` reads the command line before anything else. `--version` (`-V`) prints
+`lensflow-ImageEditor <version> (<target triple>)` and `--help` (`-h`) prints the
+usage; both exit 0 before any window or graphics work. Any other flag prints the
+usage to stderr and exits 2. A Windows release build has no console of its own, so
+it attaches to the terminal it was started from to print these.
+
+Only one copy runs at a time. The app holds an exclusive lock on
+`<config dir>/instance.lock` (the operating system's file lock, so a crash lets
+it go too). A second launch shows "lensflow-ImageEditor is already open." and
+exits. A restarted process (after a device reset or an AppImage update) carries
+`LENSFLOW_RESTARTED=1` and waits up to ten seconds for the old one's lock.
+
+`on_exit` runs in this order: the open photo's gesture is committed; an export,
+a batch, an import and a match are told to stop; the lanes finish their running
+jobs (up to ten seconds); an export cut short has its temp files removed; the
+waiting sidecars are written; the preferences are saved; the instance lock is let
+go; and only then does a downloaded installer or a restart start.
+
+### Updates
+
+The update download runs on the `Long` lane into `<cache dir>/updates/<file>.part`.
+A part left by an interrupted download is resumed with an HTTP `Range` request
+when the server answers `206` (any other answer starts again). More bytes than
+the release's size are refused and the part deleted. The SHA-256 is checked
+before the file gets its own name, and older files in `updates/` are then
+removed. A verified installer never starts while the app still holds its files:
+the window closes (asking first if an export runs), and the end of `on_exit`
+hands it over:
+
+| System | Hand-off |
+|--------|----------|
+| Windows | `msiexec /i <msi> /passive` |
+| macOS | `open <dmg>`; the disk image's window shows how to drag the app over |
+| Linux, from an AppImage (`$APPIMAGE` set) | The new AppImage replaces it (a temp file in the same folder, mode 755, then a rename) and starts |
+| Linux, from the .deb | `xdg-open <deb>`; the system installer asks for the password |
+
+A restart from an AppImage starts `$APPIMAGE`, not `current_exe()`, which points
+inside the AppImage's temporary mount.
+
+### Going back to an older version
+
+Opening a catalogue written by a newer version says so (`NewerSchema`) and
+leaves it untouched. Preferences written by a newer version load: fields this
+version does not know are ignored, and missing ones take their defaults.
+
+Help → About shows the log folder ("Show log folder") and "Copy diagnostics",
+which puts the version and target, the operating system, the graphics adapter
+(name, backend, software or not, largest texture), the log folder, the catalogue
+and the server on the clipboard for a support request. It holds nothing secret.
+
 ## The window and the one device
 
 `main.rs` opens the window with `NativeOptions { renderer: Wgpu }` and asks
@@ -48,7 +100,17 @@ Long work has a lane of its own so that a sidecar write, a folder removal or the
 opening of a photo never waits behind an export or an import. When the window
 closes, the export, the batch, the import and a match are told to stop after
 their current photo, every lane finishes its running job (up to ten seconds),
-and only then are the waiting sidecars written.
+and only then are the waiting sidecars written (the whole order is under
+"Starting, one at a time, and quitting").
+
+An export's temp files are named `.lfexport-<name>.<pid>-<n>.tmp`, and its sweep
+of unfinished files matches only those, so it never touches a sidecar being
+written beside a catalogued photo in the same folder. A match fit or apply
+queued behind an export or an import says "Waiting for the export to finish…" or
+"Waiting for the import to finish…" until it starts. A folder being scanned or
+imported cannot be removed from the catalogue, and a folder added with "Add
+folder…" is shown when its import ends (a rescan leaves the view alone). An
+edited photo keeps its old thumbnail on screen until the new one arrives.
 
 `lf-catalog`'s thumbnail pool has its own threads. Folder pickers run on
 short-lived threads of their own, so a picker that never answers holds up
@@ -108,11 +170,13 @@ The folders come from `directories::ProjectDirs::from("in", "lensflow",
 | What | Where |
 |------|-------|
 | Preferences | `<config dir>/prefs.json` (Edit → Preferences…) |
+| Single-instance lock | `<config dir>/instance.lock` |
 | Window size and position | `<config dir>/window.ron` |
 | Cached entitlement | `<config dir>/entitlement.json` (the development server: `entitlement-dev.json`) |
 | Sign-in token | The system keychain; without one, an encrypted file in the config dir |
 | Log | `<data dir>/logs/app.log`, rotated at 5 MB, three old files kept (Help → Show log folder) |
 | Decoded RAW frames | `<cache dir>/frames`, 4 GB by default (Preferences: frame cache size) |
+| Downloaded updates | `<cache dir>/updates` (the latest installer only) |
 | Catalogue | `<catalogue root>/.lensflow/catalog.sqlite`; the root is chosen on first run. Studio presets in it are kept per studio and per server (a development-server studio's key is its negated id) |
 | Edits beside each photo | `<photo>.lensflow.json` sidecars |
 

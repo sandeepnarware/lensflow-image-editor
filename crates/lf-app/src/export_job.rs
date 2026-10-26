@@ -122,9 +122,11 @@ pub fn run(
     })
 }
 
-/// Removes the hidden temp files this process left in `folder` (`.<name>.<pid>-<n>.tmp`,
-/// made while replacing an existing file): an export that was stopped or cut short leaves
-/// none behind. Other processes' files are left alone.
+/// Removes the hidden temp files this process's exports left in `folder`
+/// (`.lfexport-<name>.<pid>-<n>.tmp`, made while replacing an existing file): an export that
+/// was stopped or cut short leaves none behind. Other processes' files, and sidecar temp
+/// files (`.<photo>.lensflow.json.<pid>-<n>.tmp`, possibly being written right now), are
+/// left alone.
 pub fn remove_unfinished(folder: &Path) {
     let Ok(entries) = std::fs::read_dir(folder) else {
         return;
@@ -141,12 +143,12 @@ pub fn remove_unfinished(folder: &Path) {
     }
 }
 
-/// `.<name>.<pid>-<n>.tmp` for this process (`mine` is `.<pid>-`).
+/// `.lfexport-<name>.<pid>-<n>.tmp` for this process (`mine` is `.<pid>-`).
 fn is_unfinished(name: &str, mine: &str) -> bool {
     let Some(stem) = name.strip_suffix(".tmp") else {
         return false;
     };
-    name.starts_with('.')
+    name.starts_with(lf_catalog::export::TEMP_PREFIX)
         && stem.rfind(mine).is_some_and(|at| {
             let counter = &stem[at + mine.len()..];
             !counter.is_empty() && counter.bytes().all(|b| b.is_ascii_digit())
@@ -583,17 +585,34 @@ mod tests {
     fn an_interrupted_export_leaves_no_temp_file_of_its_own() {
         let dir = tempfile::tempdir().unwrap();
         let pid = std::process::id();
-        let ours = format!(".p0.jpg.{pid}-3.tmp");
-        let theirs = format!(".p0.jpg.{}-3.tmp", pid.wrapping_add(1));
-        for name in [ours.as_str(), theirs.as_str(), "p0.jpg", "notes.tmp"] {
+        let ours = format!(".lfexport-p0.jpg.{pid}-3.tmp");
+        let theirs = format!(".lfexport-p0.jpg.{}-3.tmp", pid.wrapping_add(1));
+        // A sidecar write in flight in the same folder (exporting beside catalogued
+        // photos) is never touched by the export's sweep.
+        let sidecar = format!(".p0.jpg.lensflow.json.{pid}-4.tmp");
+        let names = [
+            ours.as_str(),
+            theirs.as_str(),
+            sidecar.as_str(),
+            "p0.jpg",
+            "notes.tmp",
+        ];
+        for name in names {
             std::fs::write(dir.path().join(name), b"x").unwrap();
         }
         remove_unfinished(dir.path());
         let mut left = files_in(dir.path());
         left.sort();
-        let mut expected = vec![theirs, "notes.tmp".to_owned(), "p0.jpg".to_owned()];
+        let mut expected = vec![theirs, sidecar, "notes.tmp".to_owned(), "p0.jpg".to_owned()];
         expected.sort();
         assert_eq!(left, expected);
+        // The export writes its temp files under the prefix the sweep looks for.
+        let temp = lf_catalog::export::temp_path(&dir.path().join("p0.jpg"));
+        let name = temp.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with(&format!(".lfexport-p0.jpg.{pid}-")) && name.ends_with(".tmp"),
+            "{name}"
+        );
         // A folder that is gone is no trouble.
         remove_unfinished(&dir.path().join("gone"));
     }

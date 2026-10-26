@@ -6,6 +6,7 @@
 use crate::develop::debounce::SidecarSaver;
 use crate::jobs::{Msg, Reporter};
 use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -83,13 +84,18 @@ pub fn wait_for_answer(answered: &AtomicBool, timeout: Duration) -> bool {
     }
 }
 
-/// The app's side of quitting after the answer: `answered` tells the dialog's thread the
-/// window is alive (so it never ends the process while the UI runs, even when the window
-/// stays open), and a restart waits until `on_exit` has shut the jobs down and flushed.
+/// The app's side of quitting: the device-reset answer (`answered` tells the dialog's
+/// thread the window is alive, so it never ends the process while the UI runs, even when
+/// the window stays open), the instance lock, and what starts once `on_exit` has shut the
+/// jobs down and flushed: a restart, or a downloaded installer.
 #[derive(Debug, Default)]
 pub struct Exit {
     pub answered: Arc<AtomicBool>,
     pub restart_on_exit: bool,
+    /// The single-instance lock, let go just before anything is started.
+    pub lock: Option<crate::single_instance::Guard>,
+    /// A verified installer to hand over to the system after the app has let go.
+    pub installer: Option<PathBuf>,
 }
 
 impl Exit {
@@ -99,9 +105,20 @@ impl Exit {
         self.restart_on_exit = choice == Choice::Restart;
     }
 
-    /// The end of `on_exit`: starts the app again when a restart was asked for.
-    pub fn finish(&self) {
-        if self.restart_on_exit {
+    /// The very end of `on_exit`: lets the instance lock go, then starts the installer (it
+    /// replaces this app, which is exiting) or, when a restart was asked for, the app again.
+    pub fn finish(&mut self) {
+        if let Some(lock) = self.lock.take() {
+            lock.release();
+        }
+        if let Some(installer) = self.installer.take() {
+            if let Err(e) = crate::update::launch(&installer) {
+                crate::startup::tell(
+                    rfd::MessageLevel::Error,
+                    &crate::update::launch_failed_text(&installer, &e),
+                );
+            }
+        } else if self.restart_on_exit {
             log::info!("restarting lensflow-ImageEditor");
             if let Err(e) = restart() {
                 log::error!("could not restart lensflow-ImageEditor: {e}");
@@ -144,11 +161,23 @@ pub fn ask(reporter: Reporter, answered: Arc<AtomicBool>, force: ForceExit) {
     }
 }
 
-/// The command that starts this executable again with the same arguments.
+/// The command that starts this app again with the same arguments: the AppImage itself
+/// when running from one (`$APPIMAGE`; `current_exe()` points inside its temporary mount,
+/// which goes away with this process), else this executable.
 pub fn restart_command() -> std::io::Result<Command> {
-    let exe = std::env::current_exe()?;
-    let mut command = Command::new(exe);
+    restart_command_for(std::env::var_os("APPIMAGE").as_deref())
+}
+
+/// [`restart_command`] for the AppImage at `appimage`, if any. The new process is told it
+/// is a restart, so it waits for this one's instance lock.
+pub fn restart_command_for(appimage: Option<&std::ffi::OsStr>) -> std::io::Result<Command> {
+    let program = match appimage.filter(|a| !a.is_empty()) {
+        Some(appimage) => PathBuf::from(appimage),
+        None => std::env::current_exe()?,
+    };
+    let mut command = Command::new(program);
     command.args(std::env::args_os().skip(1));
+    command.env(crate::single_instance::RESTARTED_ENV, "1");
     Ok(command)
 }
 
@@ -179,6 +208,26 @@ mod tests {
         );
         assert_eq!(choice(&MessageDialogResult::Cancel), Choice::Quit);
         assert!(description().starts_with(MESSAGE));
+    }
+
+    #[test]
+    fn appimage_restart_uses_the_appimage_env() {
+        let appimage = std::ffi::OsStr::new("/home/ravi/Apps/lensflow-ImageEditor.AppImage");
+        let command = restart_command_for(Some(appimage)).unwrap();
+        assert_eq!(
+            command.get_program(),
+            appimage,
+            "not the temporary mount's binary"
+        );
+        let restarted = command
+            .get_envs()
+            .any(|(k, v)| k == crate::single_instance::RESTARTED_ENV && v.is_some());
+        assert!(restarted, "the new process waits for this one's lock");
+        let command = restart_command_for(None).unwrap();
+        assert_eq!(
+            Path::new(command.get_program()),
+            std::env::current_exe().unwrap()
+        );
     }
 
     #[test]

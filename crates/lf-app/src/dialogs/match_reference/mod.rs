@@ -350,6 +350,22 @@ pub fn offsets<'a>(
     }
 }
 
+/// A fit or apply queued on the `Long` lane behind an export or an import says so until
+/// it starts.
+pub const WAITING_EXPORT: &str = "Waiting for the export to finish…";
+pub const WAITING_IMPORT: &str = "Waiting for the import to finish…";
+
+/// What a fit or apply started now waits for on the `Long` lane, if anything.
+pub fn waiting_text(exporting: bool, importing: bool) -> Option<&'static str> {
+    if exporting {
+        Some(WAITING_EXPORT)
+    } else if importing {
+        Some(WAITING_IMPORT)
+    } else {
+        None
+    }
+}
+
 /// What the dialog asks of the library this frame.
 #[derive(Debug, Clone)]
 pub enum MatchAction {
@@ -389,6 +405,9 @@ pub struct MatchDialog {
     pub preset_name: String,
     preview: preview::Preview,
     before: bool,
+    /// The fit or apply is queued behind an export or an import ([`waiting_text`]) until
+    /// its first message arrives.
+    waiting: Option<&'static str>,
 }
 
 impl MatchDialog {
@@ -412,6 +431,7 @@ impl MatchDialog {
             preset_name: String::new(),
             preview: preview::Preview::default(),
             before: false,
+            waiting: None,
         }
     }
 
@@ -430,8 +450,18 @@ impl MatchDialog {
         matches!(self.phase, Phase::Ready(_))
     }
 
-    /// The message shown (progress or failure).
+    /// The fit or apply just started is queued behind `text`'s work on the `Long` lane.
+    pub fn wait(&mut self, text: Option<&'static str>) {
+        if self.running() {
+            self.waiting = text;
+        }
+    }
+
+    /// The message shown (waiting, progress or failure).
     pub fn status(&self) -> Option<&str> {
+        if let Some(waiting) = self.waiting.filter(|_| self.running()) {
+            return Some(waiting);
+        }
         match &self.phase {
             Phase::Running(t) | Phase::Failed(t) => Some(t),
             _ => None,
@@ -456,6 +486,7 @@ impl MatchDialog {
         self.run = next_id();
         self.cancel = Arc::new(AtomicBool::new(false));
         self.phase = Phase::Running(steps::READING.to_owned());
+        self.waiting = None;
         self.preview = preview::Preview::default();
         Some(FitRequest {
             run: self.run,
@@ -471,6 +502,7 @@ impl MatchDialog {
     pub fn applying(&mut self) {
         self.run = next_id();
         self.cancel = Arc::new(AtomicBool::new(false));
+        self.waiting = None;
         self.phase = Phase::Applying {
             done: 0,
             total: self.ids.len(),
@@ -479,6 +511,16 @@ impl MatchDialog {
 
     /// A message for this dialog (answers for an older run or ticket are dropped).
     pub fn handle(&mut self, step: MatchStep) {
+        let started = match &step {
+            MatchStep::Progress { run, .. }
+            | MatchStep::Fitted { run, .. }
+            | MatchStep::Applying { run, .. }
+            | MatchStep::Applied { run, .. } => *run == self.run,
+            _ => false,
+        };
+        if started {
+            self.waiting = None;
+        }
         match step {
             MatchStep::Picked {
                 ticket,
@@ -511,6 +553,7 @@ impl MatchDialog {
     /// The fit or apply job panicked.
     /// The fit or apply job panicked: `message` is the plain sentence to show.
     pub fn job_failed(&mut self, message: &str) {
+        self.waiting = None;
         self.phase = Phase::Failed(message.to_owned());
     }
 
@@ -751,6 +794,12 @@ impl MatchDialog {
         let mut action = MatchAction::None;
         match &self.phase {
             Phase::Applying { done, total } => {
+                if let Some(waiting) = self.waiting {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(waiting);
+                    });
+                }
                 ui.add(egui::ProgressBar::new(
                     *done as f32 / (*total).max(1) as f32,
                 ));

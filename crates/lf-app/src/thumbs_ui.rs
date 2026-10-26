@@ -94,6 +94,8 @@ pub struct Thumbs {
     background: HashSet<i64>,
     /// Photos whose thumbnail could not be made, with the reason.
     failed: HashMap<i64, String>,
+    /// Textures still shown while their replacement is made (the photo was edited).
+    stale: HashSet<i64>,
     /// The pool stopped on a device error.
     stopped: bool,
     /// The first visible cell last frame and how many were visible.
@@ -111,6 +113,7 @@ impl Default for Thumbs {
             in_flight: HashMap::new(),
             background: HashSet::new(),
             failed: HashMap::new(),
+            stale: HashSet::new(),
             stopped: false,
             last_range: None,
             worker_failure_told: false,
@@ -155,6 +158,7 @@ impl Thumbs {
             };
             self.in_flight.remove(&id);
             self.failed.remove(&id);
+            self.stale.remove(&id);
             let size = [image.width() as usize, image.height() as usize];
             let pixels = ColorImage::from_rgba_unmultiplied(size, image.as_raw());
             let texture = ctx.load_texture(format!("thumb-{id}"), pixels, TextureOptions::LINEAR);
@@ -180,6 +184,7 @@ impl Thumbs {
                 }
             } else {
                 self.in_flight.remove(&id);
+                self.stale.remove(&id);
                 self.failed.insert(id, message);
             }
         }
@@ -234,7 +239,7 @@ impl Thumbs {
             return;
         };
         for &id in ids {
-            if self.textures.contains(id)
+            if (self.textures.contains(id) && !self.stale.contains(&id))
                 || self.failed.contains_key(&id)
                 || self.in_flight.get(&id).is_some_and(|p| *p >= priority)
             {
@@ -258,8 +263,19 @@ impl Thumbs {
     /// Forgets the photo's thumbnail and failure (its file or edits changed).
     pub fn forget(&mut self, id: i64) {
         self.textures.remove(id);
+        self.stale.remove(&id);
         self.failed.remove(&id);
         self.background.remove(&id);
+    }
+
+    /// The photo's edits or file changed: a new thumbnail is asked for, and the old one
+    /// stays on screen until it arrives (no blank cell).
+    pub fn refresh(&mut self, id: i64) {
+        self.failed.remove(&id);
+        self.background.remove(&id);
+        if self.textures.contains(id) {
+            self.stale.insert(id);
+        }
     }
 
     /// Another folder is shown: drop the queue and ask afresh (textures are kept).
@@ -347,6 +363,38 @@ mod tests {
         thumbs.visible(&order, 600, 620);
         assert_eq!(thumbs.pending(), 1_000, "nothing forgotten for good");
         assert_eq!(thumbs.pending_high(), 20, "only the new screen is High");
+    }
+
+    #[test]
+    fn a_refreshed_thumbnail_keeps_its_old_texture_until_the_new_one_arrives() {
+        let Some(gpu) = lf_pipeline::test_support::try_shared_gpu() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let pool = Thumbnailer::new_paused(gpu, dir.path(), 1, Quality::Fast).unwrap();
+        let ctx = egui::Context::default();
+        let mut thumbs = Thumbs::default();
+        thumbs.set_pool(pool);
+        let image = |v: u8| RgbaImage::from_pixel(4, 3, image::Rgba([v, v, v, 255]));
+        thumbs.arrived.push_back((7, image(10)));
+        let _ = thumbs.pump(&ctx);
+        let (old, _) = thumbs.texture(7).expect("the first thumbnail");
+
+        // The photo was edited: the cell keeps showing the old one while the new is made.
+        thumbs.refresh(7);
+        thumbs.strip(&[7]);
+        assert_eq!(thumbs.pending(), 1, "the new thumbnail is asked for");
+        assert_eq!(thumbs.texture(7).map(|t| t.0), Some(old), "no blank cell");
+        thumbs.strip(&[7]);
+        assert_eq!(thumbs.pending(), 1, "asked for once");
+
+        thumbs.arrived.push_back((7, image(200)));
+        let _ = thumbs.pump(&ctx);
+        let (new, _) = thumbs.texture(7).expect("the new thumbnail");
+        assert_ne!(new, old, "replaced once it arrived");
+        assert_eq!(thumbs.pending(), 0);
+        thumbs.strip(&[7]);
+        assert_eq!(thumbs.pending(), 0, "fresh: not asked for again");
     }
 
     #[test]

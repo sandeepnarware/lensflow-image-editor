@@ -38,6 +38,7 @@ pub fn log_failed_text(error: &str) -> String {
 pub fn tell(level: MessageLevel, text: &str) {
     match level {
         MessageLevel::Error => log::error!("{text}"),
+        MessageLevel::Info => log::info!("{text}"),
         _ => log::warn!("{text}"),
     }
     MessageDialog::new()
