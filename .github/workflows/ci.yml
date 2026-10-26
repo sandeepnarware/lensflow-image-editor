@@ -24,6 +24,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y mesa-vulkan-drivers libvulkan1 gdb
       - run: cargo fmt --all --check
+      # The installers' inputs in packaging/ (WiX source, plists, desktop entry, icons).
+      - name: Check packaging inputs
+        run: |
+          sudo apt-get install -y libxml2-utils desktop-file-utils
+          bash scripts/release/check-packaging.sh
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Cache RAW sample corpus
         uses: actions/cache@v4

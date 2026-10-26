@@ -1,0 +1,7 @@
+#!/bin/sh
+# AppImage entry point: use the libraries bundled in usr/lib (the GPU driver stack comes
+# from the system) and run the editor with the arguments given.
+HERE="$(dirname "$(readlink -f "$0")")"
+LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH
+exec "$HERE/usr/bin/lensflow-image-editor" "$@"
