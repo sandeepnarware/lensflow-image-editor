@@ -121,6 +121,21 @@ impl Client {
         r
     }
 
+    /// [`Client::send`], and on an error answer also the AI requests it still cost (the
+    /// body's `requests_used`; 0 when absent or nothing was answered).
+    pub(crate) fn send_spent(&self, req: RequestBuilder) -> Result<Value, (AccountError, u32)> {
+        let resp = req
+            .send()
+            .map_err(|e| (AccountError::Network(e.without_url().to_string()), 0))?;
+        let status = resp.status().as_u16();
+        let text = resp
+            .text()
+            .map_err(|e| (AccountError::Network(e.without_url().to_string()), 0))?;
+        let body: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        let used = spent(&body);
+        map_body(status, body).map_err(|e| (e, used))
+    }
+
     /// Sends a request and maps the response to JSON or a typed error.
     pub fn send(&self, req: RequestBuilder) -> Result<Value, AccountError> {
         let resp = req
@@ -143,7 +158,17 @@ fn map_response(resp: Response) -> Result<Value, AccountError> {
     let text = resp
         .text()
         .map_err(|e| AccountError::Network(e.without_url().to_string()))?;
-    let body: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    map_body(status, serde_json::from_str(&text).unwrap_or(Value::Null))
+}
+
+/// An error answer's `requests_used` (the AI requests a failed grade still cost).
+fn spent(body: &Value) -> u32 {
+    body.get("requests_used")
+        .and_then(Value::as_u64)
+        .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX))
+}
+
+fn map_body(status: u16, body: Value) -> Result<Value, AccountError> {
     if (200..300).contains(&status) {
         return Ok(body);
     }

@@ -229,8 +229,8 @@ impl eframe::App for App {
             // Match a reference: its cost line reads the gate; a fit asked for gets the AI
             // link, whose fresh check before each AI request goes through the session.
             lib.set_match_gate(self.flow.gate());
-            if lib.take_match_run() {
-                lib.start_match(self.flow.ai_link(&self.jobs), &self.jobs);
+            if let Some(shown) = lib.take_match_run() {
+                lib.start_match(self.flow.ai_link(&self.jobs), shown, &self.jobs);
             }
             if lib.take_presets_changed() {
                 let root = lib.root().map(std::path::Path::to_path_buf);

@@ -160,7 +160,7 @@ pub struct Library {
     /// (the app supplies the AI link).
     matching: Option<MatchDialog>,
     match_gate: AiGate,
-    match_wanted: bool,
+    match_wanted: Option<AiGate>,
     /// "Export N photos", while open or while its export runs (hidden).
     export: Option<ExportDialog>,
 }
@@ -206,7 +206,7 @@ impl Library {
             batch: None,
             matching: None,
             match_gate: AiGate::default(),
-            match_wanted: false,
+            match_wanted: None,
             export: None,
         }
     }
@@ -312,8 +312,8 @@ impl Library {
 
     /// The dialog asked for a fit since the last call (the app then calls
     /// [`Library::start_match`] with the AI link).
-    pub fn take_match_run(&mut self) -> bool {
-        std::mem::take(&mut self.match_wanted)
+    pub fn take_match_run(&mut self) -> Option<AiGate> {
+        self.match_wanted.take()
     }
 
     /// Opens "Match a reference" for the selected photos.
@@ -330,8 +330,8 @@ impl Library {
 
     /// Starts the fit on the `Open` lane (the device renders the sheet); progress and the
     /// answer arrive as `Msg::Match`. `ai` is `None` without a studio session.
-    pub fn start_match(&mut self, ai: Option<AiLink>, jobs: &Jobs) {
-        let Some(req) = self.matching.as_mut().and_then(|m| m.start(ai)) else {
+    pub fn start_match(&mut self, ai: Option<AiLink>, shown: AiGate, jobs: &Jobs) {
+        let Some(req) = self.matching.as_mut().and_then(|m| m.start(ai, shown)) else {
             return;
         };
         let gpu = self.gpu.clone();
@@ -388,7 +388,7 @@ impl Library {
         match dialog.show(ctx, self.match_gate) {
             MatchAction::None => {}
             MatchAction::Close => self.matching = None,
-            MatchAction::Run => self.match_wanted = true,
+            MatchAction::Run(shown) => self.match_wanted = Some(shown),
             MatchAction::PickFile => {
                 dialog.ticket = matching::next_id();
                 let ticket = dialog.ticket;
@@ -418,6 +418,7 @@ impl Library {
     /// path.
     fn apply_match(&mut self, plan: matching::ApplyPlan, env: &mut Env) {
         let Some(root) = self.root.clone() else {
+            env.toasts.push(Level::Error, matching::NO_CATALOGUE);
             return;
         };
         // The open photo's gesture is recorded first, so the grade lands on top of it.

@@ -24,7 +24,7 @@ use eframe::egui::{self, RichText};
 use image::RgbaImage;
 use lf_account::entitlement::Decision;
 use lf_catalog::{Catalog, PhotoRow};
-use lf_grade::sheet::{AI_EDGE, TILE_EDGE, pick_samples, scaled};
+use lf_grade::sheet::{AI_EDGE, MEASURE_EDGE, TILE_EDGE, pick_samples, scaled};
 use lf_grade::{apply_strength, exposure_offset};
 use lf_settings::EditSettings;
 use lf_settings::groups::DEFAULT_COPY_GROUPS;
@@ -42,7 +42,9 @@ pub const REVIEW: &str = "Let AI check the result (1 more request)";
 pub const SENT: &str = "The reference and a small contact sheet of your photos are sent to the AI service to read the look. LensFlow doesn't keep them; the AI service's data policy applies.";
 pub const READ: &str = "Read the look";
 pub const MEASURE: &str = "Measure the look";
-pub const ALL_EDITED: &str = "Every selected photo already has an edit: the grade was fitted to the photos as they look now, and applying it replaces those edits.";
+pub const ALL_EDITED: &str = "Every selected photo already has an edit: the grade was fitted to the photos as they were taken, and applying it replaces those edits.";
+pub const NO_CATALOGUE: &str =
+    "The catalogue is not open, so the grade cannot be applied. Open the catalogue and try again.";
 pub const HOLD: &str = "Press and hold the picture to see it before.";
 pub const STRENGTH: &str = "Strength";
 pub const EXPOSURE: &str = "Match exposure per photo";
@@ -92,6 +94,8 @@ pub struct AiGate {
     pub allowed: bool,
     /// `None`: unlimited.
     pub remaining: Option<u64>,
+    /// None left this month.
+    pub used_up: bool,
 }
 
 impl AiGate {
@@ -99,13 +103,11 @@ impl AiGate {
         let Some(d) = decision else {
             return AiGate::default();
         };
-        let remaining = match d {
-            Decision::Allow(e) | Decision::AllowStale(e, _) => e.ai.remaining,
-            _ => None,
-        };
+        let remaining = steps::remaining(d);
         AiGate {
-            allowed: d.ai_allowed(),
+            allowed: steps::ai_usable(d),
             remaining,
+            used_up: d.ai_allowed() && remaining == Some(0),
         }
     }
 }
@@ -234,7 +236,8 @@ fn fit_inner(
         if stopped() {
             return Err(steps::STOPPED.to_owned());
         }
-        let bitmap = open(path, TILE_EDGE);
+        // Read at 512 as the web reads them; `tiled` cover-fits each into its 256 px square.
+        let bitmap = open(path, MEASURE_EDGE);
         read.set(read.get() + 1);
         progress(report, run, &reading_text(read.get(), total));
         bitmap
@@ -353,8 +356,8 @@ pub enum MatchAction {
     None,
     /// Open the file picker.
     PickFile,
-    /// Start the fit (the app supplies the AI link).
-    Run,
+    /// Start the fit under the gate the dialog showed (the app supplies the AI link).
+    Run(AiGate),
     Apply(Box<ApplyPlan>),
     /// The dialog is gone (a running fit or apply stops at its next step).
     Close,
@@ -443,7 +446,12 @@ impl MatchDialog {
     }
 
     /// The fit request for the reference chosen (a new run: older answers are dropped).
-    pub fn start(&mut self, ai: Option<AiLink>) -> Option<FitRequest> {
+    ///
+    /// The fit follows what the dialog showed when Run was pressed (`shown`): no AI when it
+    /// said AI is off, even if the gate allows it now, and the review only when the cost line
+    /// counted it. A gate that allowed AI but refuses it now is caught by the fresh check
+    /// before each request.
+    pub fn start(&mut self, ai: Option<AiLink>, shown: AiGate) -> Option<FitRequest> {
         let reference = self.reference.clone()?;
         self.run = next_id();
         self.cancel = Arc::new(AtomicBool::new(false));
@@ -453,8 +461,8 @@ impl MatchDialog {
             run: self.run,
             photos: self.photos.clone(),
             reference,
-            ai,
-            review: self.review,
+            ai: ai.filter(|_| shown.allowed),
+            review: self.review && shown.allowed,
             cancel: self.cancel.clone(),
         })
     }
@@ -578,7 +586,12 @@ impl MatchDialog {
             ui.label(RichText::new(steps::cost_line(n, gate.remaining)).strong());
             ui.checkbox(&mut self.review, REVIEW);
         } else {
-            ui.label(RichText::new(steps::AI_OFF).color(theme::MUTED));
+            let off = if gate.used_up {
+                steps::USED_UP
+            } else {
+                steps::AI_OFF
+            };
+            ui.label(RichText::new(off).color(theme::MUTED));
         }
         if let Phase::Failed(message) = &self.phase {
             ui.label(RichText::new(message).color(theme::DANGER));
@@ -589,7 +602,7 @@ impl MatchDialog {
                 .button(if gate.allowed { READ } else { MEASURE })
                 .clicked()
             {
-                action = MatchAction::Run;
+                action = MatchAction::Run(gate);
             }
             if ui.button(CANCEL).clicked() {
                 action = self.close();
@@ -943,7 +956,9 @@ mod tests {
         assert_eq!(fitted.outcome.ai_note.as_deref(), Some(steps::AI_OFF));
         assert!((fitted.medians[&1] - 64.0 / 255.0).abs() < 0.01);
         let edges = edges.lock().unwrap();
-        assert_eq!(edges.iter().filter(|(_, e)| *e == TILE_EDGE).count(), 3);
+        // The samples are read at 512 (as the web) and cover-fitted into 256 px tiles.
+        assert_eq!(edges.iter().filter(|(_, e)| *e == MEASURE_EDGE).count(), 3);
+        assert_eq!(fitted.sheet.width(), 3 * TILE_EDGE);
         assert!(
             edges.contains(&(PathBuf::from("2.jpg"), AI_EDGE)),
             "the reference at 1024"
@@ -1087,6 +1102,7 @@ mod tests {
             gate: AiGate {
                 allowed: true,
                 remaining: Some(5),
+                used_up: false,
             },
             last: None,
         };
@@ -1108,13 +1124,85 @@ mod tests {
         assert!(!h.state().dialog.review);
         h.get_by_label(READ).click();
         h.run();
-        assert!(matches!(h.state().last, Some(MatchAction::Run)));
+        assert!(matches!(
+            h.state().last,
+            Some(MatchAction::Run(AiGate { allowed: true, .. }))
+        ));
 
         h.state_mut().gate = AiGate::default();
         h.run();
         h.get_by_label(steps::AI_OFF);
-        h.get_by_label(MEASURE);
+        h.get_by_label(MEASURE).click();
+        h.run();
+        assert!(matches!(
+            h.state().last,
+            Some(MatchAction::Run(AiGate { allowed: false, .. }))
+        ));
+        h.state_mut().gate = AiGate {
+            allowed: false,
+            remaining: Some(0),
+            used_up: true,
+        };
+        h.run();
+        h.get_by_label(steps::USED_UP);
         assert!(h.query_by_label(&steps::cost_line(1, Some(5))).is_none());
+    }
+
+    /// The dialog said AI is off ("Measure the look"); by the time the fit starts the gate
+    /// allows AI. Nothing is sent: the fit follows what was shown.
+    #[test]
+    fn a_fit_asked_without_ai_sends_nothing_when_the_gate_opens_meanwhile() {
+        use httpmock::prelude::*;
+        use steps::tests::{allowed, link};
+        let server = MockServer::start();
+        let grade = server.mock(|w, t| {
+            w.method(POST).path("/api/desktop/grade");
+            t.status(200)
+                .json_body(serde_json::json!({"data": {"settings": {}}}));
+        });
+        let mut dialog = MatchDialog::new(rows(2));
+        dialog.reference = Some(Reference::Photo {
+            id: 1,
+            path: PathBuf::from("1.jpg"),
+        });
+        assert!(dialog.review, "the review toggle is on by default");
+        let (ai, checks) = link(&server, allowed(), allowed());
+        let req = dialog.start(Some(ai), AiGate::default()).unwrap();
+        assert!(req.ai.is_none(), "no AI link under a gate shown without AI");
+        assert!(!req.review);
+        let open = |_: &Path, edge: u32| {
+            Ok(RgbaImage::from_pixel(
+                edge,
+                edge,
+                image::Rgba([70, 70, 70, 255]),
+            ))
+        };
+        let MatchStep::Fitted { result, .. } = fit(req, &open, |_| Ok(Box::new(Flat)), &|_| {})
+        else {
+            panic!("not a fit answer");
+        };
+        assert_eq!(
+            result.unwrap().outcome.ai_note.as_deref(),
+            Some(steps::AI_OFF)
+        );
+        grade.assert_calls(0);
+        assert_eq!(checks.load(Ordering::SeqCst), 0);
+
+        // Shown with AI and one request (no review): the review stays off whatever the toggle
+        // says now.
+        let shown = AiGate {
+            allowed: true,
+            remaining: Some(3),
+            used_up: false,
+        };
+        dialog.review = false;
+        let (ai, _) = link(&server, allowed(), allowed());
+        let req = dialog.start(Some(ai), shown).unwrap();
+        assert!(req.ai.is_some() && !req.review);
+        dialog.review = true;
+        let (ai, _) = link(&server, allowed(), allowed());
+        let req = dialog.start(Some(ai), shown).unwrap();
+        assert!(req.ai.is_some() && req.review);
     }
 
     #[test]
@@ -1127,9 +1215,14 @@ mod tests {
             AiGate::from(Some(&Decision::Allow(e.clone()))),
             AiGate {
                 allowed: true,
-                remaining: Some(7)
+                remaining: Some(7),
+                used_up: false,
             }
         );
+        // None left: AI is off, with the used-up copy (the web's `aiUsable`).
+        e.ai.remaining = Some(0);
+        let gate = AiGate::from(Some(&Decision::Allow(e.clone())));
+        assert!(!gate.allowed && gate.used_up);
         e.ai.remaining = None;
         assert_eq!(AiGate::from(Some(&Decision::Allow(e))).remaining, None);
         let ro = Entitlement::example(Standing::ReadOnly, true);
