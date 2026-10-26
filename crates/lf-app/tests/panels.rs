@@ -248,3 +248,32 @@ fn dragging_an_inner_point_off_the_side_removes_it() {
     assert_eq!(steps(&h), added + 1);
     assert_eq!(h.state().panels.curve.selected(), None);
 }
+
+/// The crop panel alone over a 3:2 photo.
+fn crop_panel(settings: EditSettings) -> Harness<'static, EditSettings> {
+    Harness::builder()
+        .with_size([300.0, 600.0])
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, s: &mut EditSettings| {
+                lf_app::develop::panels::crop::show(ui, s, 6000, 4000);
+            },
+            settings,
+        )
+}
+
+#[test]
+fn clicking_the_selected_aspect_fits_the_frame_to_it_again() {
+    // Saved as 1:1 but with a frame that is not square (as a web edit can be).
+    let mut s = EditSettings::default_settings();
+    s.aspect = "1:1".into();
+    let mut h = crop_panel(s);
+    h.run();
+    h.get_by_label("1:1").click();
+    h.run();
+    let c = h.state().crop;
+    assert!(
+        (c.w * 6000.0 / (c.h * 4000.0) - 1.0).abs() < 1e-6,
+        "re-fitted to a square: {c:?}"
+    );
+}

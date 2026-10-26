@@ -843,3 +843,274 @@ fn the_crop_tool_commits_once_on_enter_and_esc_puts_it_back() {
     assert_eq!(h.state().lib.develop().tool(), None);
     assert_eq!(steps(&catalog), 4);
 }
+
+fn history(root: &Path, id: i64) -> i64 {
+    let catalog = lf_catalog::Catalog::open(root).unwrap();
+    lf_catalog::edits::history_len(&catalog, id).unwrap()
+}
+
+/// Clicks the text field of an open dialog and types `text` into it.
+fn type_into_field(h: &mut Harness<'static, State>, text: &str) {
+    h.get_by_role(Role::TextInput).click();
+    h.step();
+    h.get_by_role(Role::TextInput).type_text(text);
+    h.step();
+}
+
+#[test]
+fn looks_presets_and_versions_from_the_side_panel() {
+    use lf_app::develop::panels::{looks, presets, versions};
+    use lf_app::dialogs::save_preset;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    let id = h.state().lib.photos()[0].id;
+    let root = dir.path().join("catalogue");
+    h.state_mut().lib.set_studio(Some(7));
+    h.step();
+
+    // A look: one click, one history step.
+    h.get_by_label(looks::TITLE).click();
+    // The section opens over a few frames.
+    h.run_steps(20);
+    h.get_by_label("B&W classic").click();
+    h.step();
+    assert!(settings(&h).bw, "the look applied");
+    assert_eq!(history(&root, id), 2, "the photo before, and the look");
+
+    // A preset: saved here for studio 7, listed, and a sync asked for.
+    h.get_by_label(presets::TITLE).click();
+    // The section opens over a few frames.
+    h.run_steps(20);
+    assert!(h.query_by_label(presets::EMPTY).is_some());
+    h.get_by_label(presets::SAVE).click();
+    // A new dialog is laid out unseen on its first frame.
+    h.step();
+    h.step();
+    assert!(
+        h.query_by_label(save_preset::TITLE).is_some(),
+        "the dialog opened"
+    );
+    type_into_field(&mut h, "Mono");
+    h.get_by_label(save_preset::SAVE).click();
+    h.step();
+    h.step();
+    assert!(
+        h.query_by_label(save_preset::TITLE).is_none(),
+        "the dialog closed"
+    );
+    let catalog = lf_catalog::Catalog::open(&root).unwrap();
+    let rows = lf_catalog::presets::list(&catalog, 7).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].settings["bw"], serde_json::json!(true));
+    assert!(lf_catalog::presets::list(&catalog, 8).unwrap().is_empty());
+    assert!(
+        h.state_mut().lib.take_presets_changed(),
+        "a sync is asked for"
+    );
+    assert!(!h.state_mut().lib.take_presets_changed());
+
+    // The same name again is refused.
+    h.get_by_label(presets::SAVE).click();
+    // A new dialog is laid out unseen on its first frame.
+    h.step();
+    h.step();
+    type_into_field(&mut h, "Mono");
+    h.get_by_label(save_preset::SAVE).click();
+    h.step();
+    h.step();
+    assert!(h.query_by_label(save_preset::TAKEN).is_some());
+    h.get_by_label(save_preset::CANCEL).click();
+    h.step();
+
+    // Applying it puts black & white back after a change.
+    h.get_by_label("Natural").click();
+    h.step();
+    assert!(!settings(&h).bw);
+    h.get_by_label("Mono").click();
+    h.step();
+    assert!(settings(&h).bw, "the preset applied");
+    let steps = history(&root, id);
+
+    // Versions: added (tagged current), its preview made once, used, deleted.
+    h.get_by_label(versions::TITLE).click();
+    // The section opens over a few frames.
+    h.run_steps(20);
+    h.get_by_label(versions::ADD).click();
+    // A new dialog is laid out unseen on its first frame.
+    h.step();
+    h.step();
+    h.get_by_label(versions::SAVE).click();
+    h.step();
+    h.step();
+    assert!(h.query_by_label("Version 1").is_some());
+    assert!(h.query_by_label(versions::CURRENT).is_some());
+    for _ in 0..5 {
+        h.step();
+    }
+    assert_eq!(h.state().lib.develop().version_previews(), 1);
+    drag_slider(&mut h, "Exposure", 60.0);
+    assert!(
+        h.query_by_label(versions::CURRENT).is_none(),
+        "the edit moved on"
+    );
+    h.get_by_label("Use Version 1").click();
+    // A new dialog is laid out unseen on its first frame.
+    h.step();
+    h.step();
+    assert!(h.query_by_label(versions::USE_QUESTION).is_some());
+    h.get_by_label(versions::USE_CONFIRM).click();
+    h.step();
+    h.step();
+    assert_eq!(exposure(&h), 0.0, "the version's settings are back");
+    assert!(h.query_by_label(versions::CURRENT).is_some());
+    assert_eq!(
+        history(&root, id),
+        steps + 2,
+        "the drag, then the version, each one step"
+    );
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::Z);
+    h.step();
+    assert!(
+        exposure(&h) > 0.0,
+        "the edit before the version is in history"
+    );
+    h.get_by_label("Delete Version 1").click();
+    // A new dialog is laid out unseen on its first frame.
+    h.step();
+    h.step();
+    h.get_by_label(versions::DELETE_CONFIRM).click();
+    h.step();
+    h.step();
+    assert!(h.query_by_label("Version 1").is_none());
+
+    // Deleting the preset asks first and leaves a tombstone for the sync.
+    h.get_by_label(&presets::delete_label("Mono")).click();
+    // A new dialog is laid out unseen on its first frame.
+    h.step();
+    h.step();
+    h.get_by_label(presets::DELETE_CONFIRM).click();
+    h.step();
+    h.step();
+    assert!(lf_catalog::presets::list(&catalog, 7).unwrap().is_empty());
+    assert_eq!(
+        lf_catalog::presets::tombstones(&catalog, 7).unwrap().len(),
+        1
+    );
+    assert!(h.state_mut().lib.take_presets_changed());
+}
+
+#[test]
+fn copy_then_paste_onto_one_photo_and_then_on_many() {
+    use lf_app::dialogs::{batch, group_picker};
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 3);
+    import_folder(&mut h, &shoot, 3);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    let paths: Vec<PathBuf> = h
+        .state()
+        .lib
+        .photos()
+        .iter()
+        .map(|p| p.path.clone())
+        .collect();
+    let root = dir.path().join("catalogue");
+
+    // Edit the first photo in Develop, then copy its edits there.
+    h.state_mut().lib.selection.click(ids[0]);
+    h.key_press(Key::D);
+    step_until(&mut h, "the photo to open", |s| s.lib.develop().is_ready());
+    drag_slider(&mut h, "Exposure", 60.0);
+    let dragged = exposure(&h);
+    let both = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    h.key_press_modifiers(both, Key::C);
+    h.step();
+    assert!(h.query_by_label(group_picker::COPY_TITLE).is_some());
+    h.get_by_label(group_picker::COPY).click();
+    h.step();
+    let slot = h.state().lib.clipboard().slot().cloned().unwrap();
+    assert_eq!(slot["exposure"].as_f64(), Some(dragged));
+    assert!(slot.get("crop").is_none(), "crop is not copied by default");
+
+    // Back in the library: one other photo is pasted at once.
+    h.key_press(Key::G);
+    h.step();
+    h.state_mut().lib.selection.click(ids[1]);
+    h.key_press_modifiers(both, Key::V);
+    h.step();
+    assert!(h.state().lib.batch().is_none(), "no dialog for one photo");
+    let catalog = lf_catalog::Catalog::open(&root).unwrap();
+    let exposure_of = |id| {
+        lf_catalog::edits::get_settings(&catalog, id)
+            .unwrap()
+            .map(|s| s.exposure)
+    };
+    assert_eq!(exposure_of(ids[1]), Some(dragged));
+    assert!(lf_catalog::sidecar::path_for(&paths[1]).exists());
+
+    // Every photo: "Apply to 3 photos".
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::A);
+    h.step();
+    h.key_press_modifiers(both, Key::V);
+    h.step();
+    assert!(h.query_by_label(&batch::title(3)).is_some());
+    h.get_by_label(&batch::apply_label(3)).click();
+    h.step();
+    step_until(&mut h, "the batch to finish", |s| {
+        s.lib
+            .batch()
+            .and_then(|b| b.progress())
+            .is_some_and(|p| p.finished)
+    });
+    assert!(h.query_by_label("3 of 3 edited.").is_some());
+    for (id, path) in ids.iter().zip(&paths) {
+        assert_eq!(exposure_of(*id), Some(dragged));
+        let side = lf_catalog::sidecar::read(&lf_catalog::sidecar::path_for(path))
+            .unwrap()
+            .unwrap();
+        assert_eq!(side.settings.exposure, dragged);
+    }
+    h.get_by_role_and_label(Role::Button, batch::DONE).click();
+    h.step();
+    assert!(h.state().lib.batch().is_none());
+}
+
+#[test]
+fn paste_works_in_the_library_before_any_photo_is_opened() {
+    use lf_app::dialogs::group_picker;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 2);
+    import_folder(&mut h, &shoot, 2);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    let second = h.state().lib.photos()[1].path.clone();
+    let both = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    h.state_mut().lib.selection.click(ids[0]);
+    h.key_press_modifiers(both, Key::C);
+    h.step();
+    h.step();
+    h.get_by_label(group_picker::COPY).click();
+    h.step();
+    assert!(h.state().lib.clipboard().slot().is_some());
+    h.state_mut().lib.selection.click(ids[1]);
+    h.key_press_modifiers(both, Key::V);
+    h.step();
+    let catalog = lf_catalog::Catalog::open(&dir.path().join("catalogue")).unwrap();
+    assert!(
+        lf_catalog::edits::get_settings(&catalog, ids[1])
+            .unwrap()
+            .is_some(),
+        "pasted: {:?}",
+        h.state().toasts.texts().collect::<Vec<_>>()
+    );
+    assert!(lf_catalog::sidecar::path_for(&second).exists());
+}

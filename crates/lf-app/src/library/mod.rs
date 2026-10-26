@@ -12,7 +12,10 @@ pub mod selection;
 
 use crate::app::DEVICE_LOST_BANNER;
 use crate::catalog_ext::{self, count};
+use crate::clipboard::{self, Clipboard};
 use crate::develop::{self, Develop, Outcome};
+use crate::dialogs::batch::{self, BatchAction, BatchDialog, BatchProgress, Choice};
+use crate::dialogs::group_picker::{CopyAction, CopyDialog};
 use crate::jobs::{Jobs, Lane, Msg};
 use crate::prefs::Prefs;
 use crate::theme;
@@ -28,6 +31,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 /// The Edit menu's undo and redo, with their shortcuts (`Ctrl+Y` redoes too).
 pub const UNDO: &str = "Undo";
@@ -36,6 +40,16 @@ pub const UNDO_KEY: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
 pub const REDO_KEY: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z);
+/// Copy and paste of edits, and applying edits to the selection.
+pub const COPY: &str = "Copy edits…";
+pub const PASTE: &str = "Paste edits";
+pub const APPLY: &str = "Apply to selected…";
+pub const COPY_KEY: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::C);
+pub const PASTE_KEY: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::V);
+/// How long a paste waits for the system clipboard's text.
+const PASTE_WAIT: Duration = Duration::from_secs(1);
 
 /// Shown on a photo whose sidecar could not be read (Develop explains it).
 pub const SIDECAR_BADGE: &str = "Edit file damaged";
@@ -123,6 +137,15 @@ pub struct Library {
     /// The grid's columns last frame (for the arrow keys).
     columns: usize,
     last_scroll: f32,
+    /// Copied edits (`Ctrl+Shift+C`).
+    clipboard: Clipboard,
+    /// The "Copy edits" dialog (its groups stay chosen) and whether it is open.
+    copy: CopyDialog,
+    copying: bool,
+    /// A paste asked the system for its clipboard's text at this time.
+    paste_asked: Option<Instant>,
+    /// "Apply to N photos".
+    batch: Option<BatchDialog>,
 }
 
 impl Library {
@@ -159,6 +182,11 @@ impl Library {
             reveal_active: false,
             columns: 1,
             last_scroll: 0.0,
+            clipboard: Clipboard::default(),
+            copy: CopyDialog::default(),
+            copying: false,
+            paste_asked: None,
+            batch: None,
         }
     }
 
@@ -224,6 +252,26 @@ impl Library {
     /// The sidecar writer (flushed when the app quits).
     pub fn sidecar_saver(&self) -> develop::debounce::SidecarSaver {
         self.develop.saver()
+    }
+
+    /// The studio signed in to, for its presets (the app tells the library each frame).
+    pub fn set_studio(&mut self, studio: Option<i64>) {
+        self.develop.set_studio(studio);
+    }
+
+    /// A preset was saved or deleted since the last call (the app asks for a sync).
+    pub fn take_presets_changed(&mut self) -> bool {
+        self.develop.take_presets_changed()
+    }
+
+    /// The copied edits.
+    pub fn clipboard(&self) -> &Clipboard {
+        &self.clipboard
+    }
+
+    /// The "Apply to N photos" dialog, while open.
+    pub fn batch(&self) -> Option<&BatchDialog> {
+        self.batch.as_ref()
     }
 
     /// Commits a gesture still in progress (the app is quitting).
@@ -303,6 +351,12 @@ impl Library {
                 Ok(false) => log::debug!("pre-opening photo {photo_id} skipped"),
                 Err(e) => log::info!("could not pre-open photo {photo_id}: {e}"),
             },
+            Msg::BatchProgress(progress) => self.batch_progress(progress, env),
+            Msg::PresetsSynced(..) => {
+                // The catalogue's presets may have changed; the session handles the rest.
+                self.develop.presets_stale();
+                return Some(msg);
+            }
             Msg::JobFailed { name, message } => {
                 // A panicking library job must not leave the library waiting for it.
                 match name.as_str() {
@@ -312,6 +366,18 @@ impl Library {
                     "import" => self.importing = None,
                     "open catalogue" => self.stage = Stage::Failed(message.clone()),
                     "thumbnail pool" => self.reviving = false,
+                    "batch" => {
+                        if let Some(b) = &mut self.batch {
+                            let total = b.ids.len();
+                            let done = b.progress().map_or(0, |p| p.done);
+                            b.update(BatchProgress {
+                                done,
+                                total,
+                                failed: Vec::new(),
+                                finished: true,
+                            });
+                        }
+                    }
                     _ => {}
                 }
                 return Some(Msg::JobFailed { name, message });
@@ -341,6 +407,7 @@ impl Library {
                 self.thumbs = Thumbs::default();
                 self.thumbs.set_pool(opened.thumbs);
                 self.frames = Some(Arc::new(opened.frames));
+                self.develop.set_root(&root);
                 self.stage = Stage::Ready;
                 self.folders_loaded(opened.folders, env);
             }
@@ -584,6 +651,26 @@ impl Library {
                     {
                         self.develop.redo(env.toasts);
                     }
+                    ui.separator();
+                    let copy =
+                        egui::Button::new(COPY).shortcut_text(ui.ctx().format_shortcut(&COPY_KEY));
+                    if ui.add_enabled(self.copy_source().is_some(), copy).clicked() {
+                        self.copying = true;
+                    }
+                    let paste = egui::Button::new(PASTE)
+                        .shortcut_text(ui.ctx().format_shortcut(&PASTE_KEY));
+                    if ui
+                        .add_enabled(!self.selection.current.is_empty(), paste)
+                        .clicked()
+                    {
+                        self.paste(ui.ctx(), env);
+                    }
+                    if ui
+                        .add_enabled(!self.selection.current.is_empty(), egui::Button::new(APPLY))
+                        .clicked()
+                    {
+                        self.open_batch(None);
+                    }
                 });
             });
         });
@@ -617,16 +704,34 @@ impl Library {
         self.confirm_remove_dialog(ui.ctx(), env);
         self.add_folder_dialog(ui.ctx(), env);
         self.confirm_missing_dialog(ui.ctx(), env);
+        self.copy_dialog(ui.ctx(), env);
+        self.waiting_paste(ui.ctx(), env);
+        self.batch_dialog(ui.ctx(), env);
         self.reveal_active = false;
     }
 
     fn keys(&mut self, ctx: &egui::Context, env: &mut Env) {
         if ctx.egui_wants_keyboard_input()
+            || crate::dialogs::modal_open(ctx)
             || self.confirm_remove.is_some()
             || self.confirm_missing.is_some()
             || self.adding
+            || self.copying
+            || self.batch.is_some()
         {
             return;
+        }
+        let (copy, paste) = ctx.input_mut(|i| {
+            (
+                i.consume_shortcut(&COPY_KEY),
+                i.consume_shortcut(&PASTE_KEY),
+            )
+        });
+        if copy && self.copy_source().is_some() {
+            self.copying = true;
+        }
+        if paste {
+            self.paste(ctx, env);
         }
         if matches!(self.mode, Mode::Develop(_)) {
             // Ctrl+Shift+Z first: Ctrl+Z also matches it.
@@ -678,7 +783,8 @@ impl Library {
                 self.reveal_active = true;
             }
         }
-        if all && in_grid {
+        if all {
+            // The filmstrip in Develop too: the open photo stays the active one.
             self.selection.select_all(&self.order);
         }
         if develop
@@ -858,6 +964,213 @@ impl Library {
             if let Mode::Develop(_) = self.mode {
                 self.open_photo(id, env);
             }
+        }
+    }
+
+    /// The photo whose edits a copy takes: the open one in Develop, the active one in the grid.
+    fn copy_source(&self) -> Option<i64> {
+        match self.mode {
+            Mode::Develop(id) => Some(id),
+            Mode::Library => self.selection.active(),
+        }
+    }
+
+    fn copy_dialog(&mut self, ctx: &egui::Context, env: &mut Env) {
+        if !self.copying {
+            return;
+        }
+        match self.copy.show(ctx) {
+            CopyAction::None => {}
+            CopyAction::Cancel => self.copying = false,
+            CopyAction::Copy(groups) => {
+                self.copying = false;
+                let settings = self
+                    .copy_source()
+                    .and_then(|id| self.develop.photo_settings(id));
+                if let Some(settings) = settings {
+                    let text = self.clipboard.copy(&settings, &groups);
+                    ctx.copy_text(text);
+                    env.toasts.push(Level::Success, clipboard::COPIED);
+                }
+            }
+        }
+    }
+
+    /// `Ctrl+Shift+V`: the copied edits, or else the system clipboard's text (asked for
+    /// here, answered by egui in a later frame).
+    fn paste(&mut self, ctx: &egui::Context, env: &mut Env) {
+        if self.selection.current.is_empty() {
+            return;
+        }
+        match self.clipboard.slot().cloned() {
+            Some(partial) => self.paste_settings(partial, env),
+            None => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                self.paste_asked = Some(Instant::now());
+            }
+        }
+    }
+
+    /// Waits for the system clipboard's text after a paste found nothing copied here.
+    fn waiting_paste(&mut self, ctx: &egui::Context, env: &mut Env) {
+        let Some(asked) = self.paste_asked else {
+            return;
+        };
+        let text = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Paste(text) => Some(text.clone()),
+                _ => None,
+            })
+        });
+        match text {
+            Some(text) => {
+                self.paste_asked = None;
+                match self.clipboard.source(Some(&text)) {
+                    Some(partial) => self.paste_settings(partial, env),
+                    None => env.toasts.push(Level::Info, clipboard::NOTHING),
+                }
+            }
+            None if asked.elapsed() > PASTE_WAIT => {
+                self.paste_asked = None;
+                env.toasts.push(Level::Info, clipboard::NOTHING);
+            }
+            None => ctx.request_repaint_after(Duration::from_millis(50)),
+        }
+    }
+
+    /// The selected photos, in display order.
+    fn selected_in_order(&self) -> Vec<i64> {
+        self.order
+            .iter()
+            .copied()
+            .filter(|id| self.selection.current.contains(id))
+            .collect()
+    }
+
+    /// Pastes `partial` onto every selected photo: the open photo in Develop through its edit
+    /// (one history step), one other photo at once, several through "Apply to N photos".
+    pub fn paste_settings(&mut self, partial: serde_json::Value, env: &mut Env) {
+        let targets = self.selected_in_order();
+        match (self.mode, targets.as_slice()) {
+            (_, []) => {}
+            (Mode::Develop(open), [only]) if *only == open => {
+                if let Some(edit) = self.develop.edit_state() {
+                    let next = clipboard::apply(&edit.settings, &partial);
+                    self.develop.replace_settings(next, env.toasts);
+                }
+            }
+            (_, [only]) => {
+                let id = *only;
+                if self.develop.apply_to_photo(id, &partial, env.toasts) {
+                    self.edited(&[id], env);
+                }
+            }
+            _ => self.open_batch(Some(partial)),
+        }
+    }
+
+    /// Opens "Apply to N photos" for the selection; `pasted` comes first when given.
+    fn open_batch(&mut self, pasted: Option<serde_json::Value>) {
+        let ids = self.selected_in_order();
+        if ids.is_empty() {
+            return;
+        }
+        let names = ids
+            .iter()
+            .map(|id| {
+                self.photo(*id)
+                    .map(|p| develop::open::file_name(&p.path))
+                    .unwrap_or_default()
+            })
+            .collect();
+        let mut choices = Vec::new();
+        if let Some(partial) = pasted.or_else(|| self.clipboard.slot().cloned()) {
+            choices.push(Choice {
+                label: batch::PASTED.to_owned(),
+                partial,
+            });
+        }
+        if let Some(settings) = self
+            .copy_source()
+            .and_then(|id| self.develop.photo_settings(id))
+        {
+            choices.push(batch::current_choice(&settings));
+        }
+        for row in self.develop.preset_rows() {
+            choices.push(Choice {
+                label: format!("Preset: {}", row.name),
+                partial: row.settings,
+            });
+        }
+        self.batch = Some(BatchDialog::new(ids, names, choices));
+    }
+
+    fn batch_dialog(&mut self, ctx: &egui::Context, env: &mut Env) {
+        let Some(dialog) = &mut self.batch else {
+            return;
+        };
+        match dialog.show(ctx) {
+            BatchAction::None => {}
+            BatchAction::Closed => self.batch = None,
+            BatchAction::Start(partial) => {
+                let Some(root) = self.root.clone() else {
+                    return;
+                };
+                // The open photo's gesture is recorded first, so the batch builds on it.
+                self.develop.finish_edit(env.toasts);
+                let Some(dialog) = &mut self.batch else {
+                    return;
+                };
+                dialog.started();
+                batch::spawn(
+                    env.jobs,
+                    root,
+                    dialog.ids.clone(),
+                    partial,
+                    self.develop.saver(),
+                    dialog.stop.clone(),
+                );
+            }
+        }
+    }
+
+    fn batch_progress(&mut self, progress: BatchProgress, env: &mut Env) {
+        let Some(dialog) = &mut self.batch else {
+            return;
+        };
+        let finished = progress.finished;
+        let done: Vec<i64> = dialog
+            .ids
+            .iter()
+            .take(progress.done)
+            .copied()
+            .filter(|id| !progress.failed.iter().any(|(f, _)| f == id))
+            .collect();
+        if dialog.update(progress) {
+            self.batch = None;
+        }
+        if finished {
+            self.edited(&done, env);
+        }
+    }
+
+    /// Photos edited outside the open photo's edit (a paste, a batch): new thumbnails, the
+    /// edited badges, and the open photo takes its new settings.
+    fn edited(&mut self, ids: &[i64], env: &mut Env) {
+        for id in ids {
+            self.thumbs.forget(*id);
+        }
+        self.thumbs.background(&self.order);
+        if let Mode::Develop(open) = self.mode
+            && ids.contains(&open)
+        {
+            self.develop.reload_edit(env.toasts);
+        }
+        if let (Some(folder_id), Some(root)) = (self.current_folder, self.root.clone()) {
+            env.jobs.spawn(Lane::Query, "photos", move || Msg::Photos {
+                folder_id,
+                result: catalog_ext::photos_in(&root, folder_id),
+            });
         }
     }
 

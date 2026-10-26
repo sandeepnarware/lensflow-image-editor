@@ -7,6 +7,7 @@ use crate::account::{self, Credentials, Generation, Token};
 use crate::app::VERSION;
 use crate::jobs::{Jobs, Lane, Msg};
 use crate::prefs::{Dirs, InstanceChoice, Prefs};
+use crate::presets_sync::{self, SyncError, SyncReport};
 use crate::screens::{Action, View};
 use crate::session::{GateClock, Session, StudioChoice, choose_studio};
 use crate::toast::{Level, Toasts};
@@ -15,7 +16,7 @@ use eframe::egui;
 use lf_account::auth::{SignedIn, StudioSummary, User};
 use lf_account::entitlement::{Cache, Decision};
 use lf_account::{AccountError, Client, Instance, LockReason};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -59,6 +60,8 @@ struct AccountState {
     last_gate: Option<Instant>,
     /// Installer download progress (bytes done, total).
     download: Option<(u64, u64)>,
+    /// The generation whose sign-in preset sync was asked for (once per sign-in or studio).
+    presets_synced: Option<Generation>,
 }
 
 impl AccountState {
@@ -79,6 +82,7 @@ impl AccountState {
             checking: None,
             last_gate: None,
             download: None,
+            presets_synced: None,
         }
     }
 
@@ -130,6 +134,40 @@ impl SessionFlow {
     pub fn refresh_now(&mut self, jobs: &Jobs, reason: &str) {
         log::info!("checking the entitlement before {reason}");
         self.spawn_gate(jobs);
+    }
+
+    /// The studio signed in to (its id keys the presets kept in the catalogue).
+    pub fn studio_id(&self) -> Option<i64> {
+        match &self.session {
+            Session::Active { studio, .. } => i64::try_from(studio.id).ok(),
+            _ => None,
+        }
+    }
+
+    /// Syncs the studio's presets with LensFlow on the account lane, when signed in to a
+    /// studio whose plan allows it (read-only skips it: the banner says why) and a catalogue
+    /// root is chosen. The answer is `Msg::PresetsSynced`.
+    pub fn sync_presets(&mut self, jobs: &Jobs, root: Option<&Path>) {
+        let allowed = self
+            .account
+            .decision
+            .as_ref()
+            .is_some_and(Decision::sync_allowed);
+        let (Some(client), Some(studio_id), Some(root), true) = (
+            self.account.studio_client(),
+            self.studio_id(),
+            root,
+            allowed,
+        ) else {
+            return;
+        };
+        let root: PathBuf = root.to_path_buf();
+        self.spawn_account(jobs, "sync presets", move |generation, _| {
+            let result = lf_catalog::Catalog::open(&root)
+                .map_err(SyncError::from)
+                .and_then(|catalog| presets_sync::run(&client, &catalog, studio_id));
+            Msg::PresetsSynced(generation, result)
+        });
     }
 
     /// The facts the screens show about the account.
@@ -290,7 +328,15 @@ impl SessionFlow {
             Msg::Gate(generation, decision) if self.is_current(generation) => {
                 self.gate_decided(decision, env)
             }
-            Msg::Resumed(..) | Msg::SignedIn(..) | Msg::Me(..) | Msg::Gate(..) | Msg::Cleared => {}
+            Msg::PresetsSynced(generation, result) if self.is_current(generation) => {
+                self.presets_synced(result, env)
+            }
+            Msg::Resumed(..)
+            | Msg::SignedIn(..)
+            | Msg::Me(..)
+            | Msg::Gate(..)
+            | Msg::PresetsSynced(..)
+            | Msg::Cleared => {}
             Msg::Download(progress) => self.download(progress, env),
             other => return Some(other),
         }
@@ -381,6 +427,39 @@ impl SessionFlow {
         } else if back_online {
             // Launched offline: now that the server answers, fetch the real studio list.
             self.spawn_me(env.jobs);
+        }
+        // Once per sign-in (and studio): the studio's presets.
+        if matches!(self.session, Session::Active { .. })
+            && self.account.presets_synced != Some(self.account.generation)
+            && self
+                .account
+                .decision
+                .as_ref()
+                .is_some_and(Decision::sync_allowed)
+            && env.prefs.catalogue_root.is_some()
+        {
+            self.account.presets_synced = Some(self.account.generation);
+            let root = env.prefs.catalogue_root.clone();
+            self.sync_presets(env.jobs, root.as_deref());
+        }
+    }
+
+    fn presets_synced(&mut self, result: Result<SyncReport, SyncError>, env: &mut Env) {
+        match result {
+            Ok(report) => {
+                if report.conflicts > 0 {
+                    env.toasts
+                        .push(Level::Info, conflicts_text(report.conflicts));
+                }
+            }
+            Err(SyncError::Account(e)) if self.signed_out_by(&e, env.jobs) => {}
+            Err(e) => {
+                log::warn!("the studio presets could not be synced: {e}");
+                env.toasts.push(
+                    Level::Warning,
+                    format!("Studio presets could not be synced. {e}"),
+                );
+            }
         }
     }
 
@@ -549,6 +628,15 @@ impl SessionFlow {
     }
 }
 
+/// The toast when presets were changed both here and on the web.
+pub fn conflicts_text(n: usize) -> String {
+    if n == 1 {
+        "A preset was changed here and on the web, so both copies are kept.".to_owned()
+    } else {
+        format!("{n} presets were changed here and on the web, so both copies are kept.")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -572,8 +660,47 @@ mod tests {
                 checking: None,
                 last_gate: None,
                 download: None,
+                presets_synced: None,
             },
         }
+    }
+
+    #[test]
+    fn a_revoked_token_during_a_preset_sync_signs_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut flow = flow(dir.path());
+        flow.account.token = Some("secret".into());
+        let jobs = Jobs::new(egui::Context::default());
+        let mut toasts = Toasts::default();
+        let mut prefs = Prefs::default();
+        let dirs = Dirs {
+            config: dir.path().join("config"),
+            data: dir.path().join("data"),
+            cache: dir.path().join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let mut env = Env {
+            jobs: &jobs,
+            toasts: &mut toasts,
+            prefs: &mut prefs,
+            dirs: &dirs,
+            ctx: &ctx,
+        };
+        // From an earlier session: dropped.
+        let stale = Msg::PresetsSynced(2, Err(SyncError::Account(AccountError::Unauthorized)));
+        assert!(flow.handle(stale, &mut env).is_none());
+        assert!(flow.account.token.is_some());
+        let revoked = Msg::PresetsSynced(3, Err(SyncError::Account(AccountError::Unauthorized)));
+        assert!(flow.handle(revoked, &mut env).is_none());
+        assert!(flow.account.token.is_none(), "signed out");
+        assert!(matches!(flow.session, Session::SigningIn { .. }));
+        assert_eq!(
+            env.toasts.count(),
+            0,
+            "no sync error on top of the sign-in screen"
+        );
+        // Read-only or signed out: no sync is asked for.
+        flow.sync_presets(&jobs, Some(dir.path()));
     }
 
     #[test]

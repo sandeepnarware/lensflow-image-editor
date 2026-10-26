@@ -20,6 +20,7 @@
 pub mod debounce;
 pub mod edit_state;
 pub mod editing;
+pub mod extras;
 pub mod histogram;
 pub mod info;
 pub mod open;
@@ -132,6 +133,8 @@ pub struct Develop {
     reopen: bool,
     /// The crop and spot tools.
     tools: tools::Tools,
+    /// The Looks, Studio presets and Versions sections.
+    extras: extras::Extras,
 }
 
 impl Develop {
@@ -156,6 +159,7 @@ impl Develop {
             panels: PanelState::default(),
             reopen: false,
             tools: tools::Tools::default(),
+            extras: extras::Extras::default(),
         }
     }
 
@@ -543,7 +547,14 @@ impl Develop {
         }
         ui.separator();
         self.tool_ui(ui, toasts);
-        self.panels_ui(ui, toasts);
+        // Looks, presets and versions scroll with the adjust panels.
+        egui::ScrollArea::vertical()
+            .id_salt("adjust-panels")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                self.extras_ui(ui, toasts);
+                self.panels_ui(ui, toasts);
+            });
     }
 
     /// The damaged-sidecar warning, once per photo per session, until dismissed.
@@ -590,12 +601,7 @@ impl Develop {
         };
         let panels = &mut self.panels;
         let mut out = PanelOutput::default();
-        egui::ScrollArea::vertical()
-            .id_salt("adjust-panels")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                edit.set(|s| out = panels::show(ui, panels, s, &ctx));
-            });
+        edit.set(|s| out = panels::show(ui, panels, s, &ctx));
         if out.changed {
             self.settings_changed();
         }
@@ -757,7 +763,8 @@ impl Develop {
         tool: tools::ToolInput,
     ) {
         let ppp = ui.ctx().pixels_per_point();
-        let keys_free = !ui.ctx().egui_wants_keyboard_input();
+        let keys_free =
+            !ui.ctx().egui_wants_keyboard_input() && !crate::dialogs::modal_open(ui.ctx());
         let (space, held) = ui.input_mut(|i| {
             (
                 keys_free && i.consume_key(Modifiers::NONE, Key::Space),

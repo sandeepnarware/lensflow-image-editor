@@ -224,6 +224,13 @@ impl eframe::App for App {
             self.handle(msg);
         }
         self.flow.tick(Instant::now(), &self.jobs);
+        if let Some(lib) = &mut self.library {
+            lib.set_studio(self.flow.studio_id());
+            if lib.take_presets_changed() {
+                let root = lib.root().map(std::path::Path::to_path_buf);
+                self.flow.sync_presets(&self.jobs, root.as_deref());
+            }
+        }
         if matches!(self.flow.session, Session::Active { .. }) {
             // The status bar's "Last checked" and the next scheduled check.
             ctx.request_repaint_after(Duration::from_secs(60));

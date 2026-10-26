@@ -273,7 +273,7 @@ impl Develop {
 
     /// `R`, `Q`, `Esc`, `Enter` and `Delete`.
     pub(super) fn tool_keys(&mut self, ctx: &egui::Context, toasts: &mut Toasts) {
-        if ctx.egui_wants_keyboard_input() || !self.is_ready() {
+        if ctx.egui_wants_keyboard_input() || crate::dialogs::modal_open(ctx) || !self.is_ready() {
             return;
         }
         let selected = matches!(&self.tools.active, Some(Active::Spots(t)) if t.selected.is_some());
