@@ -12,6 +12,7 @@ pub mod diagnostics;
 pub mod dialogs;
 pub mod export_job;
 pub mod gpu;
+pub mod grade_cli;
 pub mod jobs;
 pub mod library;
 pub mod logging;

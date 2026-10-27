@@ -44,6 +44,26 @@ Each CI run uploads a release build per platform as an artifact:
 come with packaging (2d). On Linux the folder picker uses the XDG desktop
 portal (or zenity). Typing a folder path always works.
 
+### Grading a whole folder from the console
+
+```bash
+lensflow-image-editor grade
+```
+
+It asks for a reference picture and a folder of photos, then fits one grade to
+the folder exactly as "Match a reference…" does and writes it beside every
+photo. There is no window, no catalogue and no sign-in, and it is quicker than
+doing the same in the dialog. Options: `--reference <file>` and `--folder <dir>`
+to skip the questions, `--out <dir>` to write graded JPEG copies instead of edit
+files, `--strength <0-100>`, `--exposure` to even out brightness photo by photo,
+`--recursive`, `--dry-run`, and `--yes` to skip the confirmation. `grade --help`
+lists them.
+
+The photos are never modified: the edit files are new `<photo>.lensflow.json`
+sidecars (a damaged one is left alone and that photo skipped). `Ctrl`+click
+adds or removes one photo and dragging a box over the grid selects everything
+inside it. See [docs/app.md](docs/app.md).
+
 The window needs a graphics adapter. With no driver it runs on a software
 adapter (WARP on Windows, lavapipe on Linux) and says "No graphics driver found:
 previews will be slow."

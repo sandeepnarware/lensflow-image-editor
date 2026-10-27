@@ -48,6 +48,17 @@ pub fn request_full_limits(options: &mut WgpuConfiguration) {
     });
 }
 
+/// A graphics device for a command-line run: no window, the same backends the window asks for
+/// (see [`desktop_backends`]) and the same choice of adapter, hardware before software. The
+/// window is not opened, so this is the only device the process holds.
+pub fn headless() -> Result<Arc<Gpu>, String> {
+    let mut options = lf_pipeline::gpu::GpuOptions::from_env();
+    if options.backend.is_none() && std::env::var_os("WGPU_BACKEND").is_none() {
+        options.backend = Some(desktop_backends());
+    }
+    Gpu::new_with(options).map_err(|e| e.to_string())
+}
+
 /// The backends wgpu may use: DirectX 12 and OpenGL on Windows, everything eframe enables
 /// elsewhere.
 ///
@@ -63,7 +74,7 @@ pub fn request_full_limits(options: &mut WgpuConfiguration) {
 /// So the pair is tried alone on Windows rather than probed for: the probe itself is what
 /// breaks OpenGL. A GPU that DirectX 12 drives is one OpenGL also drives (both come with
 /// its driver), and `WGPU_BACKEND=vulkan` still asks for Vulkan where a user wants it.
-fn desktop_backends() -> wgpu::Backends {
+pub(crate) fn desktop_backends() -> wgpu::Backends {
     if cfg!(windows) {
         wgpu::Backends::DX12 | wgpu::Backends::GL
     } else {
