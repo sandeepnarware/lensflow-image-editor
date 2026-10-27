@@ -289,6 +289,31 @@ click. A drag that starts in the empty space below or beside the cells draws a b
 too. Only the cells on screen are found by a box, and a box that stays in the gaps
 between cells selects nothing until it reaches one.
 
+### Masks (local adjustments)
+
+`M` (or the tool row's "Masks", or the ribbon's Develop → Masks) opens the masks tool. "Add
+linear" puts a graduated filter on the top of the photo; "Add radial" an ellipse in the
+middle. Each mask has its own Exposure, Contrast, Highlights, Shadows, Whites, Blacks,
+Temperature, Tint, Saturation and Clarity, added to the global sliders where it applies;
+"Invert" turns it inside out, and a radial has Feather and Angle. Up to 8 masks.
+
+On the photo, a linear gradient shows its start line (full effect behind it), its end line
+(none past it) and a dashed middle line, each with a handle: the ends move one line, the
+middle moves both. A radial shows its outline with a handle at its centre (moves it), on
+its right and on its bottom (each sets that radius along the ellipse's own axes); a drag
+inside moves it. A drag that catches no handle pans; a click picks the mask under it. The
+mask being edited is drawn in white with brand-coloured handles. `Delete` removes it. Each
+add, drag, slider gesture and removal is one history step.
+
+Masks are desktop-only: they live in `desktop.masks` (`lf_settings::masks`), which the web
+editor keeps in a sidecar it rewrites but does not draw. Shapes are in source-photo
+fractions (as spots are), so they stay on the same part of the photo through crop, turn
+and flip; a radial's radii are fractions of the photo's height, in a space whose x is
+multiplied by the aspect, so a circle is round. The develop shader computes each mask's
+weight analytically (`mask_weight`, the same formula as `lf_settings::masks::weight`) and
+adds the masks' shares to the sliders it moves, clamped to each slider's range. With no
+masks every value is the uniform itself, so the parity gate is untouched.
+
 ### White balance and Auto tone
 
 Colour has a white-balance list (As shot, Auto) and a "Pick neutral" eyedropper (`W`, also
@@ -345,6 +370,7 @@ even if the filter would hide it.
 | `R` | Crop and straighten tool |
 | `Q` | Heal and clone spots tool |
 | `W` | White balance eyedropper (click something grey or white) |
+| `M` | Masks: linear and radial gradients with their own sliders |
 | `Ctrl+U` | Auto tone |
 | `Ctrl+Shift+U` | Auto white balance |
 | `\` (held) | Before/After (View → Before/After toggles it) |

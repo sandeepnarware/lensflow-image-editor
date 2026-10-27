@@ -117,6 +117,7 @@ pub const RIBBON: &[Tab] = &[
                     Do(Action::CropTool),
                     Do(Action::SpotTool),
                     Do(Action::WhiteBalanceTool),
+                    Do(Action::MaskTool),
                 ],
             ),
             group(
@@ -238,6 +239,7 @@ pub fn icon(action: Action) -> &'static str {
         Action::CropTool => "✂",
         Action::SpotTool => "✚",
         Action::WhiteBalanceTool => "💧",
+        Action::MaskTool => "🎭",
         Action::Previous => "⏴",
         Action::Next => "⏵",
         Action::Up => "⏶",
@@ -272,6 +274,7 @@ pub fn short_label(action: Action) -> &'static str {
         Action::CropTool => "Crop",
         Action::SpotTool => "Spots",
         Action::WhiteBalanceTool => "White balance",
+        Action::MaskTool => "Masks",
         Action::AutoWhiteBalance => "Auto WB",
         Action::CheckEntitlement => "Check now",
         Action::ShowLogFolder => "Log folder",

@@ -18,6 +18,16 @@
 // writes `pow(t, 2.0)`: `pow` of a negative base is undefined on real GPUs (it is computed
 // as exp2(2*log2(t))); `t * t` is the same value for every finite `t`.
 
+// Desktop only: one local adjustment (`passes::develop::MaskUniform`).
+struct MaskU {
+    kind: vec4<f32>,   // kind (0 linear, 1 radial), invert, the radial's inner radius
+    shape: vec4<f32>,  // linear: start, end; radial: centre, radii (x × aspect)
+    turn: vec4<f32>,   // radial: cos, sin of its angle
+    tone: vec4<f32>,   // exposure, contrast, highlights, shadows
+    more: vec4<f32>,   // whites, blacks, saturation, clarity
+    wb: vec4<f32>,     // white-balance multiplier at full effect
+}
+
 struct Uniforms {
     matrix: mat3x3<f32>,    // uMatrix: output UV → photo UV
     view: vec4<f32>,        // uView: canvas UV → output UV (zoom/pan): x, y, w, h
@@ -57,6 +67,11 @@ struct Uniforms {
     hsl: array<vec4<f32>, 8>,        // uHsl (xyz)
     band_hue: array<vec4<f32>, 8>,   // uBandHue (x)
     band_width: array<vec4<f32>, 8>, // uBandWidth (x)
+    mask_count: u32,        // desktop only: 0 is the web's pass exactly
+    aspect: f32,            // working width per unit of height
+    _mask_pad0: u32,
+    _mask_pad1: u32,
+    masks: array<MaskU, 8>,
 }
 
 @group(0) @binding(0) var u_img: texture_2d<f32>;    // the photo (after spots)
@@ -121,11 +136,65 @@ fn curve_at(x: f32) -> vec4<f32> {
     return textureSampleLevel(u_curve, s_curve, vec2<f32>(x * 255.0 / 256.0 + 0.5 / 256.0, 0.5), 0.0);
 }
 
+// Desktop only: how much mask `m` applies at `p` (photo UV with x × aspect), 0..1. The same
+// formula as `lf_settings::masks::weight`.
+fn mask_weight(m: MaskU, p: vec2<f32>) -> f32 {
+    var w: f32;
+    if (m.kind.x < 0.5) {
+        // Linear: full behind the start line, none past the end line.
+        let a = m.shape.xy;
+        let d = m.shape.zw - a;
+        w = 1.0 - smoothstep(0.0, 1.0, dot(p - a, d) / dot(d, d));
+    } else {
+        // Radial: into the ellipse's own axes, full inside the inner radius.
+        let o = p - m.shape.xy;
+        let q = vec2<f32>(o.x * m.turn.x + o.y * m.turn.y, -o.x * m.turn.y + o.y * m.turn.x);
+        w = 1.0 - smoothstep(m.kind.z, 1.0001, length(q / m.shape.zw));
+    }
+    return select(w, 1.0 - w, m.kind.y > 0.5);
+}
+
 // The GLSL's develop() after its first two lines (`c = texture(uImg, uv)`, and the early
 // return when uDevelop is off), which fs_develop does: with FXC's optimiser that early return
 // made WARP lose the device.
 fn develop(photo: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
     var c = photo;
+
+    // The sliders a mask can move, as the uniforms set them; masks (desktop only) add their
+    // share here. With none, every value below is the uniform itself: the web's pass.
+    var exposure = u.exposure;
+    var contrast = u.contrast;
+    var highlights = u.highlights;
+    var shadows = u.shadows;
+    var whites = u.whites;
+    var blacks = u.blacks;
+    var saturation = u.saturation;
+    var clarity = u.clarity;
+    var wb = u.wb;
+    if (u.mask_count > 0u) {
+        let p = vec2<f32>(uv.x * u.aspect, uv.y);
+        for (var i = 0u; i < u.mask_count; i++) {
+            let m = u.masks[i];
+            let w = mask_weight(m, p);
+            exposure += w * m.tone.x;
+            contrast += w * m.tone.y;
+            highlights += w * m.tone.z;
+            shadows += w * m.tone.w;
+            whites += w * m.more.x;
+            blacks += w * m.more.y;
+            saturation += w * m.more.z;
+            clarity += w * m.more.w;
+            wb *= mix(vec3<f32>(1.0), m.wb.xyz, w);
+        }
+        // A mask on top of the global slider stays within the slider's own range.
+        contrast = clamp(contrast, -1.0, 1.0);
+        highlights = clamp(highlights, -1.0, 1.0);
+        shadows = clamp(shadows, -1.0, 1.0);
+        whites = clamp(whites, -1.0, 1.0);
+        blacks = clamp(blacks, -1.0, 1.0);
+        saturation = clamp(saturation, -1.0, 1.0);
+        clarity = clamp(clarity, -1.0, 1.0);
+    }
 
     // Noise reduction: an edge-aware average for brightness, a plain one for colour.
     if (u.noise > 0.0 || u.color_noise > 0.0) {
@@ -178,9 +247,9 @@ fn develop(photo: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
     }
 
     // White balance and exposure, in linear light.
-    let gain = exp2(u.exposure);
-    c = to_gamma(to_linear(c) * u.wb * gain);
-    let yb = luma(to_gamma(to_linear(bm) * u.wb * gain));
+    let gain = exp2(exposure);
+    c = to_gamma(to_linear(c) * wb * gain);
+    let yb = luma(to_gamma(to_linear(bm) * wb * gain));
 
     // Highlights and shadows follow the local brightness (the wide blur), so whole areas move together.
     let y = max(luma(c), 1.0e-4);
@@ -188,31 +257,31 @@ fn develop(photo: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
     let w_s = pow(1.0 - local, 2.0);
     let w_h = pow(local, 2.0);
     var yn = y;
-    if (u.highlights < 0.0) { yn *= 1.0 + u.highlights * 0.3 * w_h; }
-    else { yn += u.highlights * w_h * 0.6 * yn * max(1.0 - yn, 0.0); }
-    if (u.shadows > 0.0) { yn += u.shadows * w_s * 0.5 * sqrt(yn) * max(1.0 - yn, 0.0); }
-    else { yn += u.shadows * w_s * 0.75 * yn * max(1.0 - yn, 0.0); }
+    if (highlights < 0.0) { yn *= 1.0 + highlights * 0.3 * w_h; }
+    else { yn += highlights * w_h * 0.6 * yn * max(1.0 - yn, 0.0); }
+    if (shadows > 0.0) { yn += shadows * w_s * 0.5 * sqrt(yn) * max(1.0 - yn, 0.0); }
+    else { yn += shadows * w_s * 0.75 * yn * max(1.0 - yn, 0.0); }
     c *= yn / y;
 
     // Whites and blacks move the end points.
-    let bp = -u.blacks * 0.06;
-    let wp = 1.0 - u.whites * 0.2;
+    let bp = -blacks * 0.06;
+    let wp = 1.0 - whites * 0.2;
     c = (c - bp) / (wp - bp);
 
     // Clarity: midtone local contrast against the wide blur.
-    if (u.clarity != 0.0) {
+    if (clarity != 0.0) {
         let y2 = max(luma(c), 1.0e-4);
         let ybl = (yb - bp) / (wp - bp);
         let t = clamp(2.0 * y2 - 1.0, -1.0, 1.0);
         let mid = 1.0 - t * t; // GLSL: pow(t, 2.0) (see the header)
-        let y3 = max(y2 + u.clarity * 0.8 * (y2 - ybl) * mid, 0.0);
+        let y3 = max(y2 + clarity * 0.8 * (y2 - ybl) * mid, 0.0);
         c *= y3 / y2;
     }
 
     c = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
 
     // Contrast: an S-curve that never clips.
-    c = c - u.contrast * 0.8 * sin(6.2831853 * c) / 6.2831853;
+    c = c - contrast * 0.8 * sin(6.2831853 * c) / 6.2831853;
 
     // Tone curve.
     c = vec3<f32>(curve_at(c.r).r, curve_at(c.g).g, curve_at(c.b).b);
@@ -244,7 +313,7 @@ fn develop(photo: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
         let skin = 1.0 - smoothstep(10.0, 40.0, abs(hue - 25.0));
         let vib = u.vibrance * (1.0 - s) * select(1.0, 1.0 - 0.6 * skin, u.vibrance > 0.0);
         c = mix(vec3<f32>(yv), c, 1.0 + vib);
-        c = mix(vec3<f32>(yv), c, 1.0 + u.saturation);
+        c = mix(vec3<f32>(yv), c, 1.0 + saturation);
     }
 
     // Colour grading: tints for shadows, midtones and highlights.

@@ -1897,3 +1897,79 @@ fn the_eyedropper_auto_tone_and_auto_white_balance_in_develop() {
     assert!(history(&root, id) > before);
     assert!(before > after_pick, "each auto change is its own step");
 }
+
+#[test]
+fn masks_are_added_moved_adjusted_and_removed_in_develop() {
+    use lf_app::develop::tools::{ToolKind, masks as mask_tool};
+    use lf_settings::masks::{Masks, Shape};
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    let id = h.state().lib.photos()[0].id;
+    let root = dir.path().join("catalogue");
+    let masks = |h: &Harness<'static, State>| Masks::from_settings(&settings(h));
+
+    // M opens the tool; "Add radial" puts one in the middle, as one history step.
+    h.key_press(Key::M);
+    h.step();
+    assert_eq!(h.state().lib.develop().tool(), Some(ToolKind::Masks));
+    let before = history(&root, id);
+    h.get_by_label(mask_tool::ADD_RADIAL).click();
+    h.step();
+    h.step();
+    assert_eq!(masks(&h).0.len(), 1);
+    let added = history(&root, id);
+    assert!(added > before, "the add is saved");
+
+    // Its centre is the photo's centre: dragging it moves the mask, one step on release.
+    let centre = egui::pos2(600.0, 330.0);
+    let to = centre + egui::vec2(60.0, 0.0);
+    h.hover_at(centre);
+    h.step();
+    h.drag_at(centre);
+    h.step();
+    for i in 1..=4 {
+        h.hover_at(centre + (to - centre) * (i as f32 / 4.0));
+        h.step();
+    }
+    h.drop_at(to);
+    h.step();
+    h.step();
+    let Shape::Radial { cx, cy, .. } = masks(&h).0[0].shape else {
+        panic!("a radial")
+    };
+    assert!(
+        cx > 0.55 && (cy - 0.5).abs() < 0.02,
+        "moved right: {cx}, {cy}"
+    );
+    assert_eq!(history(&root, id), added + 1, "the drag is one step");
+
+    // Its own exposure (the panel's slider sets it the same way), as one more step.
+    h.get_by_label_contains("1. Radial gradient");
+    h.state_mut().lib.develop_mut().edit(|s| {
+        let mut m = Masks::from_settings(s);
+        m.0[0].local.exposure = 1.25;
+        m.write_into(s);
+    });
+    {
+        let s = h.state_mut();
+        s.lib.develop_mut().commit(&mut s.toasts);
+    }
+    h.step();
+    assert_eq!(masks(&h).0[0].local.exposure, 1.25);
+
+    // Delete removes the selected mask; undo brings it back.
+    h.key_press(Key::Delete);
+    h.step();
+    assert!(masks(&h).0.is_empty());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::Z);
+    h.step();
+    assert_eq!(masks(&h).0.len(), 1);
+    // Esc leaves the tool; the mask stays.
+    h.key_press(Key::Escape);
+    h.step();
+    assert_eq!(h.state().lib.develop().tool(), None);
+    assert_eq!(masks(&h).0.len(), 1);
+}

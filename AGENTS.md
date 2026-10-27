@@ -127,6 +127,8 @@ cargo test --workspace                   # includes the 228-render parity suite
 - Since 0.1.1 (unreleased): the console's `grade` (`crates/lf-app/src/grade_cli.rs`) and the
   grid's marquee multi-select (`library/grid.rs`, `library/selection.rs`), and culling:
   flags, stars and colour labels (`lf_catalog::cull`, `library/cull.rs`, `library/cull_ui.rs`).
+  Masks: linear and radial local adjustments, desktop-only in `desktop.masks`
+  (`lf_settings::masks`, `develop/tools/masks.rs`, `mask_weight` in `develop.wgsl`).
   Export finishing: sharpening, watermark, sRGB profile, WebP, EXIF in PNG/WebP
   (`lf_catalog::finish`). White balance eyedropper, Auto WB and Auto tone (`develop/auto.rs`, `ToolKind::WhiteBalance`,
   `lf_settings::shader_values::{wb_gains, neutral_wb}`).

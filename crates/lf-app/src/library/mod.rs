@@ -1200,6 +1200,7 @@ impl Library {
             Action::CropTool
             | Action::SpotTool
             | Action::WhiteBalanceTool
+            | Action::MaskTool
             | Action::LeaveTool
             | Action::ApplyCrop
             | Action::DeleteSpot => develop && self.develop.tool_enabled(action),
@@ -1257,6 +1258,7 @@ impl Library {
             Action::CropTool
             | Action::SpotTool
             | Action::WhiteBalanceTool
+            | Action::MaskTool
             | Action::LeaveTool
             | Action::ApplyCrop
             | Action::DeleteSpot => self.develop.tool_command(action, env.toasts),

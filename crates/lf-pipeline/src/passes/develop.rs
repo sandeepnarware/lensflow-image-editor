@@ -5,7 +5,8 @@ use crate::passes::{FullscreenPass, UniformArena, sampler_entry, texture_entry, 
 use crate::texture::Target;
 use lf_settings::EditSettings;
 use lf_settings::geometry::Affine;
-use lf_settings::shader_values::shader_values;
+use lf_settings::masks::{MAX_MASKS, Mask, Masks, Shape};
+use lf_settings::shader_values::{shader_values, wb_gains};
 
 /// `DEVELOP`'s uniforms, laid out as `develop.wgsl`'s `Uniforms` (WGSL uniform layout: each
 /// `vec3` followed by a scalar fills a 16-byte row; arrays have a 16-byte stride). Field `x`
@@ -58,18 +59,94 @@ pub struct Uniforms {
     pub band_hue: [[f32; 4]; 8],
     /// `uBandWidth` in `x`.
     pub band_width: [[f32; 4]; 8],
+    /// Desktop only: how many of `masks` are in use (0: the web's pass exactly).
+    pub mask_count: u32,
+    /// The working photo's width per unit of height (masks work in a square space).
+    pub aspect: f32,
+    pub _mask_pad: [u32; 2],
+    pub masks: [MaskUniform; MAX_MASKS],
+}
+
+/// One local adjustment as `develop.wgsl`'s `MaskU` takes it (six 16-byte rows).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct MaskUniform {
+    /// kind (0 linear, 1 radial), invert (0 or 1), the radial's inner radius (1 − feather),
+    /// unused.
+    pub kind: [f32; 4],
+    /// Linear: start x, y and end x, y. Radial: centre x, y and radii x, y. All in the square
+    /// space (x × aspect).
+    pub shape: [f32; 4],
+    /// Radial: cos and sin of the angle.
+    pub turn: [f32; 4],
+    /// Exposure (stops), contrast, highlights, shadows (÷ 100).
+    pub tone: [f32; 4],
+    /// Whites, blacks, saturation, clarity (÷ 100).
+    pub more: [f32; 4],
+    /// The white-balance multiplier where the mask applies fully (normalised as the global
+    /// one is), and an unused `w`.
+    pub wb: [f32; 4],
+}
+
+impl MaskUniform {
+    fn new(m: &Mask, aspect: f64) -> MaskUniform {
+        let p = |x: f64| (x / 100.0) as f32;
+        let l = &m.local;
+        let g = wb_gains(l.temperature, l.tint);
+        let y = 0.2126 * g[0] + 0.7152 * g[1] + 0.0722 * g[2];
+        let (kind, shape, turn, inner) = match m.shape {
+            Shape::Linear { x0, y0, x1, y1 } => (
+                0.0,
+                [x0 * aspect, y0, x1 * aspect, y1].map(|v| v as f32),
+                [1.0, 0.0, 0.0, 0.0],
+                0.0,
+            ),
+            Shape::Radial {
+                cx,
+                cy,
+                rx,
+                ry,
+                angle,
+                feather,
+            } => {
+                let (s, c) = angle.to_radians().sin_cos();
+                (
+                    1.0,
+                    [cx * aspect, cy, rx, ry].map(|v| v as f32),
+                    [c as f32, s as f32, 0.0, 0.0],
+                    (1.0 - feather / 100.0) as f32,
+                )
+            }
+        };
+        MaskUniform {
+            kind: [kind, f32::from(u8::from(m.invert)), inner, 0.0],
+            shape,
+            turn,
+            tone: [
+                l.exposure as f32,
+                p(l.contrast),
+                p(l.highlights),
+                p(l.shadows),
+            ],
+            more: [p(l.whites), p(l.blacks), p(l.saturation), p(l.clarity)],
+            wb: [(g[0] / y) as f32, (g[1] / y) as f32, (g[2] / y) as f32, 0.0],
+        }
+    }
 }
 
 // The WGSL layout, checked where it is easiest to get wrong: the first vec3, the WGSL-only
-// `pixel` and the three 16-byte-stride arrays.
+// `pixel`, the three 16-byte-stride arrays and the masks after them.
 const _: () = {
     use std::mem::{offset_of, size_of};
-    assert!(size_of::<Uniforms>() == 624);
+    assert!(size_of::<MaskUniform>() == 96);
+    assert!(size_of::<Uniforms>() == 624 + 16 + MAX_MASKS * 96);
     assert!(offset_of!(Uniforms, wb) == 128);
     assert!(offset_of!(Uniforms, pixel) == 232);
     assert!(offset_of!(Uniforms, hsl) == 240);
     assert!(offset_of!(Uniforms, band_hue) == 240 + 8 * 16);
     assert!(offset_of!(Uniforms, band_width) == 240 + 2 * 8 * 16);
+    assert!(offset_of!(Uniforms, mask_count) == 624);
+    assert!(offset_of!(Uniforms, masks) == 640);
 };
 
 /// Where the develop pass draws from and how (the arguments of `developPass` that are not
@@ -96,6 +173,12 @@ impl Uniforms {
     pub fn new(s: &EditSettings, f: &Frame, sharp_ready: bool, texture_ready: bool) -> Uniforms {
         let m = f.matrix.map(|v| v as f32);
         let v = shader_values(s);
+        let masks = Masks::from_settings(s);
+        let aspect = f64::from(f.img_size[0]) / f64::from(f.img_size[1].max(1));
+        let mut mask_uniforms = [MaskUniform::default(); MAX_MASKS];
+        for (slot, mask) in mask_uniforms.iter_mut().zip(&masks.0) {
+            *slot = MaskUniform::new(mask, aspect);
+        }
         let p = |x: f64| (x / 100.0) as f32;
         let mut hsl = [[0.0f32; 4]; 8];
         let mut band_hue = [[0.0f32; 4]; 8];
@@ -148,6 +231,10 @@ impl Uniforms {
             hsl,
             band_hue,
             band_width,
+            mask_count: masks.0.len() as u32,
+            aspect: aspect as f32,
+            _mask_pad: [0; 2],
+            masks: mask_uniforms,
         }
     }
 }

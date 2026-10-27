@@ -6,6 +6,7 @@
 //! removes the selected spot.
 
 pub mod crop;
+pub mod masks;
 pub mod spots;
 
 use super::panels;
@@ -18,7 +19,10 @@ use crop::CropTool;
 use eframe::egui::{self, Color32, CursorIcon, Pos2, Rect, RichText, Stroke};
 use lf_pipeline::renderer::View;
 use lf_settings::geometry::{self, Geometry, apply, invert, output_to_source};
+use lf_settings::masks::{Mask, Masks, Shape};
 use lf_settings::{Crop, EditSettings, MAX_SPOTS, Spot, SpotMode};
+use masks::MaskTool;
+use panels::slider::Range;
 use spots::SpotTool;
 
 /// What a tool did: the settings changed (redraw), and/or a step must be committed.
@@ -44,11 +48,14 @@ pub enum ToolKind {
     Spots,
     /// The white-balance eyedropper: one click sets temperature and tint, then it closes.
     WhiteBalance,
+    /// Local adjustments: linear and radial gradients with their own sliders.
+    Masks,
 }
 
 pub const CROP: &str = "Crop";
 pub const SPOTS: &str = "Spots";
 pub const WHITE_BALANCE: &str = "White balance";
+pub const MASKS: &str = "Masks";
 /// The eyedropper's hint, in its panel.
 pub const WB_HINT: &str = "Click something that should be grey or white. Esc leaves.";
 /// The crop panel's buttons: apply (`Enter`) and put back (`Esc`).
@@ -61,6 +68,7 @@ pub enum Active {
     Crop(Box<CropTool>),
     Spots(SpotTool),
     WhiteBalance,
+    Masks(MaskTool),
 }
 
 /// The tools' state in the Develop view.
@@ -86,6 +94,7 @@ impl Tools {
             Some(Active::Crop(_)) => Some(ToolKind::Crop),
             Some(Active::Spots(_)) => Some(ToolKind::Spots),
             Some(Active::WhiteBalance) => Some(ToolKind::WhiteBalance),
+            Some(Active::Masks(_)) => Some(ToolKind::Masks),
             None => None,
         }
     }
@@ -94,6 +103,9 @@ impl Tools {
     pub fn clear_selection(&mut self) {
         if let Some(Active::Spots(tool)) = &mut self.active {
             tool.clear_selection();
+        }
+        if let Some(Active::Masks(tool)) = &mut self.active {
+            tool.grab = None;
         }
     }
 }
@@ -245,6 +257,7 @@ impl Develop {
             }
             ToolKind::Spots => Active::Spots(SpotTool::new(self.tools.spot_mode)),
             ToolKind::WhiteBalance => Active::WhiteBalance,
+            ToolKind::Masks => Active::Masks(MaskTool::default()),
         });
         self.panels.curve.clear_selection();
         self.settings_changed();
@@ -262,6 +275,7 @@ impl Develop {
                 self.tools.spot_mode = tool.mode;
                 self.commit(toasts);
             }
+            Some(Active::Masks(_)) => self.commit(toasts),
             Some(Active::WhiteBalance) | None => {}
         }
     }
@@ -287,11 +301,14 @@ impl Develop {
             return false;
         }
         match action {
-            Action::CropTool | Action::SpotTool | Action::WhiteBalanceTool => true,
+            Action::CropTool | Action::SpotTool | Action::WhiteBalanceTool | Action::MaskTool => {
+                true
+            }
             Action::LeaveTool => self.tool().is_some(),
             Action::ApplyCrop => self.tool() == Some(ToolKind::Crop),
             Action::DeleteSpot => {
                 matches!(&self.tools.active, Some(Active::Spots(t)) if t.selected.is_some())
+                    || matches!(&self.tools.active, Some(Active::Masks(t)) if t.selected.is_some())
             }
             _ => false,
         }
@@ -303,16 +320,30 @@ impl Develop {
             Action::CropTool => self.toggle_tool(ToolKind::Crop, toasts),
             Action::SpotTool => self.toggle_tool(ToolKind::Spots, toasts),
             Action::WhiteBalanceTool => self.toggle_tool(ToolKind::WhiteBalance, toasts),
+            Action::MaskTool => self.toggle_tool(ToolKind::Masks, toasts),
             Action::LeaveTool => self.cancel_tool(toasts),
             Action::ApplyCrop => self.leave_tool(toasts),
             Action::DeleteSpot => {
-                if let (Some(Active::Spots(tool)), Some(edit)) =
-                    (&mut self.tools.active, self.session.edit_mut())
-                {
-                    let mut out = ToolOutput::default();
-                    edit.set(|s| out = tool.remove_selected(&mut s.spots));
-                    self.absorb_tool(out, toasts);
+                let mut out = ToolOutput::default();
+                match (&mut self.tools.active, self.session.edit_mut()) {
+                    (Some(Active::Spots(tool)), Some(edit)) => {
+                        edit.set(|s| out = tool.remove_selected(&mut s.spots));
+                    }
+                    (Some(Active::Masks(tool)), Some(edit)) => {
+                        edit.set(|s| {
+                            let mut masks = Masks::from_settings(s);
+                            if tool.remove_selected(&mut masks) {
+                                masks.write_into(s);
+                                out = ToolOutput {
+                                    changed: true,
+                                    commit: true,
+                                };
+                            }
+                        });
+                    }
+                    _ => {}
                 }
+                self.absorb_tool(out, toasts);
             }
             _ => {}
         }
@@ -345,6 +376,55 @@ impl Develop {
         // Where the eyedropper was clicked (the sample is read once the borrows end).
         let mut picked = None;
         match active {
+            Active::Masks(tool) => {
+                let spot_map = SpotMap::new(map, &edit.settings, full, output_w);
+                let aspect = spot_map.aspect;
+                // The handles' reach, in the masks' square units (fractions of the height).
+                let reach = spot_map.width_fraction(HANDLE_REACH) * aspect;
+                if response.drag_started()
+                    && let Some(at) = origin
+                {
+                    tool.press(
+                        &Masks::from_settings(&edit.settings),
+                        spot_map.uv(at),
+                        aspect,
+                        reach,
+                    );
+                }
+                if response.dragged()
+                    && tool.grab.is_some()
+                    && let Some(at) = pointer
+                {
+                    let p = spot_map.uv(at);
+                    edit.set(|s| {
+                        let mut masks = Masks::from_settings(s);
+                        if tool.drag_to(&mut masks, p, aspect) {
+                            masks.write_into(s);
+                            out.changed = true;
+                        }
+                    });
+                }
+                if response.drag_stopped() && tool.release() {
+                    out.commit = true;
+                }
+                // A click picks the mask under it (and changes nothing).
+                if response.clicked()
+                    && let Some(at) = origin.or(pointer)
+                {
+                    tool.press(
+                        &Masks::from_settings(&edit.settings),
+                        spot_map.uv(at),
+                        aspect,
+                        reach,
+                    );
+                    tool.release();
+                }
+                // A drag that caught no handle pans the photo.
+                input.owns_drag = tool.grab.is_some();
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+                }
+            }
             Active::WhiteBalance => {
                 if response.hovered() {
                     ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
@@ -477,6 +557,13 @@ impl Develop {
         match active {
             Active::Crop(tool) => paint_crop(&painter, map, &edit.settings.crop, tool.grid()),
             Active::WhiteBalance => {}
+            Active::Masks(tool) => {
+                let spot_map = SpotMap::new(map, &edit.settings, full, output_w);
+                let masks = Masks::from_settings(&edit.settings);
+                for (i, m) in masks.0.iter().enumerate() {
+                    paint_mask(&painter, &spot_map, m, tool.selected == Some(i));
+                }
+            }
             Active::Spots(tool) => {
                 let spot_map = SpotMap::new(map, &edit.settings, full, output_w);
                 for (i, s) in edit.settings.spots.iter().enumerate() {
@@ -490,7 +577,8 @@ impl Develop {
     pub(super) fn tool_ui(&mut self, ui: &mut egui::Ui, toasts: &mut Toasts) {
         let open = self.tool();
         let mut toggle = None;
-        ui.horizontal(|ui| {
+        // Wrapped: four tools are close to the side panel's width.
+        ui.horizontal_wrapped(|ui| {
             let crop = ui
                 .selectable_label(open == Some(ToolKind::Crop), CROP)
                 .on_hover_text("Crop and straighten (R)");
@@ -508,6 +596,12 @@ impl Develop {
                 .on_hover_text("Pick a neutral colour (W)");
             if wb.clicked() {
                 toggle = Some(ToolKind::WhiteBalance);
+            }
+            let masks = ui
+                .selectable_label(open == Some(ToolKind::Masks), MASKS)
+                .on_hover_text("Local adjustments: linear and radial gradients (M)");
+            if masks.clicked() {
+                toggle = Some(ToolKind::Masks);
             }
         });
         if let Some(kind) = toggle {
@@ -547,6 +641,21 @@ impl Develop {
             Active::WhiteBalance => {
                 ui.label(RichText::new(WB_HINT).color(theme::MUTED));
             }
+            Active::Masks(tool) => {
+                let mut refused = None;
+                edit.set(|s| {
+                    let mut masks = Masks::from_settings(s);
+                    let (o, problem) = masks_panel(ui, tool, &mut masks);
+                    if o.changed {
+                        masks.write_into(s);
+                    }
+                    out = o;
+                    refused = problem;
+                });
+                if let Some(problem) = refused {
+                    toasts.push(Level::Warning, problem);
+                }
+            }
         }
         ui.separator();
         self.absorb_tool(out, toasts);
@@ -554,6 +663,142 @@ impl Develop {
             Some(CropAction::Done) => self.leave_tool(toasts),
             Some(CropAction::Cancel) => self.cancel_tool(toasts),
             None => {}
+        }
+    }
+}
+
+/// A mask's exposure range (stops) and its turn (degrees).
+const MASK_EXPOSURE: Range = Range::new(-4.0, 4.0).step(0.05, 2);
+const MASK_ANGLE: Range = Range::new(0.0, 360.0).step(1.0, 0);
+
+/// The masks panel: the hint, the add buttons, the list (click to pick one) and the picked
+/// mask's own settings. Returns what changed, and why an add was refused.
+fn masks_panel(
+    ui: &mut egui::Ui,
+    tool: &mut MaskTool,
+    list: &mut Masks,
+) -> (ToolOutput, Option<&'static str>) {
+    let step = ToolOutput {
+        changed: true,
+        commit: true,
+    };
+    let mut out = ToolOutput::default();
+    let mut problem = None;
+    ui.label(RichText::new(masks::HINT).color(theme::MUTED));
+    ui.horizontal(|ui| {
+        for (label, linear) in [(masks::ADD_LINEAR, true), (masks::ADD_RADIAL, false)] {
+            if ui.button(label).clicked() {
+                let mask = if linear {
+                    Mask::linear()
+                } else {
+                    Mask::radial()
+                };
+                match tool.add(list, mask) {
+                    Ok(()) => out = step,
+                    Err(e) => problem = Some(e),
+                }
+            }
+        }
+    });
+    for (i, m) in list.0.iter().enumerate() {
+        let name = format!("{}. {}", i + 1, m.kind_name());
+        if ui
+            .selectable_label(tool.selected == Some(i), name)
+            .clicked()
+        {
+            tool.selected = Some(i);
+        }
+    }
+    let Some(i) = tool.selected.filter(|&i| i < list.0.len()) else {
+        return (out, problem);
+    };
+    ui.separator();
+    let m = &mut list.0[i];
+    if ui.checkbox(&mut m.invert, masks::INVERT).changed() {
+        out = step;
+    }
+    let mut absorb = |r: panels::slider::SliderResponse| {
+        out.changed |= r.changed;
+        out.commit |= r.released;
+    };
+    if let Shape::Radial { feather, angle, .. } = &mut m.shape {
+        absorb(panels::slider::edit(
+            ui,
+            "Feather",
+            feather,
+            Range::AMOUNT,
+            None,
+        ));
+        absorb(panels::slider::edit(ui, "Angle", angle, MASK_ANGLE, None));
+    }
+    for (label, value) in m.local.sliders() {
+        let range = if label == "Exposure" {
+            MASK_EXPOSURE
+        } else {
+            Range::BIPOLAR
+        };
+        absorb(panels::slider::edit(ui, label, value, range, None));
+    }
+    if ui.button(masks::REMOVE).on_hover_text("Delete").clicked() && tool.remove_selected(list) {
+        out = step;
+    }
+    (out, problem)
+}
+
+/// A mask over the photo: a radial's outline, a linear's three lines, and the handles. The
+/// mask being edited is drawn in the brand colour.
+fn paint_mask(painter: &egui::Painter, map: &SpotMap, m: &Mask, selected: bool) {
+    let colour = if selected {
+        theme::BRAND_CONTRAST
+    } else {
+        Color32::from_white_alpha(150)
+    };
+    let stroke = Stroke::new(if selected { 2.0 } else { 1.0 }, colour);
+    let shadow = Stroke::new(stroke.width + 1.5, Color32::from_black_alpha(90));
+    let handle = |at: (f64, f64)| {
+        let p = map.screen(at);
+        let r = if selected { 5.0 } else { 3.5 };
+        painter.circle(
+            p,
+            r,
+            if selected {
+                theme::BRAND
+            } else {
+                Color32::WHITE
+            },
+            Stroke::new(1.5, colour),
+        );
+    };
+    match m.shape {
+        Shape::Linear { x0, y0, x1, y1 } => {
+            // Lines long enough to cross any photo (they are clipped to it).
+            if let Some(lines) = masks::linear_lines(&m.shape, map.aspect, 3.0) {
+                for (k, [a, b]) in lines.into_iter().enumerate() {
+                    let (a, b) = (map.screen(a), map.screen(b));
+                    painter.line_segment([a, b], shadow);
+                    if k == 1 {
+                        painter.extend(egui::Shape::dashed_line(&[a, b], stroke, 6.0, 4.0));
+                    } else {
+                        painter.line_segment([a, b], stroke);
+                    }
+                }
+            }
+            handle((x0, y0));
+            handle((x1, y1));
+            handle(((x0 + x1) / 2.0, (y0 + y1) / 2.0));
+        }
+        Shape::Radial { .. } => {
+            let ring: Vec<Pos2> = masks::radial_outline(&m.shape, map.aspect, 96)
+                .into_iter()
+                .map(|p| map.screen(p))
+                .collect();
+            painter.add(egui::Shape::closed_line(ring.clone(), shadow));
+            painter.add(egui::Shape::closed_line(ring, stroke));
+            if let Some(handles) = masks::radial_handles(&m.shape, map.aspect) {
+                for at in handles {
+                    handle(at);
+                }
+            }
         }
     }
 }
