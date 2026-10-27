@@ -7,6 +7,7 @@
 //! keyboard, nor while a dialog is open; tool keys act only in Develop.
 
 use eframe::egui::{Event, InputState, Key, KeyboardShortcut, ModifierNames, Modifiers};
+use lf_catalog::cull::{Flag, Label};
 
 /// What a menu item or a key asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -35,6 +36,12 @@ pub enum Action {
     MatchReference,
     AddVersion,
     ResetAll,
+    /// Pick, reject or unflag the selected photos (the open one in Develop).
+    Flag(Flag),
+    /// 0 (no stars) to 5 stars.
+    Rate(u8),
+    /// A colour label, or none; a label already on every photo comes off.
+    Label(Option<Label>),
     // Account
     SwitchStudio,
     CheckEntitlement,
@@ -78,6 +85,21 @@ impl Action {
             Action::MatchReference => "Match a reference…",
             Action::AddVersion => "Add version…",
             Action::ResetAll => "Reset all edits",
+            Action::Flag(Flag::Picked) => "Flag as pick",
+            Action::Flag(Flag::Rejected) => "Flag as rejected",
+            Action::Flag(Flag::Unflagged) => "Unflag",
+            Action::Rate(0) => "No stars",
+            Action::Rate(1) => "1 star",
+            Action::Rate(2) => "2 stars",
+            Action::Rate(3) => "3 stars",
+            Action::Rate(4) => "4 stars",
+            Action::Rate(_) => "5 stars",
+            Action::Label(None) => "No colour label",
+            Action::Label(Some(Label::Red)) => "Red label",
+            Action::Label(Some(Label::Yellow)) => "Yellow label",
+            Action::Label(Some(Label::Green)) => "Green label",
+            Action::Label(Some(Label::Blue)) => "Blue label",
+            Action::Label(Some(Label::Purple)) => "Purple label",
             Action::SwitchStudio => "Switch studio",
             Action::CheckEntitlement => "Check entitlement now",
             Action::SignOut => "Sign out",
@@ -153,6 +175,19 @@ pub const MAP: Map = Map(&[
     (Action::LeaveTool, key(Key::Escape)),
     (Action::ApplyCrop, key(Key::Enter)),
     (Action::DeleteSpot, key(Key::Delete)),
+    (Action::Flag(Flag::Picked), key(Key::P)),
+    (Action::Flag(Flag::Rejected), key(Key::X)),
+    (Action::Flag(Flag::Unflagged), key(Key::U)),
+    (Action::Rate(0), key(Key::Num0)),
+    (Action::Rate(1), key(Key::Num1)),
+    (Action::Rate(2), key(Key::Num2)),
+    (Action::Rate(3), key(Key::Num3)),
+    (Action::Rate(4), key(Key::Num4)),
+    (Action::Rate(5), key(Key::Num5)),
+    (Action::Label(Some(Label::Red)), key(Key::Num6)),
+    (Action::Label(Some(Label::Yellow)), key(Key::Num7)),
+    (Action::Label(Some(Label::Green)), key(Key::Num8)),
+    (Action::Label(Some(Label::Blue)), key(Key::Num9)),
     (Action::About, key(Key::F1)),
 ]);
 
@@ -289,6 +324,13 @@ mod tests {
             (Action::ToggleZoom, key(Key::Space)),
             (Action::LeaveTool, key(Key::Escape)),
             (Action::DeleteSpot, key(Key::Delete)),
+            (Action::Flag(Flag::Picked), key(Key::P)),
+            (Action::Flag(Flag::Rejected), key(Key::X)),
+            (Action::Flag(Flag::Unflagged), key(Key::U)),
+            (Action::Rate(0), key(Key::Num0)),
+            (Action::Rate(5), key(Key::Num5)),
+            (Action::Label(Some(Label::Red)), key(Key::Num6)),
+            (Action::Label(Some(Label::Blue)), key(Key::Num9)),
             (Action::About, key(Key::F1)),
         ]
     }

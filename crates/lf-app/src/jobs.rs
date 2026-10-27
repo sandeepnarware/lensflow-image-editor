@@ -128,6 +128,12 @@ pub enum Msg {
         folder_id: i64,
         result: Result<(), String>,
     },
+    /// Flags, stars or a colour label were saved in the catalogue at `root` (the grid already
+    /// shows them); an error reloads the folder's rows.
+    Marked {
+        root: PathBuf,
+        result: Result<usize, String>,
+    },
     /// A photo opened for Develop (or why it cannot be), for the request of `generation`;
     /// answers from an older request are dropped.
     Opened {
@@ -666,6 +672,7 @@ pub(crate) mod owners {
             | Msg::Folders { .. }
             | Msg::Photos { .. }
             | Msg::FolderRemoved { .. }
+            | Msg::Marked { .. }
             | Msg::Opened { .. }
             | Msg::Preopened { .. }
             | Msg::SidecarWritten(..)
@@ -729,6 +736,10 @@ pub(crate) mod owners {
             },
             Msg::FolderRemoved {
                 folder_id: 1,
+                result: Err("no".into()),
+            },
+            Msg::Marked {
+                root: dir.join("elsewhere"),
                 result: Err("no".into()),
             },
             Msg::Opened {

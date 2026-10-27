@@ -62,7 +62,14 @@ lists them.
 The photos are never modified: the edit files are new `<photo>.lensflow.json`
 sidecars (a damaged one is left alone and that photo skipped). `Ctrl`+click
 adds or removes one photo and dragging a box over the grid selects everything
-inside it. See [docs/app.md](docs/app.md).
+inside it.
+
+Culling follows Lightroom: `P`, `X` and `U` pick, reject and unflag; `0`–`5`
+set stars; `6`–`9` set a red, yellow, green or blue label (pressed again, it
+comes off). In the grid they mark every selected photo, in Develop the open one.
+The bar over the grid shows only some flags, ratings or labels and sorts by
+capture time, file name or rating. Marks live in the catalogue, not in the edit
+files. See [docs/app.md](docs/app.md).
 
 The window needs a graphics adapter. With no driver it runs on a software
 adapter (WARP on Windows, lavapipe on Linux) and says "No graphics driver found:
@@ -90,6 +97,9 @@ and the tool keys work only in Develop.
 | `Esc` | Leave the tool |
 | `Enter` | Apply the crop |
 | `Delete` | Remove the selected spot |
+| `P` / `X` / `U` | Flag as pick / rejected / unflag |
+| `0`–`5` | No stars to five stars |
+| `6`–`9` | Red, yellow, green, blue label (again: off) |
 | `F1` | About |
 
 ## Crates

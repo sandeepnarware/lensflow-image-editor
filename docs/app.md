@@ -277,6 +277,33 @@ click. A drag that starts in the empty space below or beside the cells draws a b
 too. Only the cells on screen are found by a box, and a box that stays in the gaps
 between cells selects nothing until it reaches one.
 
+### Culling: flags, stars and colour labels
+
+`P`, `X` and `U` pick, reject and unflag; `0`–`5` set stars; `6`–`9` set a red,
+yellow, green or blue label (purple and "no label" are in Photo → Set colour label).
+A label already on every photo it is pressed on comes off instead. In the grid a mark
+goes on every selected photo; in Develop, on the open one. The grid shows it at once
+(`library::cull::apply`) and the catalogue is written on the `Io` lane
+(`Catalog::mark`, one transaction); if that fails, a toast says so and the folder's
+rows are read again, so the grid shows what was saved.
+
+Marks are the `flag`, `rating` and `label` columns of `photos` (Lightroom's numbers
+for flags: 1 picked, -1 rejected). They live only in the catalogue, not in the
+sidecar: they are about choosing photos, not how one looks. Setting one never touches
+`photos.updated_at`, which is part of a thumbnail's key. A label name this version
+does not know reads as no label and is left alone by other marks.
+
+A cell shows its stars under the thumbnail, a flag and a colour dot in its top-right
+corner, and a rejected photo dimmed. The bar over the grid (`library::cull::Filter`)
+shows only some flags ("Hide rejected", picked, ...), a minimum rating or one label,
+and sorts by capture time, file name or rating (equal ratings stay in capture order).
+The grid, the filmstrip and the arrow keys all follow its list. The filter is not
+saved: one left on from last week would look like lost photos, so the status bar says
+"12 of 340 photos" while it hides some. When the active photo is hidden (rejected with
+"Hide rejected" on), the photo that took its place becomes active, so `X`, `X`, `X`
+walks through a shoot. The photo open in Develop stays in the list while it is open,
+even if the filter would hide it.
+
 | Key | Action |
 |-----|--------|
 | `G` | Library |
@@ -296,4 +323,7 @@ between cells selects nothing until it reaches one.
 | `Esc` | Leave the tool (the crop tool puts back what it started with) |
 | `Enter` | Apply the crop |
 | `Delete` | Remove the selected spot |
+| `P` / `X` / `U` | Flag as pick / rejected / unflag |
+| `0`–`5` | No stars to five stars |
+| `6`–`9` | Red, yellow, green, blue label (again: off) |
 | `F1` | About |

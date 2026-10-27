@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 
+use crate::cull::{Flag, Label, MAX_RATING};
 use crate::model::{NewPhoto, now, ts};
 
 #[derive(Debug, thiserror::Error)]
@@ -15,6 +16,8 @@ pub enum CatalogError {
     Json(#[from] serde_json::Error),
     #[error("not found: {0}")]
     NotFound(String),
+    #[error("A rating is 0 to 5 stars, not {0}.")]
+    BadRating(u8),
     #[error("corrupt sidecar: {0}")]
     Corrupt(String),
     #[error("export: {0}")]
@@ -397,7 +400,7 @@ impl Folder {
 }
 
 /// One photo as the library shows it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PhotoRow {
     pub id: i64,
     pub folder_id: i64,
@@ -417,11 +420,18 @@ pub struct PhotoRow {
     /// The photo has a row in `edits`.
     pub edited: bool,
     pub updated_at: String,
+    /// Pick or reject ([`crate::cull`]).
+    pub flag: Flag,
+    /// 0 (no stars) to 5.
+    pub rating: u8,
+    /// `None` also when the stored label is one this version does not know.
+    pub label: Option<Label>,
 }
 
 const PHOTO_COLUMNS: &str = "p.id, p.folder_id, p.path, p.width, p.height, p.camera, p.lens,
      p.captured_at, p.kind, p.error, p.sidecar_error, p.missing,
-     EXISTS (SELECT 1 FROM edits e WHERE e.photo_id = p.id), p.updated_at";
+     EXISTS (SELECT 1 FROM edits e WHERE e.photo_id = p.id), p.updated_at,
+     p.flag, p.rating, p.label";
 
 fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
     Ok(PhotoRow {
@@ -439,6 +449,13 @@ fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
         missing: r.get(11)?,
         edited: r.get(12)?,
         updated_at: r.get(13)?,
+        flag: Flag::from_stored(r.get(14)?),
+        // Clamped, so a hand-edited row cannot show more than five stars.
+        rating: r.get::<_, i64>(15)?.clamp(0, i64::from(MAX_RATING)) as u8,
+        label: r
+            .get::<_, Option<String>>(16)?
+            .as_deref()
+            .and_then(Label::from_key),
     })
 }
 

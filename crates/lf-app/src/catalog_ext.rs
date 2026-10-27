@@ -116,6 +116,13 @@ pub fn remove_folder(root: &Path, folder_id: i64) -> Result<(), String> {
         .map_err(text)
 }
 
+/// Sets a flag, stars or a colour label on the photos `ids`; returns how many changed.
+pub fn mark(root: &Path, ids: &[i64], mark: lf_catalog::cull::Mark) -> Result<usize, String> {
+    Catalog::open(root)
+        .and_then(|c| c.mark(ids, mark))
+        .map_err(text)
+}
+
 /// Marks every photo of the folder missing, once the user confirmed the folder was emptied.
 pub fn mark_missing_confirmed(root: &Path, folder_id: i64) -> Result<usize, String> {
     Catalog::open(root)

@@ -322,6 +322,7 @@ impl Library {
         self.current_folder = None;
         self.loading = None;
         self.photos.clear();
+        self.rows.clear();
         self.order.clear();
         self.index.clear();
         self.selection = Default::default();

@@ -5,6 +5,7 @@
 use crate::session::Session;
 use crate::shortcuts::{Action, MAP};
 use eframe::egui;
+use lf_catalog::cull::{Flag, Label};
 use std::collections::HashSet;
 
 /// One line of a menu.
@@ -14,9 +15,39 @@ pub enum Item {
     Separator,
     /// The studio signed in to (a label).
     Studio,
+    /// A submenu.
+    Sub(&'static str, &'static [Item]),
 }
 
-use Item::{Do, Separator, Studio};
+use Item::{Do, Separator, Studio, Sub};
+
+/// Photo → Set flag.
+const FLAGS: &[Item] = &[
+    Do(Action::Flag(Flag::Picked)),
+    Do(Action::Flag(Flag::Rejected)),
+    Do(Action::Flag(Flag::Unflagged)),
+];
+
+/// Photo → Set rating.
+const RATINGS: &[Item] = &[
+    Do(Action::Rate(0)),
+    Do(Action::Rate(1)),
+    Do(Action::Rate(2)),
+    Do(Action::Rate(3)),
+    Do(Action::Rate(4)),
+    Do(Action::Rate(5)),
+];
+
+/// Photo → Set colour label.
+const LABELS: &[Item] = &[
+    Do(Action::Label(Some(Label::Red))),
+    Do(Action::Label(Some(Label::Yellow))),
+    Do(Action::Label(Some(Label::Green))),
+    Do(Action::Label(Some(Label::Blue))),
+    Do(Action::Label(Some(Label::Purple))),
+    Separator,
+    Do(Action::Label(None)),
+];
 
 /// The menus and their items, in order.
 pub const MENUS: &[(&str, &[Item])] = &[
@@ -60,6 +91,10 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Do(Action::MatchReference),
             Do(Action::AddVersion),
             Do(Action::ResetAll),
+            Separator,
+            Sub("Set flag", FLAGS),
+            Sub("Set rating", RATINGS),
+            Sub("Set colour label", LABELS),
         ],
     ),
     (
@@ -84,6 +119,24 @@ pub const MENUS: &[(&str, &[Item])] = &[
 
 /// Shown in the Account menu when no studio is open.
 pub const NOT_SIGNED_IN: &str = "Not signed in";
+
+/// Every action the menus hold, submenus included.
+pub fn actions() -> Vec<Action> {
+    fn walk(items: &[Item], out: &mut Vec<Action>) {
+        for item in items {
+            match item {
+                Do(action) => out.push(*action),
+                Sub(_, items) => walk(items, out),
+                Separator | Studio => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (_, items) in MENUS {
+        walk(items, &mut out);
+    }
+    out
+}
 
 /// What the menus show: the actions possible now, the studio, and the Before/After state.
 #[derive(Debug, Clone, Default)]
@@ -120,39 +173,45 @@ pub fn bar(ui: &mut egui::Ui, state: &MenuState) -> Option<Action> {
     let mut clicked = None;
     egui::MenuBar::new().ui(ui, |ui| {
         for (title, items) in MENUS {
-            ui.menu_button(*title, |ui| {
-                for item in *items {
-                    match item {
-                        Separator => {
-                            ui.separator();
-                        }
-                        Studio => {
-                            let name = state.studio.as_deref().unwrap_or(NOT_SIGNED_IN);
-                            ui.label(egui::RichText::new(name).strong());
-                        }
-                        Do(action) => {
-                            let mut button = if *action == Action::BeforeAfter {
-                                egui::Button::selectable(state.before, action.label())
-                            } else {
-                                egui::Button::new(action.label())
-                            };
-                            if let Some(shortcut) = MAP.shortcut(*action) {
-                                button = button.shortcut_text(ui.ctx().format_shortcut(&shortcut));
-                            }
-                            if ui
-                                .add_enabled(state.enabled.contains(action), button)
-                                .clicked()
-                            {
-                                clicked = Some(*action);
-                                ui.close();
-                            }
-                        }
-                    }
-                }
-            });
+            ui.menu_button(*title, |ui| items_ui(ui, items, state, &mut clicked));
         }
     });
     clicked
+}
+
+/// One menu's (or submenu's) lines.
+fn items_ui(ui: &mut egui::Ui, items: &[Item], state: &MenuState, clicked: &mut Option<Action>) {
+    for item in items {
+        match item {
+            Separator => {
+                ui.separator();
+            }
+            Studio => {
+                let name = state.studio.as_deref().unwrap_or(NOT_SIGNED_IN);
+                ui.label(egui::RichText::new(name).strong());
+            }
+            Sub(title, items) => {
+                ui.menu_button(*title, |ui| items_ui(ui, items, state, clicked));
+            }
+            Do(action) => {
+                let mut button = if *action == Action::BeforeAfter {
+                    egui::Button::selectable(state.before, action.label())
+                } else {
+                    egui::Button::new(action.label())
+                };
+                if let Some(shortcut) = MAP.shortcut(*action) {
+                    button = button.shortcut_text(ui.ctx().format_shortcut(&shortcut));
+                }
+                if ui
+                    .add_enabled(state.enabled.contains(action), button)
+                    .clicked()
+                {
+                    *clicked = Some(*action);
+                    ui.close();
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -162,14 +221,7 @@ mod tests {
     use egui_kittest::kittest::Queryable as _;
 
     fn every_action() -> HashSet<Action> {
-        MENUS
-            .iter()
-            .flat_map(|(_, items)| items.iter())
-            .filter_map(|item| match item {
-                Do(action) => Some(*action),
-                _ => None,
-            })
-            .collect()
+        actions().into_iter().collect()
     }
 
     #[test]
@@ -206,7 +258,14 @@ mod tests {
             ),
             (
                 "Photo",
-                &["Match a reference…", "Add version…", "Reset all edits"],
+                &[
+                    "Match a reference…",
+                    "Add version…",
+                    "Reset all edits",
+                    "Set flag",
+                    "Set rating",
+                    "Set colour label",
+                ],
             ),
             (
                 "Account",
@@ -237,6 +296,31 @@ mod tests {
         h.get_by_label_contains("Keyboard shortcuts").click();
         h.run();
         assert_eq!(h.state().1, Some(Action::KeyboardShortcuts));
+        // A submenu's item too.
+        h.get_by_label("Photo").click();
+        h.run();
+        h.get_by_label("Set rating").hover();
+        h.run();
+        h.get_by_label_contains("3 stars").click();
+        h.run();
+        assert_eq!(h.state().1, Some(Action::Rate(3)));
+    }
+
+    #[test]
+    fn every_culling_action_is_in_a_menu() {
+        let all = every_action();
+        for action in [
+            Action::Flag(Flag::Picked),
+            Action::Flag(Flag::Rejected),
+            Action::Flag(Flag::Unflagged),
+            Action::Label(None),
+        ]
+        .into_iter()
+        .chain((0..=5).map(Action::Rate))
+        .chain(Label::ALL.into_iter().map(|l| Action::Label(Some(l))))
+        {
+            assert!(all.contains(&action), "{action:?} is in no menu");
+        }
     }
 
     #[test]

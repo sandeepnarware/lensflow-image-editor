@@ -1,6 +1,7 @@
 //! The catalogue: a SQLite database per catalogue folder, `<photo>.lensflow.json` sidecars, edit
 //! history and named versions. This crate never touches pixels.
 
+pub mod cull;
 pub mod db;
 pub mod edits;
 pub mod exif_embed;

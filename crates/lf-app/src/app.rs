@@ -12,7 +12,7 @@ use crate::dialogs::preferences::{self, PrefsAction, PrefsView};
 use crate::dialogs::{about, keys, quit};
 use crate::jobs::{Jobs, Lane, Msg};
 use crate::library::{self, Library};
-use crate::menu::{self, Item, MENUS, MenuState};
+use crate::menu::{self, MenuState};
 use crate::prefs::{Dirs, Prefs};
 use crate::screens::{self, View};
 use crate::session::Session;
@@ -224,13 +224,9 @@ impl App {
     }
 
     fn menu_state(&self) -> MenuState {
-        let enabled = MENUS
-            .iter()
-            .flat_map(|(_, items)| items.iter())
-            .filter_map(|item| match item {
-                Item::Do(action) if self.enabled(*action) => Some(*action),
-                _ => None,
-            })
+        let enabled = menu::actions()
+            .into_iter()
+            .filter(|action| self.enabled(*action))
             .collect();
         MenuState {
             enabled,

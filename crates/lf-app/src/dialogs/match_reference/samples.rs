@@ -104,6 +104,7 @@ pub(crate) mod tests {
             missing: false,
             edited,
             updated_at: String::new(),
+            ..PhotoRow::default()
         }
     }
 

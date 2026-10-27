@@ -5,6 +5,8 @@
 //! and rescans on the `Long` lane, each job with its own `Catalog`, answering with a [`Msg`]. So a folder never waits behind an import to
 //! show. The thumbnail pool has its own connections.
 
+pub mod cull;
+pub mod cull_ui;
 pub mod export_ui;
 pub mod filmstrip;
 pub mod grid;
@@ -30,6 +32,7 @@ use crate::thumbs_ui::{ThumbEvent, Thumbs};
 use crate::toast::{Level, Toasts};
 use eframe::egui::{self, Key, RichText};
 use eframe::egui_wgpu::RenderState;
+use lf_catalog::cull::Mark;
 use lf_catalog::{Folder, PhotoRow};
 use lf_pipeline::Gpu;
 use lf_raw::cache::FrameCache;
@@ -49,6 +52,10 @@ pub const SIDECAR_BADGE: &str = "Edit file damaged";
 pub const FAILED_BADGE: &str = "Can't open";
 /// Shown on a photo whose file is gone.
 pub const MISSING_BADGE: &str = "Missing";
+/// A flag, star or label could not be saved (the error follows).
+pub const MARK_FAILED: &str = "Could not save the flag, rating or label.";
+/// The filter bar hides every photo of the folder.
+pub const NONE_MATCH: &str = "No photos match the filter.";
 
 /// What the app needs from the library's surroundings while it handles a message or draws.
 pub struct Env<'a> {
@@ -97,11 +104,17 @@ pub struct Library {
     pub mode: Mode,
     folders: Vec<Folder>,
     current_folder: Option<i64>,
+    /// Every photo of the folder, in capture order (the catalogue's).
     photos: Vec<PhotoRow>,
-    /// Photo ids in display order (the same order as `photos`).
+    /// Index of each id in `photos`.
+    rows: HashMap<i64, usize>,
+    /// The ids the grid shows, in its order: `photos` through the filter bar's
+    /// [`cull::Filter`].
     order: Vec<i64>,
     /// Index of each id in `order`.
     index: HashMap<i64, usize>,
+    /// The filter bar: which photos the grid shows and how they are sorted.
+    filter: cull::Filter,
     pub selection: Selection,
     /// The box being dragged over the grid, while the mouse button is down.
     pub marquee: Option<grid::Marquee>,
@@ -170,8 +183,10 @@ impl Library {
             folders: Vec::new(),
             current_folder: None,
             photos: Vec::new(),
+            rows: HashMap::new(),
             order: Vec::new(),
             index: HashMap::new(),
+            filter: cull::Filter::default(),
             selection: Selection::default(),
             marquee: None,
             thumbs: Thumbs::default(),
@@ -278,9 +293,28 @@ impl Library {
         self.frames.as_deref()
     }
 
-    /// The photo with this id in the current folder.
+    /// The photo with this id in the current folder (shown or filtered out).
     pub fn photo(&self, id: i64) -> Option<&PhotoRow> {
-        self.index.get(&id).map(|&i| &self.photos[i])
+        self.rows.get(&id).map(|&i| &self.photos[i])
+    }
+
+    /// The ids the grid shows, in its order.
+    pub fn shown(&self) -> &[i64] {
+        &self.order
+    }
+
+    /// The filter bar's choice.
+    pub fn filter(&self) -> cull::Filter {
+        self.filter
+    }
+
+    /// Shows the photos `filter` keeps, in its order.
+    pub fn set_filter(&mut self, filter: cull::Filter) {
+        if self.filter != filter {
+            self.filter = filter;
+            self.arrange();
+            self.reveal_active = true;
+        }
     }
 
     /// The folder shown, if any.
@@ -288,7 +322,7 @@ impl Library {
         self.current_folder
     }
 
-    /// The photos of the current folder, in display order.
+    /// Every photo of the current folder, in capture order (filtered out ones too).
     pub fn photos(&self) -> &[PhotoRow] {
         &self.photos
     }
@@ -603,6 +637,7 @@ impl Library {
                     | Msg::ImportDone(..)
                     | Msg::MarkedMissing { .. }
                     | Msg::FolderRemoved { .. }
+                    | Msg::Marked { .. }
                     | Msg::PoolReady(..)
             )
         {
@@ -681,6 +716,15 @@ impl Library {
                     Level::Error,
                     format!("Could not remove the folder from the catalogue. {e}"),
                 ),
+            },
+            Msg::Marked { root, result } => match result {
+                _ if self.root.as_deref() != Some(root.as_path()) => {}
+                Ok(n) => log::debug!("marked {n} photos"),
+                Err(e) => {
+                    env.toasts.push(Level::Error, format!("{MARK_FAILED} {e}"));
+                    // The grid showed the mark before it was saved: show what is saved.
+                    self.reload_photos(env);
+                }
             },
             Msg::Opened {
                 photo_id,
@@ -812,21 +856,90 @@ impl Library {
         for id in changed {
             self.thumbs.refresh(id);
         }
-        self.order = rows.iter().map(|r| r.id).collect();
+        self.rows = rows.iter().enumerate().map(|(i, r)| (r.id, i)).collect();
+        self.photos = rows;
+        self.arrange();
+    }
+
+    /// Lays out `order` from `photos` through the filter. The photo open in Develop stays
+    /// even when the filter would hide it (rejecting it must not close it); a selected photo
+    /// the filter hides leaves the selection, and when the active one goes, the photo that
+    /// took its place becomes active, so `X` `X` `X` with "Hide rejected" walks the folder.
+    fn arrange(&mut self) {
+        let was_at = self
+            .selection
+            .active()
+            .and_then(|id| self.index.get(&id).copied());
+        let mut order = self.filter.arrange(&self.photos);
+        if let Mode::Develop(open) = self.mode
+            && self.rows.contains_key(&open)
+            && !order.contains(&open)
+        {
+            // Back where capture order puts it, among what is shown.
+            let at = order
+                .iter()
+                .position(|id| self.rows[id] > self.rows[&open])
+                .unwrap_or(order.len());
+            order.insert(at, open);
+        }
+        self.order = order;
         self.index = self
             .order
             .iter()
             .enumerate()
             .map(|(i, id)| (*id, i))
             .collect();
-        self.photos = rows;
         self.selection.retain(&self.order);
-        if self.selection.active().is_none()
-            && let Some(&first) = self.order.first()
-        {
-            self.selection.click(first);
+        if self.selection.active().is_none() && !self.order.is_empty() {
+            let at = was_at.unwrap_or(0).min(self.order.len() - 1);
+            self.selection.click(self.order[at]);
+            self.reveal_active = true;
         }
         self.thumbs.background(&self.order);
+    }
+
+    /// A flag, star or label key (or menu item): set on the selected photos in the grid, on
+    /// the open photo in Develop. The grid shows it at once; the catalogue is written on the
+    /// `Io` lane.
+    fn mark(&mut self, asked: Mark, env: &mut Env) {
+        let targets: Vec<i64> = match self.mode {
+            Mode::Develop(id) => vec![id],
+            Mode::Library => self.selected_in_order(),
+        };
+        let rows: Vec<&PhotoRow> = targets.iter().filter_map(|id| self.photo(*id)).collect();
+        if rows.is_empty() {
+            return;
+        }
+        let mark = cull::resolve(asked, &rows);
+        for id in &targets {
+            if let Some(&i) = self.rows.get(id) {
+                cull::apply(&mut self.photos[i], mark);
+            }
+        }
+        if self.filter.narrows() {
+            self.arrange();
+        }
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        env.jobs.spawn(Lane::Io, "mark", move || {
+            let result = catalog_ext::mark(&root, &targets, mark);
+            Msg::Marked { root, result }
+        });
+    }
+
+    /// Reads the current folder's rows again.
+    fn reload_photos(&self, env: &mut Env) {
+        if let (Some(folder_id), Some(root)) = (self.current_folder, self.root.clone()) {
+            env.jobs.spawn(Lane::Query, "photos", move || {
+                let result = catalog_ext::photos_in(&root, folder_id);
+                Msg::Photos {
+                    root,
+                    folder_id,
+                    result,
+                }
+            });
+        }
     }
 
     /// Shows `folder` (or nothing) and loads its photos.
@@ -834,6 +947,7 @@ impl Library {
         if self.current_folder != folder {
             self.selection = Selection::default();
             self.photos.clear();
+            self.rows.clear();
             self.order.clear();
             self.index.clear();
             self.thumbs.reset();
@@ -893,6 +1007,10 @@ impl Library {
             return;
         }
         self.mode = Mode::Develop(id);
+        if self.filter.narrows() {
+            // The photo left behind, kept while open, goes if the filter hides it.
+            self.arrange();
+        }
         self.request_develop(id, env);
     }
 
@@ -923,7 +1041,8 @@ impl Library {
                 let neighbours: Vec<&PhotoRow> = [at.checked_sub(1), Some(at + 1)]
                     .into_iter()
                     .flatten()
-                    .filter_map(|i| self.photos.get(i))
+                    .filter_map(|i| self.order.get(i))
+                    .filter_map(|id| self.photo(*id))
                     .collect();
                 if let Some(root) = self.root.as_deref() {
                     let quality = develop::open::quality(env.prefs.develop_quality);
@@ -1004,7 +1123,7 @@ impl Library {
             .resizable(true)
             .show(ui, |ui| self.sidebar(ui, env));
         if let Mode::Develop(id) = self.mode {
-            let photo = self.index.get(&id).map(|&i| &self.photos[i]);
+            let photo = self.rows.get(&id).map(|&i| &self.photos[i]);
             let develop = &mut self.develop;
             // 12 points each side: `histogram_panel_width` leaves exactly room for them
             // around the 256-point histogram.
@@ -1081,6 +1200,7 @@ impl Library {
             | Action::LeaveTool
             | Action::ApplyCrop
             | Action::DeleteSpot => develop && self.develop.tool_enabled(action),
+            Action::Flag(_) | Action::Rate(_) | Action::Label(_) => develop || selected,
             Action::Quit
             | Action::Preferences
             | Action::SwitchStudio
@@ -1111,6 +1231,9 @@ impl Library {
             Action::MatchReference => self.open_match(),
             Action::Library => {
                 self.mode = Mode::Library;
+                if self.filter.narrows() {
+                    self.arrange();
+                }
                 self.reveal_active = true;
             }
             Action::Develop => {
@@ -1131,6 +1254,9 @@ impl Library {
             | Action::LeaveTool
             | Action::ApplyCrop
             | Action::DeleteSpot => self.develop.tool_command(action, env.toasts),
+            Action::Flag(flag) => self.mark(Mark::Flag(flag), env),
+            Action::Rate(stars) => self.mark(Mark::Rating(stars), env),
+            Action::Label(label) => self.mark(Mark::Label(label), env),
             _ => return false,
         }
         true
@@ -1191,7 +1317,14 @@ impl Library {
         if self.stage != Stage::Ready {
             return false;
         }
-        ui.label(status_text(self.photos.len(), self.selection.current.len()));
+        let selected = self.selection.current.len();
+        ui.label(
+            match cull::shown_text(self.order.len(), self.photos.len()) {
+                Some(shown) if selected > 0 => format!("{shown} · {} selected", count(selected)),
+                Some(shown) => shown,
+                None => status_text(self.photos.len(), selected),
+            },
+        );
         if let Some(text) = self.busy {
             ui.separator();
             ui.label(RichText::new(text).color(theme::MUTED));
@@ -1343,6 +1476,23 @@ impl Library {
             ui.vertical_centered(|ui| {
                 ui.add_space(ui.available_height() / 3.0);
                 ui.label(RichText::new("No photos in this folder.").color(theme::MUTED));
+            });
+            return;
+        }
+        if let Some(filter) = cull_ui::filter_bar(ui, self.filter) {
+            self.set_filter(filter);
+        }
+        if self.order.is_empty() {
+            ui.vertical_centered(|ui| {
+                ui.add_space(ui.available_height() / 3.0);
+                ui.label(RichText::new(NONE_MATCH).color(theme::MUTED));
+                ui.add_space(8.0);
+                if ui.button("Show all photos").clicked() {
+                    self.set_filter(cull::Filter {
+                        sort: self.filter.sort,
+                        ..cull::Filter::default()
+                    });
+                }
             });
             return;
         }
@@ -1578,16 +1728,7 @@ impl Library {
             .collect();
         self.thumbs.strip(&shown);
         self.thumbs.background(&self.order);
-        if let (Some(folder_id), Some(root)) = (self.current_folder, self.root.clone()) {
-            env.jobs.spawn(Lane::Query, "photos", move || {
-                let result = catalog_ext::photos_in(&root, folder_id);
-                Msg::Photos {
-                    root,
-                    folder_id,
-                    result,
-                }
-            });
-        }
+        self.reload_photos(env);
     }
 
     fn can_add(&self) -> bool {

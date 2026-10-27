@@ -9,11 +9,13 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use lf_app::catalog_ext::{FOLDER_MISSING, NETWORK_WARNING};
 use lf_app::jobs::{Jobs, Lane, Msg};
+use lf_app::library::cull::{Filter, FlagFilter};
 use lf_app::library::import_ui::{Chosen, FIRST_RUN, KEEP_ROOT, Purpose, TYPE_PATH};
 use lf_app::library::{Env, Library, Mode, Stage};
 use lf_app::prefs::Prefs;
 use lf_app::shortcuts::Action;
 use lf_app::toast::Toasts;
+use lf_catalog::cull::{Flag, Label};
 use lf_catalog::import;
 use lf_pipeline::test_support::try_shared_gpu;
 use std::path::{Path, PathBuf};
@@ -1738,4 +1740,88 @@ fn a_match_queued_behind_an_import_says_it_is_waiting() {
             .is_none_or(|t| t != WAITING_IMPORT)
     });
     h.state_mut().lib.close_match();
+}
+
+/// The catalogue's marks for `ids`, read from disk (what was saved, not what is shown).
+fn saved_marks(dir: &Path, ids: &[i64]) -> Vec<(Flag, u8, Option<Label>)> {
+    let c = lf_catalog::Catalog::open(&dir.join("catalogue")).unwrap();
+    ids.iter()
+        .map(|id| {
+            let r = c.photo(*id).unwrap().unwrap();
+            (r.flag, r.rating, r.label)
+        })
+        .collect()
+}
+
+#[test]
+fn culling_keys_mark_the_selection_and_the_filter_walks_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 4);
+    import_folder(&mut h, &shoot, 4);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+
+    // Three stars on every photo.
+    h.state_mut().lib.selection.select_all(&ids);
+    h.key_press(Key::Num3);
+    step_until(&mut h, "three stars saved", |_| {
+        saved_marks(dir.path(), &ids).iter().all(|m| m.1 == 3)
+    });
+    assert!(h.state().lib.photos().iter().all(|p| p.rating == 3));
+
+    // The first photo alone: rejected, then a red label that a second press takes off.
+    h.state_mut().lib.selection.click(ids[0]);
+    h.key_press(Key::X);
+    h.key_press(Key::Num6);
+    step_until(&mut h, "reject and red saved", |_| {
+        saved_marks(dir.path(), &ids[..1]) == [(Flag::Rejected, 3, Some(Label::Red))]
+    });
+    h.get_by_label_contains("Rejected, 3 stars, Red label");
+    h.key_press(Key::Num6);
+    step_until(&mut h, "the red label off", |_| {
+        saved_marks(dir.path(), &ids[..1])[0].2.is_none()
+    });
+    assert_eq!(
+        saved_marks(dir.path(), &ids[1..2]),
+        [(Flag::Unflagged, 3, None)]
+    );
+
+    // Hide rejected: the first photo goes, and the status bar says so.
+    let filter = Filter {
+        flag: FlagFilter::NotRejected,
+        ..Filter::default()
+    };
+    h.state_mut().lib.set_filter(filter);
+    h.step();
+    assert_eq!(h.state().lib.shown(), &ids[1..]);
+    assert_eq!(
+        h.state().lib.selection.active(),
+        Some(ids[1]),
+        "the photo that took the hidden one's place is active"
+    );
+    h.get_by_label("3 of 4 photos · 1 selected");
+    // Rejecting the active photo with the filter on moves to the next, as culling wants.
+    h.key_press(Key::X);
+    h.step();
+    assert_eq!(h.state().lib.shown(), &ids[2..]);
+    assert_eq!(h.state().lib.selection.active(), Some(ids[2]));
+    step_until(&mut h, "the second reject saved", |_| {
+        saved_marks(dir.path(), &ids[1..2])[0].0 == Flag::Rejected
+    });
+
+    // Picked only: nothing is picked, so the grid says so and offers everything back.
+    h.state_mut().lib.set_filter(Filter {
+        flag: FlagFilter::Picked,
+        ..Filter::default()
+    });
+    h.step();
+    h.get_by_label(lf_app::library::NONE_MATCH);
+    h.get_by_label("Show all photos").click();
+    h.step();
+    h.step();
+    assert_eq!(h.state().lib.shown(), ids.as_slice());
+    assert!(!h.state().lib.filter().narrows());
 }

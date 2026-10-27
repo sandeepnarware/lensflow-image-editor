@@ -2,9 +2,10 @@
 //! drawn), as a pure function of the viewport, the drawing of those cells, and the box a drag
 //! draws to select several at once.
 
-use super::{FAILED_BADGE, Library, MISSING_BADGE, SIDECAR_BADGE};
+use super::{FAILED_BADGE, Library, MISSING_BADGE, SIDECAR_BADGE, cull_ui};
 use crate::theme;
 use eframe::egui::{self, Color32, Rect, Sense, Stroke};
+use lf_catalog::cull::Flag;
 use std::collections::HashSet;
 
 /// A grid cell's edge, in points.
@@ -339,6 +340,7 @@ pub(super) fn paint_cell(
         rect.min + egui::vec2(pad, pad),
         rect.max - egui::vec2(pad, pad + name_h),
     );
+    let rejected = lib.photo(id).is_some_and(|p| p.flag == Flag::Rejected);
     if let Some((texture, size)) = lib.thumbs.texture(id) {
         let scale = (area.width() / size.x).min(area.height() / size.y);
         let shown = Rect::from_center_size(area.center(), size * scale);
@@ -346,10 +348,31 @@ pub(super) fn paint_cell(
             texture,
             shown,
             Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            Color32::WHITE,
+            if rejected {
+                cull_ui::REJECTED_TINT
+            } else {
+                Color32::WHITE
+            },
         );
     }
     let photo = lib.photo(id);
+    if let Some(photo) = photo {
+        let mark = if with_name { 12.0 } else { 9.0 };
+        cull_ui::paint_corner(
+            &painter,
+            egui::pos2(rect.right() - pad, rect.top() + pad),
+            photo,
+            mark,
+        );
+        if with_name {
+            cull_ui::paint_stars(
+                &painter,
+                egui::pos2(rect.right() - pad, rect.bottom() - pad - 2.0),
+                photo.rating,
+                10.0,
+            );
+        }
+    }
     if with_name && let Some(photo) = photo {
         let name = photo
             .path
@@ -377,7 +400,7 @@ pub(super) fn paint_cell(
     }
 
     let mut badges: Vec<(&str, Color32)> = Vec::new();
-    let mut hover = Vec::new();
+    let mut hover: Vec<String> = photo.and_then(cull_ui::describe).into_iter().collect();
     let missing = photo.is_some_and(|p| p.missing);
     let sidecar = photo.and_then(|p| p.sidecar_error.clone());
     if missing {
