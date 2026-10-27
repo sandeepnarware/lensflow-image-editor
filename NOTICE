@@ -16,6 +16,8 @@ Runtime dependencies (from cargo tree, normal edges), each under the permissive
 licence shown. Where licences are joined by OR, any one of them applies.
 
                                          
+ab_glyph v0.2.32                         Apache-2.0
+ab_glyph_rasterizer v0.1.10              Apache-2.0
 accesskit v0.25.1                        MIT OR Apache-2.0
 accesskit_atspi_common v0.21.0           MIT OR Apache-2.0
 accesskit_consumer v0.39.1               MIT OR Apache-2.0
@@ -304,6 +306,7 @@ option-ext v0.2.0                        MPL-2.0
 orbclient v0.3.55                        MIT
 ordered-float v5.5.0                     MIT
 ordered-stream v0.2.0                    MIT OR Apache-2.0
+owned_ttf_parser v0.25.1                 Apache-2.0
 parking v2.2.1                           Apache-2.0 OR MIT
 parking_lot v0.12.5                      MIT OR Apache-2.0
 parking_lot_core v0.9.12                 MIT OR Apache-2.0
@@ -430,6 +433,7 @@ tracing v0.1.44                          MIT
 tracing-attributes v0.1.31               MIT
 tracing-core v0.1.36                     MIT
 try-lock v0.2.5                          MIT
+ttf-parser v0.25.1                       MIT OR Apache-2.0
 type-map v0.5.1                          MIT/Apache-2.0
 typeid v1.0.3                            MIT OR Apache-2.0
 typenum v1.20.1                          MIT OR Apache-2.0

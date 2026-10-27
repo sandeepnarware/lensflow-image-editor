@@ -296,6 +296,8 @@ mod tests {
             rename: Pattern("{name}".into()),
             metadata: Metadata::None,
             overwrite: false,
+            sharpen: Default::default(),
+            watermark: None,
         }
     }
 

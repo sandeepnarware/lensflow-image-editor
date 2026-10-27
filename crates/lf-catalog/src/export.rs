@@ -1,10 +1,12 @@
-//! Export edited photos to disk: JPEG, PNG or 16-bit TIFF, resized, renamed and with EXIF.
+//! Export edited photos to disk: JPEG, PNG, lossless WebP or 16-bit TIFF, resized, sharpened
+//! for the screen, watermarked, renamed, with EXIF and an sRGB colour profile.
 //!
 //! Each photo is opened at its full size (an export never uses a reduced frame), developed
-//! with the settings in the catalogue, rendered through the GPU pipeline and encoded. JPEG
-//! and PNG take the 8-bit render; TIFF takes the half-float render (clamped to 0..1 and
-//! scaled to 16 bits only at the encode). EXIF is written for JPEG output only: PNG and TIFF
-//! exports carry none in this version.
+//! with the settings in the catalogue, rendered through the GPU pipeline and encoded. JPEG,
+//! PNG and WebP take the 8-bit render; TIFF takes the half-float render (clamped to 0..1 and
+//! scaled to 16 bits only at the encode). After resizing, [`crate::finish`] sharpens and
+//! stamps the watermark. Every file carries an sRGB ICC profile; EXIF goes into JPEG, PNG
+//! (`eXIf`) and WebP, not TIFF (the encoder cannot add it).
 //!
 //! A run never stops at one bad photo: each failure is listed in the [`ExportReport`] and the
 //! rest are exported. Only the up-front checks (name collisions, existing files when not
@@ -18,8 +20,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use image::imageops::{FilterType, resize};
-use image::{DynamicImage, ImageBuffer, ImageFormat, Rgb, RgbImage};
+use image::codecs::jpeg::JpegEncoder;
+use image::codecs::png::PngEncoder;
+use image::codecs::tiff::TiffEncoder;
+use image::codecs::webp::WebPEncoder;
+use image::{DynamicImage, ImageBuffer, ImageEncoder};
 use lf_pipeline::Gpu;
 use lf_raw::demosaic::Quality;
 use lf_raw::open::{Kind, Picture, open};
@@ -30,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::{Catalog, CatalogError, Result};
 use crate::edits;
 use crate::exif_embed::{build_exif, insert_exif};
+use crate::finish::{self, Pixels, Prepared, Sharpen, Watermark};
 use crate::model::{now, ts};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -38,6 +44,8 @@ pub enum Format {
     Jpeg { quality: u8 },
     /// 8-bit.
     Png,
+    /// 8-bit, lossless (the encoder has no lossy mode).
+    WebP,
     /// 16-bit RGB.
     Tiff16,
 }
@@ -47,6 +55,7 @@ impl Format {
         match self {
             Format::Jpeg { .. } => "jpg",
             Format::Png => "png",
+            Format::WebP => "webp",
             Format::Tiff16 => "tif",
         }
     }
@@ -92,6 +101,11 @@ pub struct ExportSpec {
     pub metadata: Metadata,
     /// When false, an existing file is [`CatalogError::Exists`], never replaced.
     pub overwrite: bool,
+    /// Sharpening for the screen, after resizing. (Absent in specs saved before it existed.)
+    #[serde(default)]
+    pub sharpen: Sharpen,
+    #[serde(default)]
+    pub watermark: Option<Watermark>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -256,11 +270,6 @@ fn date_of(row: &PhotoRow) -> String {
     )
 }
 
-enum Pixels {
-    Eight(RgbImage),
-    Sixteen(ImageBuffer<Rgb<u16>, Vec<u16>>),
-}
-
 /// Where photo `id` goes, and its row.
 fn plan_one(
     catalog: &Catalog,
@@ -392,6 +401,7 @@ fn export_one(
     row: &PhotoRow,
     out_path: PathBuf,
     spec: &ExportSpec,
+    watermark: Option<&Prepared>,
 ) -> Result<Exported> {
     let fail =
         |what: &dyn std::fmt::Display, path: &str| CatalogError::Export(format!("{path}: {what}"));
@@ -451,10 +461,7 @@ fn export_one(
         }
     };
     drop(renderer);
-    let (w, h) = match &pixels {
-        Pixels::Eight(i) => i.dimensions(),
-        Pixels::Sixteen(i) => i.dimensions(),
-    };
+    let (w, h) = pixels.dimensions();
     let (tw, th) = target_size(spec.size, w, h);
     let limit = gpu.max_edge();
     if tw > limit || th > limit {
@@ -464,42 +471,74 @@ fn export_one(
             limit,
         });
     }
-    let pixels = if (tw, th) == (w, h) {
-        pixels
-    } else {
-        match pixels {
-            Pixels::Eight(i) => Pixels::Eight(resize(&i, tw, th, FilterType::Lanczos3)),
-            Pixels::Sixteen(i) => Pixels::Sixteen(resize(&i, tw, th, FilterType::Lanczos3)),
-        }
-    };
+    let mut pixels = finish::sharpen(pixels.resized(tw, th), spec.sharpen);
+    if let Some(mark) = watermark {
+        finish::watermark(&mut pixels, mark);
+    }
 
+    // The EXIF as a JPEG APP1 segment; PNG and WebP take the TIFF part inside it.
+    let app1 = match spec.metadata {
+        Metadata::None => None,
+        Metadata::CopyrightOnly => build_exif(&opened.exif, true),
+        Metadata::All => match (&opened.kind, &opened.jpeg_exif_bytes) {
+            (Kind::Jpeg, Some(kept)) => Some(kept.clone()),
+            _ => build_exif(&opened.exif, false),
+        },
+    };
+    let exif = app1.as_deref().and_then(finish::exif_payload);
+    let icc = finish::srgb_icc();
+    let encode_failed = |e: &dyn std::fmt::Display| fail(e, &row.path);
+    // Every encoder here takes a profile; PNG and WebP take EXIF too.
+    fn tagged<E: ImageEncoder>(
+        mut encoder: E,
+        icc: &[u8],
+        exif: Option<&Vec<u8>>,
+        image: DynamicImage,
+    ) -> image::ImageResult<()> {
+        // A refusal is "this format cannot hold it": the photo is still exported.
+        let _ = encoder.set_icc_profile(icc.to_vec());
+        if let Some(exif) = exif {
+            let _ = encoder.set_exif_metadata(exif.clone());
+        }
+        image.write_with_encoder(encoder)
+    }
     let mut bytes = Vec::new();
     match (spec.format, pixels) {
         (Format::Jpeg { quality }, Pixels::Eight(img)) => {
-            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality.clamp(1, 100))
-                .encode_image(&img)
-                .map_err(|e| fail(&e, &row.path))?;
-            let app1 = match spec.metadata {
-                Metadata::None => None,
-                Metadata::CopyrightOnly => build_exif(&opened.exif, true),
-                Metadata::All => match (&opened.kind, &opened.jpeg_exif_bytes) {
-                    (Kind::Jpeg, Some(kept)) => Some(kept.clone()),
-                    _ => build_exif(&opened.exif, false),
-                },
-            };
-            if let Some(app1) = app1 {
-                bytes = insert_exif(&bytes, &app1);
+            let encoder = JpegEncoder::new_with_quality(&mut bytes, quality.clamp(1, 100));
+            // JPEG's EXIF goes in as the APP1 segment itself, byte for byte, below.
+            tagged(encoder, &icc, None, DynamicImage::ImageRgb8(img))
+                .map_err(|e| encode_failed(&e))?;
+            if let Some(app1) = &app1 {
+                bytes = insert_exif(&bytes, app1);
             }
         }
         (Format::Png, Pixels::Eight(img)) => {
-            DynamicImage::ImageRgb8(img)
-                .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
-                .map_err(|e| fail(&e, &row.path))?;
+            tagged(
+                PngEncoder::new(&mut bytes),
+                &icc,
+                exif.as_ref(),
+                DynamicImage::ImageRgb8(img),
+            )
+            .map_err(|e| encode_failed(&e))?;
+        }
+        (Format::WebP, Pixels::Eight(img)) => {
+            tagged(
+                WebPEncoder::new_lossless(&mut bytes),
+                &icc,
+                exif.as_ref(),
+                DynamicImage::ImageRgb8(img),
+            )
+            .map_err(|e| encode_failed(&e))?;
         }
         (Format::Tiff16, Pixels::Sixteen(img)) => {
-            DynamicImage::ImageRgb16(img)
-                .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Tiff)
-                .map_err(|e| fail(&e, &row.path))?;
+            tagged(
+                TiffEncoder::new(Cursor::new(&mut bytes)),
+                &icc,
+                None,
+                DynamicImage::ImageRgb16(img),
+            )
+            .map_err(|e| encode_failed(&e))?;
         }
         _ => unreachable!("the render matches the format"),
     }
@@ -617,8 +656,13 @@ pub fn run(
         cancelled: false,
         device_lost: false,
     };
-    let planned = match plan(catalog, photo_ids, spec) {
-        Ok(p) => p,
+    // The plan and the watermark (its logo read once) are checked before anything is written.
+    let ready = plan(catalog, photo_ids, spec).and_then(|p| {
+        let mark = spec.watermark.as_ref().map(Prepared::new).transpose()?;
+        Ok((p, mark))
+    });
+    let (planned, watermark) = match ready {
+        Ok(ready) => ready,
         Err(e) => {
             finish("failed", 0, Some(e.to_string()))?;
             return Err(e);
@@ -643,7 +687,7 @@ pub fn run(
         if gpu.is_lost() {
             return device_lost(report);
         }
-        match export_one(&gpu, catalog, id, &row, path, spec) {
+        match export_one(&gpu, catalog, id, &row, path, spec, watermark.as_ref()) {
             Ok(e) => report.exported.push(e),
             Err(CatalogError::DeviceLost) => return device_lost(report),
             Err(_) if gpu.is_lost() => return device_lost(report),

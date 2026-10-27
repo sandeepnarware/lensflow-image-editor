@@ -9,6 +9,7 @@ use crate::export_job::{ExportOutcome, Failed};
 use crate::theme;
 use eframe::egui::{self, Key, RichText};
 use lf_catalog::export::{Destination, ExportSpec, Format, Metadata, Pattern, Size};
+use lf_catalog::finish::{Corner, Sharpen, Stamp, Watermark};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,6 +33,15 @@ pub const NO_PATTERN: &str = "Enter a file name pattern.";
 pub const BAD_SIZE: &str = "Enter a size larger than 0.";
 /// Under the Percent field above 100.
 pub const ENLARGES: &str = "Above 100 % enlarges the photo.";
+/// Output sharpening, the watermark and their problems.
+pub const SHARPEN: &str = "Sharpen for screen";
+pub const WATERMARK: &str = "Add a watermark";
+pub const WATERMARK_TEXT: &str = "Watermark text";
+pub const CHOOSE_LOGO: &str = "Choose a logo…";
+pub const NO_WATERMARK_TEXT: &str = "Type the watermark's text, or turn the watermark off.";
+pub const NO_LOGO: &str = "Choose a logo picture, or turn the watermark off.";
+/// The watermark's text to start from.
+pub const DEFAULT_STAMP: &str = "©";
 /// The default JPEG quality and file name pattern.
 pub const DEFAULT_QUALITY: u8 = 93;
 pub const DEFAULT_PATTERN: &str = "{name}";
@@ -59,7 +69,15 @@ pub fn status_text(done: usize, total: usize) -> String {
 pub enum FormatKind {
     Jpeg,
     Png,
+    WebP,
     Tiff16,
+}
+
+/// A watermark of text or of a logo picture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StampKind {
+    Text,
+    Logo,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +125,17 @@ pub struct ExportForm {
     pub metadata: Metadata,
     pub overwrite: bool,
     pub folder: Option<PathBuf>,
+    pub sharpen: Sharpen,
+    /// The watermark is on; its fields below keep their values while it is off.
+    pub watermark: bool,
+    pub stamp: StampKind,
+    pub stamp_text: String,
+    pub logo: Option<PathBuf>,
+    /// Percent of the photo's width.
+    pub stamp_width: f32,
+    /// Percent.
+    pub stamp_opacity: f32,
+    pub corner: Corner,
 }
 
 impl Default for ExportForm {
@@ -122,6 +151,14 @@ impl Default for ExportForm {
             metadata: Metadata::All,
             overwrite: false,
             folder: None,
+            sharpen: Sharpen::Off,
+            watermark: false,
+            stamp: StampKind::Text,
+            stamp_text: DEFAULT_STAMP.to_owned(),
+            logo: None,
+            stamp_width: 20.0,
+            stamp_opacity: 60.0,
+            corner: Corner::BottomRight,
         }
     }
 }
@@ -136,7 +173,19 @@ impl ExportForm {
                 f.quality = quality.clamp(1, 100);
             }
             Format::Png => f.format = FormatKind::Png,
+            Format::WebP => f.format = FormatKind::WebP,
             Format::Tiff16 => f.format = FormatKind::Tiff16,
+        }
+        f.sharpen = spec.sharpen;
+        if let Some(mark) = &spec.watermark {
+            f.watermark = true;
+            match &mark.stamp {
+                Stamp::Text(text) => (f.stamp, f.stamp_text) = (StampKind::Text, text.clone()),
+                Stamp::Image(path) => (f.stamp, f.logo) = (StampKind::Logo, Some(path.clone())),
+            }
+            f.stamp_width = (mark.width * 100.0).clamp(2.0, 100.0);
+            f.stamp_opacity = (mark.opacity * 100.0).clamp(5.0, 100.0);
+            f.corner = mark.corner;
         }
         match spec.size {
             Size::Original => f.size = SizeKind::Original,
@@ -194,7 +243,25 @@ impl ExportForm {
                 quality: self.quality.clamp(1, 100),
             },
             FormatKind::Png => Format::Png,
+            FormatKind::WebP => Format::WebP,
             FormatKind::Tiff16 => Format::Tiff16,
+        };
+        let watermark = if self.watermark {
+            let stamp = match self.stamp {
+                StampKind::Text if self.stamp_text.trim().is_empty() => {
+                    return Err(NO_WATERMARK_TEXT);
+                }
+                StampKind::Text => Stamp::Text(self.stamp_text.trim().to_owned()),
+                StampKind::Logo => Stamp::Image(self.logo.clone().ok_or(NO_LOGO)?),
+            };
+            Some(Watermark {
+                stamp,
+                width: self.stamp_width.clamp(2.0, 100.0) / 100.0,
+                opacity: self.stamp_opacity.clamp(5.0, 100.0) / 100.0,
+                corner: self.corner,
+            })
+        } else {
+            None
         };
         Ok(ExportSpec {
             format,
@@ -203,6 +270,8 @@ impl ExportForm {
             rename: Pattern(self.pattern.trim().to_owned()),
             metadata: self.metadata,
             overwrite: self.overwrite,
+            sharpen: self.sharpen,
+            watermark,
         })
     }
 }
@@ -223,6 +292,8 @@ pub enum ExportAction {
     Start(ExportSpec),
     /// Open the system folder picker for this ticket.
     Pick(u64),
+    /// Open the system file picker for the watermark's logo, for this ticket.
+    PickLogo(u64),
     /// Check the typed path for this ticket.
     CheckTyped(u64, PathBuf),
     /// Open the folder holding this file.
@@ -250,6 +321,9 @@ pub struct ExportDialog {
     start_after_check: bool,
     /// The typed path was confirmed after Export: start on the next frame.
     start_ready: bool,
+    /// The logo picker's latest ticket, and whether it is open.
+    logo_ticket: u64,
+    picking_logo: bool,
 }
 
 impl ExportDialog {
@@ -267,6 +341,24 @@ impl ExportDialog {
             error: None,
             start_after_check: false,
             start_ready: false,
+            logo_ticket: 0,
+            picking_logo: false,
+        }
+    }
+
+    /// The logo picker answered for `ticket`: the picture, `None` (cancelled) or a problem.
+    pub fn logo_chosen(&mut self, ticket: u64, result: Result<Option<PathBuf>, String>) {
+        if ticket != self.logo_ticket {
+            return;
+        }
+        self.picking_logo = false;
+        match result {
+            Ok(Some(path)) => {
+                self.form.logo = Some(path);
+                self.error = None;
+            }
+            Ok(None) => {}
+            Err(e) => self.error = Some(e),
         }
     }
 
@@ -413,23 +505,29 @@ impl ExportDialog {
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut f.format, FormatKind::Jpeg, "JPEG");
                     ui.radio_value(&mut f.format, FormatKind::Png, "PNG");
+                    ui.radio_value(&mut f.format, FormatKind::WebP, "WebP")
+                        .on_hover_text("Lossless WebP: smaller than PNG, the same pixels");
                     ui.radio_value(&mut f.format, FormatKind::Tiff16, "TIFF 16-bit");
                 });
                 ui.end_row();
                 if f.format == FormatKind::Jpeg {
-                    ui.label("Quality");
-                    ui.add(egui::Slider::new(&mut f.quality, 1..=100));
+                    let label = ui.label("Quality");
+                    ui.add(egui::Slider::new(&mut f.quality, 1..=100))
+                        .labelled_by(label.id);
                     ui.end_row();
                 }
                 ui.label("Size");
                 ui.horizontal(|ui| {
-                    egui::ComboBox::from_id_salt("export-size")
+                    let size = egui::ComboBox::from_id_salt("export-size")
                         .selected_text(f.size.label())
                         .show_ui(ui, |ui| {
                             for kind in SizeKind::ALL {
                                 ui.selectable_value(&mut f.size, kind, kind.label());
                             }
                         });
+                    size.response.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Size")
+                    });
                     match f.size {
                         SizeKind::Original => {}
                         SizeKind::LongEdge | SizeKind::ShortEdge => {
@@ -471,6 +569,76 @@ impl ExportDialog {
                     ui.radio_value(&mut f.metadata, Metadata::None, "None");
                 });
                 ui.end_row();
+                ui.label(SHARPEN);
+                ui.horizontal(|ui| {
+                    for s in Sharpen::ALL {
+                        ui.radio_value(&mut f.sharpen, s, s.label());
+                    }
+                });
+                ui.end_row();
+                ui.label("Watermark");
+                ui.checkbox(&mut f.watermark, WATERMARK);
+                ui.end_row();
+                if f.watermark {
+                    ui.label("");
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut f.stamp, StampKind::Text, "Text");
+                            ui.radio_value(&mut f.stamp, StampKind::Logo, "Logo picture");
+                        });
+                        match f.stamp {
+                            StampKind::Text => {
+                                let label = ui.label(WATERMARK_TEXT);
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut f.stamp_text)
+                                        .desired_width(260.0),
+                                )
+                                .labelled_by(label.id);
+                            }
+                            StampKind::Logo => {
+                                match &f.logo {
+                                    Some(logo) => ui.label(logo.display().to_string()),
+                                    None => ui.label(
+                                        RichText::new("No picture chosen.").color(theme::MUTED),
+                                    ),
+                                };
+                                if ui
+                                    .add_enabled(!self.picking_logo, egui::Button::new(CHOOSE_LOGO))
+                                    .on_hover_text("A PNG with a transparent background works best")
+                                    .clicked()
+                                {
+                                    self.picking_logo = true;
+                                    action = ExportAction::PickLogo(0);
+                                }
+                            }
+                        }
+                        ui.add(
+                            egui::Slider::new(&mut f.stamp_width, 2.0..=100.0)
+                                .text("width (% of the photo)")
+                                .fixed_decimals(0),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut f.stamp_opacity, 5.0..=100.0)
+                                .text("opacity (%)")
+                                .fixed_decimals(0),
+                        );
+                        let corner = egui::ComboBox::from_id_salt("watermark-corner")
+                            .selected_text(f.corner.label())
+                            .show_ui(ui, |ui| {
+                                for c in Corner::ALL {
+                                    ui.selectable_value(&mut f.corner, c, c.label());
+                                }
+                            });
+                        corner.response.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::Role::ComboBox,
+                                true,
+                                "Watermark position",
+                            )
+                        });
+                    });
+                    ui.end_row();
+                }
                 ui.label("");
                 ui.checkbox(&mut f.overwrite, REPLACE);
                 ui.end_row();
@@ -508,6 +676,10 @@ impl ExportDialog {
         // The tickets are taken once the form is no longer borrowed.
         action = match action {
             ExportAction::Pick(_) => ExportAction::Pick(self.next_ticket()),
+            ExportAction::PickLogo(_) => {
+                self.logo_ticket += 1;
+                ExportAction::PickLogo(self.logo_ticket)
+            }
             ExportAction::CheckTyped(_, path) => ExportAction::CheckTyped(self.next_ticket(), path),
             other => other,
         };
@@ -596,6 +768,8 @@ mod tests {
                 rename: Pattern("{name}".into()),
                 metadata: Metadata::All,
                 overwrite: false,
+                sharpen: Sharpen::Off,
+                watermark: None,
             })
         );
         assert_eq!(ExportForm::from_prefs(None), ExportForm::default());
@@ -611,6 +785,8 @@ mod tests {
                 rename: Pattern("{date}-{seq}".into()),
                 metadata: Metadata::CopyrightOnly,
                 overwrite: true,
+                sharpen: Sharpen::Off,
+                watermark: None,
             },
             ExportSpec {
                 format: Format::Jpeg { quality: 70 },
@@ -619,6 +795,8 @@ mod tests {
                 rename: Pattern("{camera}_{name}".into()),
                 metadata: Metadata::None,
                 overwrite: false,
+                sharpen: Sharpen::Off,
+                watermark: None,
             },
             ExportSpec {
                 format: Format::Png,
@@ -627,6 +805,8 @@ mod tests {
                 rename: Pattern("{name}".into()),
                 metadata: Metadata::All,
                 overwrite: false,
+                sharpen: Sharpen::Off,
+                watermark: None,
             },
             ExportSpec {
                 format: Format::Png,
@@ -635,6 +815,8 @@ mod tests {
                 rename: Pattern("{name}".into()),
                 metadata: Metadata::All,
                 overwrite: false,
+                sharpen: Sharpen::Off,
+                watermark: None,
             },
         ] {
             let value = serde_json::to_value(&spec).unwrap();
@@ -649,8 +831,61 @@ mod tests {
             rename: Pattern("{name}".into()),
             metadata: Metadata::All,
             overwrite: false,
+            sharpen: Sharpen::Off,
+            watermark: None,
         });
         assert_eq!(png.quality, DEFAULT_QUALITY);
+    }
+
+    #[test]
+    fn sharpening_and_the_watermark_round_trip_and_are_checked() {
+        let mut form = ExportForm {
+            folder: Some(PathBuf::from("out")),
+            format: FormatKind::WebP,
+            sharpen: Sharpen::High,
+            watermark: true,
+            stamp_text: "  © Sharma Studio ".into(),
+            stamp_width: 25.0,
+            stamp_opacity: 70.0,
+            corner: Corner::TopLeft,
+            ..ExportForm::default()
+        };
+        let spec = form.spec().unwrap();
+        assert_eq!(spec.format, Format::WebP);
+        assert_eq!(spec.sharpen, Sharpen::High);
+        assert_eq!(
+            spec.watermark,
+            Some(Watermark {
+                stamp: Stamp::Text("© Sharma Studio".into()),
+                width: 0.25,
+                opacity: 0.7,
+                corner: Corner::TopLeft,
+            })
+        );
+        // Remembered in prefs and read back as it was.
+        let back = ExportForm::from_prefs(Some(&serde_json::to_value(&spec).unwrap()));
+        assert_eq!(back.spec(), Ok(spec));
+        // A spec saved before these existed reads as no sharpening and no watermark.
+        let mut old = serde_json::to_value(form.spec().unwrap()).unwrap();
+        old.as_object_mut().unwrap().remove("sharpen");
+        old.as_object_mut().unwrap().remove("watermark");
+        let old = ExportForm::from_prefs(Some(&old));
+        assert_eq!((old.sharpen, old.watermark), (Sharpen::Off, false));
+
+        // An empty text, or a logo not chosen, is refused with a sentence to show.
+        form.stamp_text = "  ".into();
+        assert_eq!(form.spec(), Err(NO_WATERMARK_TEXT));
+        form.stamp = StampKind::Logo;
+        assert_eq!(form.spec(), Err(NO_LOGO));
+        form.logo = Some(PathBuf::from("logo.png"));
+        assert!(matches!(
+            form.spec().unwrap().watermark.unwrap().stamp,
+            Stamp::Image(_)
+        ));
+        // Off: nothing is checked and nothing is stamped.
+        form.watermark = false;
+        form.logo = None;
+        assert_eq!(form.spec().unwrap().watermark, None);
     }
 
     #[test]

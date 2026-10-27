@@ -22,6 +22,8 @@ fn spec(format: Format, dest: &Path) -> ExportSpec {
         rename: Pattern("{name}".to_string()),
         metadata: Metadata::None,
         overwrite: false,
+        sharpen: Default::default(),
+        watermark: None,
     }
 }
 
@@ -759,4 +761,144 @@ fn a_catalogued_photo_outside_the_selection_is_protected_too() {
         "{e:?}"
     );
     assert_eq!(std::fs::read(src.path().join("b.png")).unwrap(), before);
+}
+
+/// The ICC profile and EXIF a written file carries, as the image crate's decoders read them.
+fn tags(path: &Path) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+    use image::ImageDecoder;
+    let reader = ImageReader::open(path)
+        .unwrap()
+        .with_guessed_format()
+        .unwrap();
+    let mut decoder = reader.into_decoder().unwrap();
+    (
+        decoder.icc_profile().unwrap(),
+        decoder.exif_metadata().unwrap(),
+    )
+}
+
+#[test]
+fn every_format_carries_the_srgb_profile_and_png_and_webp_keep_the_exif() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    let file = src.path().join("j.jpg");
+    jpeg_with_exif(&file);
+    let (c, ids) = catalogue(src.path());
+    let icc = lf_catalog::finish::srgb_icc();
+    for format in [
+        Format::Jpeg { quality: 85 },
+        Format::Png,
+        Format::WebP,
+        Format::Tiff16,
+    ] {
+        let out = tempfile::tempdir().unwrap();
+        let mut sp = spec(format, out.path());
+        sp.metadata = Metadata::All;
+        let done = export::run(gpu.clone(), &c, &ids, &sp, &mut |_, _| {
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        assert!(done.failed.is_empty(), "{format:?}: {:?}", done.failed);
+        let path = &done.exported[0].path;
+        let (profile, exif) = tags(path);
+        if format == Format::Tiff16 {
+            // image 0.25's TIFF decoder does not hand the profile back: look for it in the file.
+            let bytes = std::fs::read(path).unwrap();
+            assert!(
+                bytes.windows(icc.len()).any(|w| w == icc.as_slice()),
+                "the TIFF carries the sRGB profile"
+            );
+        } else {
+            assert_eq!(
+                profile.as_ref(),
+                Some(&icc),
+                "{format:?} carries the sRGB profile"
+            );
+        }
+        match format {
+            Format::Png | Format::WebP => {
+                let exif = exif.unwrap_or_else(|| panic!("{format:?} keeps the EXIF"));
+                // The TIFF part of the source's APP1: Make = "Cam".
+                assert!(exif.starts_with(b"MM\0\x2a"), "{format:?}");
+                assert!(exif.windows(4).any(|w| w == b"Cam\0"), "{format:?}");
+            }
+            Format::Jpeg { .. } => {
+                let bytes = std::fs::read(path).unwrap();
+                assert_eq!(read_summary(&bytes).make.as_deref(), Some("Cam"));
+                assert_eq!(bytes.windows(6).filter(|w| *w == b"Exif\0\0").count(), 1);
+            }
+            Format::Tiff16 => {}
+        }
+        // The pixels decode, at the photo's size.
+        let img = image::open(path).unwrap();
+        assert_eq!((img.width(), img.height()), (64, 48), "{format:?}");
+    }
+}
+
+#[test]
+fn a_watermark_and_sharpening_change_only_what_they_should() {
+    use lf_catalog::finish::{Corner, Sharpen, Stamp, Watermark};
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    // A flat grey photo: sharpening leaves it alone, so any change is the watermark's.
+    RgbaImage::from_pixel(400, 300, image::Rgba([110, 110, 110, 255]))
+        .save(src.path().join("g.png"))
+        .unwrap();
+    let (c, ids) = catalogue(src.path());
+    let export_with = |sharpen, watermark| {
+        let out = tempfile::tempdir().unwrap();
+        let mut sp = spec(Format::Png, out.path());
+        sp.sharpen = sharpen;
+        sp.watermark = watermark;
+        let done = export::run(gpu.clone(), &c, &ids, &sp, &mut |_, _| {
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        assert!(done.failed.is_empty(), "{:?}", done.failed);
+        let img = image::open(&done.exported[0].path).unwrap().to_rgb8();
+        (out, img)
+    };
+    let (_a, plain) = export_with(Sharpen::Off, None);
+    let (_b, sharpened) = export_with(Sharpen::High, None);
+    assert_eq!(
+        plain, sharpened,
+        "a flat photo is not changed by sharpening"
+    );
+    let (_c, marked) = export_with(
+        Sharpen::Standard,
+        Some(Watermark {
+            stamp: Stamp::Text("© Studio".into()),
+            width: 0.4,
+            opacity: 0.8,
+            corner: Corner::TopLeft,
+        }),
+    );
+    let differs = |x0: u32, x1: u32, y0: u32, y1: u32| {
+        (y0..y1).any(|y| (x0..x1).any(|x| marked.get_pixel(x, y) != plain.get_pixel(x, y)))
+    };
+    assert!(differs(0, 200, 0, 100), "the top left carries the mark");
+    assert!(!differs(220, 400, 0, 300), "the right is untouched");
+    assert!(!differs(0, 400, 150, 300), "the bottom is untouched");
+}
+
+#[test]
+fn a_missing_watermark_logo_stops_the_export_before_anything_is_written() {
+    use lf_catalog::finish::{Corner, Stamp, Watermark};
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    png(&src.path().join("a.png"), 40, 30);
+    let (c, ids) = catalogue(src.path());
+    let out = tempfile::tempdir().unwrap();
+    let mut sp = spec(Format::Png, out.path());
+    sp.watermark = Some(Watermark {
+        stamp: Stamp::Image(src.path().join("no-such-logo.png")),
+        width: 0.2,
+        opacity: 0.5,
+        corner: Corner::BottomRight,
+    });
+    let e = export::run(gpu, &c, &ids, &sp, &mut |_, _| ControlFlow::Continue(()))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("could not be read"), "{e}");
+    assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
 }

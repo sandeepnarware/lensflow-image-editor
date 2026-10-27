@@ -44,6 +44,8 @@ fn main() {
             rename: Pattern("{name}".into()),
             metadata: Metadata::All,
             overwrite: false,
+            sharpen: Default::default(),
+            watermark: None,
         };
         let started = std::time::Instant::now();
         let outcome = export_job::run(

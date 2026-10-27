@@ -309,12 +309,20 @@ first.
 Export. `export::run` writes photos to a folder, one at a time, at full
 resolution through the GPU pipeline.
 
-- Formats: JPEG (quality 1..100), PNG (8-bit) and 16-bit TIFF (from the float
-  render, clamped to 0..1 only at the encode).
-- EXIF is written for JPEG only; PNG and TIFF exports carry none yet. For JPEG,
-  metadata `All` carries the source JPEG's EXIF byte for byte (or a minimal EXIF
-  built from the file's facts for other sources), `CopyrightOnly` writes Artist
-  and Copyright, `None` writes nothing.
+- Formats: JPEG (quality 1..100), PNG (8-bit), lossless WebP (8-bit; the encoder has no
+  lossy mode) and 16-bit TIFF (from the float render, clamped to 0..1 only at the encode).
+- Every file carries an sRGB ICC v2 profile (`finish::srgb_icc`, built in code), so
+  colour-managed viewers show it as the editor does.
+- EXIF goes into JPEG, PNG (`eXIf`) and WebP; TIFF carries none (the encoder cannot add
+  it). Metadata `All` carries the source JPEG's EXIF byte for byte (or a minimal EXIF
+  built from the file's facts for other sources), `CopyrightOnly` writes Artist and
+  Copyright, `None` writes nothing.
+- After resizing (`finish`): output sharpening for the screen (None, Low, Standard, High:
+  an unsharp mask of radius 0.5, 0.8 or 1.2 px that leaves flat areas alone), then the
+  watermark: text (set in Ubuntu-Light, white with a soft dark edge) or a logo picture,
+  as wide as asked (a fraction of the photo's width), as opaque as asked, in a corner or
+  the centre, 3 % of the short side in. A watermark logo that cannot be read, or empty
+  text, fails the run before anything is written.
 - Size: `Original`, `LongEdge`, `ShortEdge`, `Megapixels`, `Percent`. Only
   `Percent` can enlarge; the others never upscale.
 - Size: a `Percent` that would exceed the device's largest texture edge is

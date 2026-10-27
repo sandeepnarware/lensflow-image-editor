@@ -72,6 +72,19 @@ impl Library {
                     }
                 });
             }
+            ExportAction::PickLogo(ticket) => {
+                on_own_thread(env.jobs.reporter(), Purpose::Watermark, ticket, move || {
+                    let picked = rfd::FileDialog::new()
+                        .set_title("Choose a logo for the watermark")
+                        .add_filter("Pictures", &["png", "jpg", "jpeg", "tif", "tiff", "webp"])
+                        .pick_file();
+                    log::info!("watermark picker answered: {picked:?}");
+                    Ok(picked.map(|path| Chosen {
+                        path,
+                        network: false,
+                    }))
+                });
+            }
             ExportAction::CheckTyped(ticket, path) => {
                 on_own_thread(env.jobs.reporter(), Purpose::ExportTo, ticket, move || {
                     export_job::check_writable(&path)?;

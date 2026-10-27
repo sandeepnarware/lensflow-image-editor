@@ -35,6 +35,8 @@ pub enum Purpose {
     AddFolder,
     /// The export dialog's destination (checked writable too); its own tickets.
     ExportTo,
+    /// The export dialog's watermark logo (a picture file); its own tickets.
+    Watermark,
 }
 
 /// A folder that exists and can be read.
@@ -193,6 +195,7 @@ impl Library {
             Purpose::Root => "Choose a folder for your catalogue",
             Purpose::AddFolder => "Add a folder of photos",
             Purpose::ExportTo => "Export to this folder",
+            Purpose::Watermark => "Choose a logo for the watermark",
         };
         on_own_thread(env.jobs.reporter(), purpose, ticket, move || {
             let picked = rfd::FileDialog::new().set_title(title).pick_folder();
@@ -233,6 +236,12 @@ impl Library {
             }
             return;
         }
+        if purpose == Purpose::Watermark {
+            if let Some(dialog) = &mut self.export {
+                dialog.logo_chosen(ticket, result.map(|c| c.map(|c| c.path)));
+            }
+            return;
+        }
         if self.chooser.picker == Some(ticket) {
             self.chooser.picker = None;
         }
@@ -252,7 +261,7 @@ impl Library {
         match purpose {
             Purpose::Root if chosen.network => self.stage = Stage::NetworkWarning(chosen.path),
             Purpose::Root => self.use_root(chosen.path, env),
-            Purpose::ExportTo => {}
+            Purpose::ExportTo | Purpose::Watermark => {}
             Purpose::AddFolder => {
                 if self.adding {
                     self.adding = false;

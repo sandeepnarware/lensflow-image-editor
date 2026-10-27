@@ -9,7 +9,10 @@ repository.workspace = true
 lf-settings = { path = "../lf-settings" }
 lf-raw = { path = "../lf-raw" }
 lf-pipeline = { path = "../lf-pipeline" }
-image = { workspace = true, features = ["jpeg", "png", "tiff"] }
+image = { workspace = true, features = ["jpeg", "png", "tiff", "webp"] }
+# Text watermarks: glyph outlines rasterised from egui's bundled Ubuntu-Light (see NOTICE).
+ab_glyph = "0.2"
+epaint_default_fonts = "0.37"
 half.workspace = true
 log.workspace = true
 serde.workspace = true

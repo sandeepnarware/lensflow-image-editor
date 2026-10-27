@@ -127,7 +127,8 @@ cargo test --workspace                   # includes the 228-render parity suite
 - Since 0.1.1 (unreleased): the console's `grade` (`crates/lf-app/src/grade_cli.rs`) and the
   grid's marquee multi-select (`library/grid.rs`, `library/selection.rs`), and culling:
   flags, stars and colour labels (`lf_catalog::cull`, `library/cull.rs`, `library/cull_ui.rs`).
-  White balance eyedropper, Auto WB and Auto tone (`develop/auto.rs`, `ToolKind::WhiteBalance`,
+  Export finishing: sharpening, watermark, sRGB profile, WebP, EXIF in PNG/WebP
+  (`lf_catalog::finish`). White balance eyedropper, Auto WB and Auto tone (`develop/auto.rs`, `ToolKind::WhiteBalance`,
   `lf_settings::shader_values::{wb_gains, neutral_wb}`).
 - Part 2d plan: `docs/plans/2026-10-26-packaging-and-release.md`; progress ledger in
   `.superpowers/sdd/2026-10-26-packaging-and-release/progress.md`.
@@ -152,7 +153,8 @@ cargo test --workspace                   # includes the 228-render parity suite
 
 - HEIC/AVIF unsupported; rawler 0.8 gaps: Nikon HE/HE* NEF, DNG 1.7 JPEG XL, some
   Sony ARW / Phase One IIQ.
-- PNG/TIFF exports carry no EXIF yet (JPEG only).
+- TIFF exports carry no EXIF (the image crate's TIFF encoder cannot add it); WebP export is
+  lossless only. Every export is sRGB with an embedded profile; no other output space yet.
 - Float (RAW) intermediate renders are not bit-identical to 8-bit; five sharpen/detail
   cases exceed the parity gate — intentional, the gate covers the 8-bit path.
 - The OpenGL backend is the app's hardware path on Windows, and it is not bit-identical to
