@@ -104,7 +104,8 @@ cargo test --workspace                   # includes the 228-render parity suite
   damaged sidecar.
 - `develop::preview` renders straight into an `Rgba8Unorm` canvas registered with
   egui-wgpu; no readback while editing. Histogram is throttled to 200 ms.
-- Menus and keys are the same `shortcuts::Action`s; `MAP` is read once per frame.
+- The ribbon (`menu.rs`: tabs, groups, large buttons) and keys are the same
+  `shortcuts::Action`s; `MAP` is read once per frame.
 - `on_exit` order: commit gesture → stop export/batch/import/match → lanes drain (≤10 s)
   → clean export temps → write sidecars → save prefs → release instance lock → hand off
   installer/restart.

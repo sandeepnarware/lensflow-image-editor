@@ -237,6 +237,14 @@ impl App {
             before: self
                 .active_library()
                 .is_some_and(|lib| lib.develop().before()),
+            // The ribbon brings the view's own tab forward when the view changes.
+            context: self
+                .active_library()
+                .filter(|lib| lib.stage == crate::library::Stage::Ready)
+                .map(|lib| match lib.mode {
+                    crate::library::Mode::Develop(_) => menu::DEVELOP,
+                    crate::library::Mode::Library => menu::LIBRARY,
+                }),
         }
     }
 
@@ -539,7 +547,7 @@ impl eframe::App for App {
                 let lost = gpu.is_lost();
                 let software = gpu.is_software();
                 let state = self.menu_state();
-                let clicked = egui::Panel::top("menu-bar")
+                let clicked = egui::Panel::top("ribbon")
                     .show(ui, |ui| menu::bar(ui, &state))
                     .inner;
                 if let Some(action) = clicked {

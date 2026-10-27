@@ -214,7 +214,7 @@ impl Develop {
         }
     }
 
-    /// Photo → Add version…: asks for the version's name, as the section's button does.
+    /// Develop → Add version: asks for the version's name, as the section's button does.
     pub fn ask_add_version(&mut self) {
         if self.session.edit().is_none() {
             return;

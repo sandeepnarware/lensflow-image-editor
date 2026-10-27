@@ -367,7 +367,7 @@ impl Develop {
         self.zoom_asked = Some(action);
     }
 
-    /// Photo → Reset all edits: every setting back to its default (one history step, so
+    /// Develop → Reset all: every setting back to its default (one history step, so
     /// undo brings the edit back).
     pub fn reset_all(&mut self, toasts: &mut Toasts) {
         if self.session.edit().is_some() {
@@ -671,7 +671,7 @@ impl Develop {
         }
     }
 
-    /// Photo → Auto tone (`Ctrl+U`): exposure and the tone sliders from the photo, one
+    /// Develop → Auto tone (`Ctrl+U`): exposure and the tone sliders from the photo, one
     /// history step.
     pub fn auto_tone(&mut self, toasts: &mut Toasts) {
         let (Some(opened), Some(edit)) = (self.opened(), self.session.edit()) else {
@@ -684,7 +684,7 @@ impl Develop {
         }
     }
 
-    /// Photo → Auto white balance (`Ctrl+Shift+U`), one history step.
+    /// Develop → Auto WB (`Ctrl+Shift+U`), one history step.
     pub fn auto_white_balance(&mut self, toasts: &mut Toasts) {
         let Some(found) = self.opened().and_then(|o| auto::auto_wb(&o.sample)) else {
             toasts.push(Level::Info, auto::NO_NEUTRAL);

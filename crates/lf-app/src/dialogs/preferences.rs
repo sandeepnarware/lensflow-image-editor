@@ -1,4 +1,4 @@
-//! Edit → Preferences…: the catalogue folder (shown, with "Change…", which restarts the
+//! File → Preferences: the catalogue folder (shown, with "Change…", which restarts the
 //! library on another one), the frame cache's size, how carefully RAW photos are decoded for
 //! Develop, and where the log is. Each change is saved at once.
 

@@ -110,7 +110,7 @@ restart when you change folders." An export cut short by a lost device logs how
 far it got.
 
 Every frame, `logic()` drains the jobs' messages, ticks the session, reads the
-keyboard map, and taps the device. `ui()` then draws the menu bar, the banners,
+keyboard map, and taps the device. `ui()` then draws the ribbon, the banners,
 the status bar, the screen and the dialogs.
 
 ## Lanes
@@ -211,7 +211,7 @@ The folders come from `directories::ProjectDirs::from("in", "lensflow",
 
 | What | Where |
 |------|-------|
-| Preferences | `<config dir>/prefs.json` (Edit → Preferences…) |
+| Preferences | `<config dir>/prefs.json` (File → Preferences) |
 | Single-instance lock | `<config dir>/instance.lock` |
 | Window size and position | `<config dir>/window.ron` |
 | Cached entitlement | `<config dir>/entitlement.json` (the development server: `entitlement-dev.json`) |
@@ -240,21 +240,33 @@ catalogue connections are dropped. The screen offers "Keep the current
 catalogue" to go back. Change… is off while an export or "Apply to N photos" is
 running, or while "Match a reference" is open.
 
-## Menus and the keyboard map
+## The ribbon and the keyboard map
 
-The window has one menu bar and one status bar:
+The window has a ribbon in the manner of Microsoft Office (`menu.rs`) and one status bar.
+The ribbon is a row of tabs; under the chosen tab are its groups of large buttons, each an
+icon over its name, with the full name and key in its tooltip:
 
-- **File**: Add folder…, Export…, Quit.
-- **Edit**: Undo, Redo, Copy settings…, Paste settings, Apply to selected…,
-  Select all, Preferences….
-- **View**: Library, Develop, Before/After, Fit, 100 %.
-- **Photo**: Match a reference…, Add version…, Reset all edits.
+- **File**: Photos (Add folder, Export), App (Preferences, Quit).
+- **Home**: History (Undo, Redo), Settings (Copy, Paste, Apply to selected), Selection
+  (Select all).
+- **Library**: Flag (Pick, Reject, Unflag), Rating (no stars to 5), Colour label (red to
+  purple, none), Export.
+- **Develop**: Tools (Crop, Spots, White balance), Auto (Auto tone, Auto WB), Photo (Match
+  reference, Add version, Reset all), History.
+- **View**: Mode (Go to Library, Go to Develop), Preview (Before/After, Fit, 100 %).
 - **Account**: the studio's name, Switch studio, Check entitlement now, Sign out.
 - **Help**: About, Show log folder, Keyboard shortcuts.
 
-Menu items and keys are the same `shortcuts::Action`s. The keyboard map,
+The ribbon follows the view: entering Develop brings the Develop tab forward and going back
+brings the Library tab, once per change, so any tab can still be chosen. The arrow at its
+right folds it down to the tabs. Buttons that cannot act now are faded and do nothing. The
+icons are glyphs from egui's bundled fonts (Noto Emoji and emoji-icon-font, the
+`monochrome_emoji_fonts` feature); a test checks every one is there, since a missing glyph
+would draw as nothing.
+
+Ribbon buttons and keys are the same `shortcuts::Action`s. The keyboard map,
 `shortcuts::MAP`, is a table of `(Action, KeyboardShortcut)` read once per frame
-in `logic()`; the menus show its keys, and Help → Keyboard shortcuts lists it. A
+in `logic()`; the ribbon's tooltips show its keys, and Help → Keyboard shortcuts lists it. A
 press means the most specific matching entry, so `Ctrl+Shift+Z` is always redo,
 never undo. A press whose action is not possible now is left for the widgets;
 for example, `Delete` with no spot selected still removes a tone curve point.
@@ -301,7 +313,7 @@ the decoder.
 ### Culling: flags, stars and colour labels
 
 `P`, `X` and `U` pick, reject and unflag; `0`–`5` set stars; `6`–`9` set a red,
-yellow, green or blue label (purple and "no label" are in Photo → Set colour label).
+yellow, green or blue label (purple and "no label" are on the Library tab).
 A label already on every photo it is pressed on comes off instead. In the grid a mark
 goes on every selected photo; in Develop, on the open one. The grid shows it at once
 (`library::cull::apply`) and the catalogue is written on the `Io` lane

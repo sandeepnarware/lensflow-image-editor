@@ -1,6 +1,6 @@
 //! Everything the window can be asked to do from a menu or the keyboard ([`Action`]), and the
 //! one keyboard map ([`MAP`]) that binds keys to actions. The app reads the map once per frame
-//! in `logic()`; the menus show the same map's keys; Help → Keyboard shortcuts lists it.
+//! in `logic()`; the ribbon's tooltips show the same map's keys; Help → Keyboard shortcuts lists it.
 //!
 //! The keys follow Lightroom where it has a default. `Ctrl` reads as `Cmd` on macOS
 //! ([`Modifiers::COMMAND`]). Keys never fire while a text field (or any widget) has the
@@ -68,7 +68,8 @@ pub enum Action {
 }
 
 impl Action {
-    /// The menu item's label (or what Help → Keyboard shortcuts calls it).
+    /// The action's full name: the ribbon button's tooltip and accessible name, and what
+    /// Help → Keyboard shortcuts calls it.
     pub fn label(self) -> &'static str {
         match self {
             Action::AddFolder => "Add folder…",
@@ -81,8 +82,8 @@ impl Action {
             Action::ApplyToSelected => "Apply to selected…",
             Action::SelectAll => "Select all",
             Action::Preferences => "Preferences…",
-            Action::Library => "Library",
-            Action::Develop => "Develop",
+            Action::Library => "Go to Library",
+            Action::Develop => "Go to Develop",
             Action::BeforeAfter => "Before/After",
             Action::Fit => "Fit",
             Action::ActualSize => "100 %",
