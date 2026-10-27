@@ -1003,8 +1003,13 @@ impl Library {
         if let Mode::Develop(id) = self.mode {
             let photo = self.index.get(&id).map(|&i| &self.photos[i]);
             let develop = &mut self.develop;
+            // 12 points each side: `histogram_panel_width` leaves exactly room for them
+            // around the 256-point histogram.
+            let frame = egui::Frame::side_top_panel(ui.style())
+                .inner_margin(egui::Margin::symmetric(12, 2));
             egui::Panel::right("develop-side")
                 .exact_size(histogram_panel_width())
+                .frame(frame)
                 .show(ui, |ui| develop.side_ui(ui, photo, env.toasts));
         }
         match self.mode {
@@ -1012,8 +1017,13 @@ impl Library {
                 egui::CentralPanel::default_margins().show(ui, |ui| self.grid(ui, env));
             }
             Mode::Develop(_) => {
+                // A gutter around the photo, so it is not flush against the side panel.
                 egui::CentralPanel::default()
-                    .frame(egui::Frame::new().fill(theme::BG))
+                    .frame(
+                        egui::Frame::new()
+                            .fill(theme::BG)
+                            .inner_margin(develop::PREVIEW_GUTTER),
+                    )
                     .show(ui, |ui| self.develop.preview_ui(ui, env.toasts));
             }
         }
@@ -1650,6 +1660,11 @@ mod tests {
         assert_eq!(
             crate::app::DEVICE_LOST_BANNER,
             "The graphics device was reset. Restart lensflow-ImageEditor to continue."
+        );
+        assert_eq!(
+            crate::app::SOFTWARE_BANNER,
+            "No graphics driver found: previews will be slow. Installing or updating the \
+             graphics driver (and not running over Remote Desktop) makes them fast."
         );
         assert_eq!(
             THUMBS_STOPPED_BANNER,

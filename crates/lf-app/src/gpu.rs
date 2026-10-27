@@ -29,13 +29,45 @@ pub fn attach(render_state: Option<&RenderState>) -> Result<Arc<Gpu>, String> {
 /// Makes eframe open its device with the adapter's own limits, as `Gpu::new` does: egui's
 /// default (`Limits::default()`: 8192 px textures, 256 MiB buffers) would refuse 45 to
 /// 100 MP photos.
+///
+/// It also settles the backends wgpu may use (see [`desktop_backends`]). wgpu then picks
+/// the adapter itself, by `HighPerformance`: a hardware GPU wins over a software one.
 pub fn request_full_limits(options: &mut WgpuConfiguration) {
-    if let WgpuSetup::CreateNew(setup) = &mut options.wgpu_setup {
-        let egui_descriptor = setup.device_descriptor.clone();
-        setup.device_descriptor = Arc::new(move |adapter: &wgpu::Adapter| wgpu::DeviceDescriptor {
-            required_limits: adapter.limits(),
-            ..egui_descriptor(adapter)
-        });
+    let WgpuSetup::CreateNew(setup) = &mut options.wgpu_setup else {
+        return;
+    };
+    if std::env::var_os("WGPU_BACKEND").is_none() {
+        let backends = desktop_backends();
+        log::info!("graphics backends: {backends:?}");
+        setup.instance_descriptor.backends = backends;
+    }
+    let egui_descriptor = setup.device_descriptor.clone();
+    setup.device_descriptor = Arc::new(move |adapter: &wgpu::Adapter| wgpu::DeviceDescriptor {
+        required_limits: adapter.limits(),
+        ..egui_descriptor(adapter)
+    });
+}
+
+/// The backends wgpu may use: DirectX 12 and OpenGL on Windows, everything eframe enables
+/// elsewhere.
+///
+/// Windows leaves Vulkan out, and only Windows needs to. wgpu's default there is Vulkan,
+/// DirectX 12 and OpenGL, which is right on a machine with a current driver; but a backend
+/// that cannot start takes the others down with it. With an old NVIDIA driver (OpenGL 4.5,
+/// no Vulkan ICD installed, DirectX 12 exposing only Microsoft's Basic Render Driver) an
+/// instance created with Vulkan enabled then reports no OpenGL adapter at all, in this
+/// process, for the rest of its life, and every preview is drawn on the CPU: about
+/// 390 ms a frame against 14 ms on the same machine's GPU. Opened without Vulkan, the same
+/// DirectX 12 and OpenGL backends do find that GPU.
+///
+/// So the pair is tried alone on Windows rather than probed for: the probe itself is what
+/// breaks OpenGL. A GPU that DirectX 12 drives is one OpenGL also drives (both come with
+/// its driver), and `WGPU_BACKEND=vulkan` still asks for Vulkan where a user wants it.
+fn desktop_backends() -> wgpu::Backends {
+    if cfg!(windows) {
+        wgpu::Backends::DX12 | wgpu::Backends::GL
+    } else {
+        wgpu::Backends::PRIMARY | wgpu::Backends::GL
     }
 }
 
@@ -83,6 +115,27 @@ impl ErrorTap {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn windows_opens_dx12_and_opengl_without_vulkan() {
+        let backends = desktop_backends();
+        assert!(
+            backends.contains(wgpu::Backends::GL),
+            "OpenGL is the fallback"
+        );
+        if cfg!(windows) {
+            assert!(backends.contains(wgpu::Backends::DX12), "the usual backend");
+            assert!(
+                !backends.contains(wgpu::Backends::VULKAN),
+                "Vulkan hides the OpenGL adapter on some drivers"
+            );
+        } else {
+            assert!(
+                backends.contains(wgpu::Backends::VULKAN),
+                "the usual backend elsewhere"
+            );
+        }
+    }
 
     #[test]
     fn three_errors_in_a_minute_ask_for_one_toast() {

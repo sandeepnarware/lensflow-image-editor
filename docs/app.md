@@ -62,6 +62,12 @@ and the server on the clipboard for a support request. It holds nothing secret.
 `main.rs` opens the window with `NativeOptions { renderer: Wgpu }` and asks
 eframe for a device with the adapter's own limits (`gpu::request_full_limits`),
 because egui's default 8192 px texture limit would refuse 45 to 100 MP photos.
+The same call settles the backends: DirectX 12 and OpenGL on Windows, everything
+eframe enables elsewhere (`WGPU_BACKEND` overrides). Windows leaves Vulkan out
+because a Vulkan-enabled instance can report no OpenGL adapter at all on an old
+NVIDIA driver, which leaves only the Basic Render Driver and draws every preview
+on the CPU; the pair alone finds that machine's GPU. wgpu then picks the adapter
+by `HighPerformance`, so a hardware GPU wins over a software rasteriser.
 `App::new` wraps eframe's device once with `Gpu::from_device`, so the preview,
 the thumbnails, the exports and "Match a reference" share that device. There is
 never a second device.
@@ -155,6 +161,16 @@ owns an `Rgba8Unorm` canvas the size of the photo's on-screen rectangle in
 physical pixels. The canvas is registered with egui-wgpu as a native texture.
 `Renderer::draw` renders straight into it at viewport size, and egui shows it
 with no readback.
+
+The preview is laid out inside a `PREVIEW_GUTTER` (12 points) margin, so the
+photo never sits flush against the window edges or the adjust panel; the side
+panel reserves the same 12 points each side around the 256-point histogram.
+
+On a software adapter (no graphics driver: WARP, lavapipe, SwiftShader) the
+develop shader runs on the CPU, so `Preview::canvas_size` caps the canvas at
+`SOFTWARE_EDGE` (1024) long edge and egui stretches it over the same rectangle.
+Framing and edits are unchanged; the preview is slightly softer, and a drag
+costs a fraction of the CPU time. The banner says so and names the fix.
 
 The canvas is drawn again only when its size, the view (zoom and pan), the
 before/after state or the settings change. While a slider is dragged, each frame

@@ -28,7 +28,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub const SOFTWARE_BANNER: &str = "No graphics driver found: previews will be slow.";
+pub const SOFTWARE_BANNER: &str = "No graphics driver found: previews will be slow. Installing or \
+     updating the graphics driver (and not running over Remote Desktop) makes them fast.";
 pub const DEVICE_LOST_BANNER: &str =
     "The graphics device was reset. Restart lensflow-ImageEditor to continue.";
 /// The library's banner when a graphics error (not a lost device) stopped the thumbnails.

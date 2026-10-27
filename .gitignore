@@ -1,2 +1,4 @@
 /target
+# Installers built locally (dist/); CI uploads them as artifacts instead.
+/dist
 tests/raw-samples/files/

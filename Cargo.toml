@@ -4,7 +4,7 @@ members = ["crates/lf-settings", "crates/lf-pipeline", "crates/lf-fixtures", "cr
 
 [workspace.package]
 # The release version: the build workflow writes its input here, and lf-app inherits it.
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/sandeepnarware/lensflow-image-editor"

@@ -60,6 +60,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use view::{Viewport, Zoom};
 
+/// The space between the preview and the window's edges and the side panel, in points: the
+/// photo never sits flush against the adjust panel.
+pub const PREVIEW_GUTTER: f32 = 12.0;
 /// Shown while a photo opens.
 pub const OPENING: &str = "Opening…";
 /// The placeholder for a photo that cannot be opened.
@@ -735,7 +738,7 @@ impl Develop {
         };
         let placement = self.viewport.placement(output, panel);
         let (_, _, rw, rh) = placement.rect;
-        let size = ((rw.round() as u32).max(1), (rh.round() as u32).max(1));
+        let size = preview::canvas_size(&self.gpu, rw, rh);
         let key = DrawKey {
             size,
             view: placement.view,
