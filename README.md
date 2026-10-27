@@ -64,6 +64,9 @@ sidecars (a damaged one is left alone and that photo skipped). `Ctrl`+click
 adds or removes one photo and dragging a box over the grid selects everything
 inside it.
 
+Lens corrections (a section after Effects): distortion, lens vignetting, red/cyan and
+blue/yellow fringes, and vertical and horizontal perspective, kept for the desktop only.
+
 Masks (`M`): linear and radial gradients, each with its own exposure, tone, white
 balance, saturation and clarity, moved by their handles on the photo. They are kept for
 the desktop only (the web editor keeps them but does not draw them).

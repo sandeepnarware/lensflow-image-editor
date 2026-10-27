@@ -11,6 +11,7 @@ pub mod detail;
 pub mod effects;
 pub mod grading;
 pub mod hsl;
+pub mod lens;
 pub mod light;
 pub mod looks;
 pub mod presets;
@@ -215,5 +216,18 @@ pub fn show(
             out.reset = Some(sec.groups);
         }
     }
+    // Desktop only, after the web's sections: its Reset is its own, as the RAW section's.
+    let mut r = SliderResponse::default();
+    if section(ui, "lens", lens::TITLE, false, |ui| r = lens::show(ui, s)) {
+        let before = s.clone();
+        lens::reset(s);
+        if *s != before {
+            r = SliderResponse {
+                changed: true,
+                released: true,
+            };
+        }
+    }
+    out.absorb(r);
     out
 }

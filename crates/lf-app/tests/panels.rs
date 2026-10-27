@@ -367,3 +367,28 @@ fn auto_tone_auto_white_balance_and_the_eyedropper_button() {
     h.run();
     assert!(h.state().picked, "the eyedropper asks for its tool");
 }
+
+#[test]
+fn the_lens_section_writes_desktop_lens_and_its_reset_clears_it() {
+    use lf_app::develop::panels::lens;
+    use lf_settings::lens::Lens;
+    let mut h = harness(false);
+    h.run();
+    h.get_by_label(lens::TITLE).click();
+    h.run();
+    for label in lens::LABELS {
+        assert!(h.query_by_label(label).is_some(), "{label} is shown");
+    }
+    // Set through the settings as a slider gesture would, then Reset puts none back.
+    let mut l = Lens::from_settings(&h.state().settings);
+    l.vertical = 30.0;
+    l.write_into(&mut h.state_mut().settings);
+    h.run();
+    assert_eq!(Lens::from_settings(&h.state().settings).vertical, 30.0);
+    let commits = h.state().commits;
+    h.get_by_label(&format!("Reset {}", lens::TITLE)).click();
+    h.run();
+    assert!(Lens::from_settings(&h.state().settings).is_none());
+    assert!(h.state().settings.desktop.is_none());
+    assert_eq!(h.state().commits, commits + 1, "one step");
+}

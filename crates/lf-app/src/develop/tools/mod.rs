@@ -19,6 +19,7 @@ use crop::CropTool;
 use eframe::egui::{self, Color32, CursorIcon, Pos2, Rect, RichText, Stroke};
 use lf_pipeline::renderer::View;
 use lf_settings::geometry::{self, Geometry, apply, invert, output_to_source};
+use lf_settings::lens::Lens;
 use lf_settings::masks::{Mask, Masks, Shape};
 use lf_settings::{Crop, EditSettings, MAX_SPOTS, Spot, SpotMode};
 use masks::MaskTool;
@@ -160,6 +161,9 @@ struct SpotMap {
     /// Screen points per photo width (a spot's radius → screen).
     scale: f64,
     aspect: f64,
+    /// Spots and the eyedropper work in the photo as shot: through the lens corrections
+    /// when they move pixels (masks stay in the corrected photo, as the shader places them).
+    lens: Option<Lens>,
 }
 
 impl SpotMap {
@@ -172,15 +176,31 @@ impl SpotMap {
             scale: f64::from(full.0) * f64::from(screen.shown.width())
                 / (screen.view.w * output_w.max(1.0)),
             aspect: f64::from(full.0) / f64::from(full.1.max(1)),
+            lens: None,
         }
+    }
+
+    /// The same map, ending in the photo as shot (for spots and the eyedropper).
+    fn through_lens(mut self, s: &EditSettings) -> SpotMap {
+        let lens = Lens::from_settings(s);
+        self.lens = lens.moves_pixels().then_some(lens);
+        self
     }
 
     fn uv(&self, p: Pos2) -> (f64, f64) {
         let (u, v) = self.screen.to_output(p);
-        apply(&self.to_source, u, v)
+        let corrected = apply(&self.to_source, u, v);
+        match &self.lens {
+            Some(lens) => lens.to_source(corrected, self.aspect),
+            None => corrected,
+        }
     }
 
-    fn screen(&self, (x, y): (f64, f64)) -> Pos2 {
+    fn screen(&self, p: (f64, f64)) -> Pos2 {
+        let (x, y) = match &self.lens {
+            Some(lens) => lens.to_corrected(p, self.aspect),
+            None => p,
+        };
         self.screen.to_screen(apply(&self.to_output, x, y))
     }
 
@@ -432,7 +452,11 @@ impl Develop {
                 if response.clicked()
                     && let Some(at) = origin.or(pointer)
                 {
-                    picked = Some(SpotMap::new(map, &edit.settings, full, output_w).uv(at));
+                    picked = Some(
+                        SpotMap::new(map, &edit.settings, full, output_w)
+                            .through_lens(&edit.settings)
+                            .uv(at),
+                    );
                 }
                 // A drag still pans the photo.
                 input.owns_drag = false;
@@ -468,7 +492,8 @@ impl Develop {
                 }
             }
             Active::Spots(tool) => {
-                let spot_map = SpotMap::new(map, &edit.settings, full, output_w);
+                let spot_map =
+                    SpotMap::new(map, &edit.settings, full, output_w).through_lens(&edit.settings);
                 let aspect = spot_map.aspect;
                 let min_r = spot_map.width_fraction(MIN_SPOT_POINTS);
                 let mut press = |tool: &mut SpotTool, at: Pos2, radius: f64| {
@@ -565,7 +590,8 @@ impl Develop {
                 }
             }
             Active::Spots(tool) => {
-                let spot_map = SpotMap::new(map, &edit.settings, full, output_w);
+                let spot_map =
+                    SpotMap::new(map, &edit.settings, full, output_w).through_lens(&edit.settings);
                 for (i, s) in edit.settings.spots.iter().enumerate() {
                     paint_spot(&painter, &spot_map, s, tool.selected == Some(i));
                 }
@@ -991,5 +1017,44 @@ mod tests {
             (corner.x - 1000.0).abs() < 1e-3 && corner.y.abs() < 1e-3,
             "{corner:?}"
         );
+    }
+
+    #[test]
+    fn through_the_lens_a_spot_lands_where_the_shader_samples() {
+        let mut s = EditSettings::default_settings();
+        let lens = Lens {
+            distortion: 70.0,
+            vertical: 40.0,
+            ..Lens::default()
+        };
+        lens.write_into(&mut s);
+        let screen = ScreenMap {
+            shown: Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1500.0, 1000.0)),
+            view: View::default(),
+        };
+        let plain = SpotMap::new(screen, &s, (3000, 2000), 3000.0);
+        let spots = SpotMap::new(screen, &s, (3000, 2000), 3000.0).through_lens(&s);
+        let at = egui::pos2(1300.0, 150.0);
+        // The corrected point the masks use, and the photo-as-shot point the spots use.
+        let corrected = plain.uv(at);
+        let shot = spots.uv(at);
+        assert_eq!(shot, lens.to_source(corrected, 1.5));
+        assert!(shot != corrected, "the correction moves it");
+        // Back to the same screen point both ways.
+        let back = spots.screen(shot);
+        assert!(
+            (back.x - at.x).abs() < 1e-3 && (back.y - at.y).abs() < 1e-3,
+            "{back:?}"
+        );
+        // No correction that moves pixels: the plain map.
+        let mut vignette_only = EditSettings::default_settings();
+        Lens {
+            vignetting: 50.0,
+            ..Lens::default()
+        }
+        .write_into(&mut vignette_only);
+        let m =
+            SpotMap::new(screen, &vignette_only, (3000, 2000), 3000.0).through_lens(&vignette_only);
+        assert!(m.lens.is_none());
     }
 }

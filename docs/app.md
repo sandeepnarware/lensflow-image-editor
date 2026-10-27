@@ -289,6 +289,26 @@ click. A drag that starts in the empty space below or beside the cells draws a b
 too. Only the cells on screen are found by a box, and a box that stays in the gaps
 between cells selects nothing until it reaches one.
 
+### Lens corrections
+
+The "Lens corrections" section (after the web's sections, for every photo) has Distortion
+(above 0 straightens barrel, below 0 pincushion), Lens vignetting (lifts dark corners in
+linear light), Red/cyan and Blue/yellow fringe (lateral chromatic aberration: the red or
+blue channel sampled a little further in or out) and Vertical and Horizontal perspective
+(keystone: each row or column scaled about the centre by how far down or across it is).
+Its "Reset" puts every correction back to none. There is no lens profile database yet
+(lensfun's is CC-BY-SA, which needs a licence review before it is bundled), and no
+automatic upright.
+
+They are desktop-only, in `desktop.lens` (`lf_settings::lens`), and happen first, before
+the crop and turn. The shader maps each output pixel through the geometry to a corrected
+position (`muv`, where masks are placed) and through `lens_to_source` to the photo as
+shot (`uv`, where it samples, as do the spots); the texture derivatives follow the warp.
+`Lens::to_source` is the same formula on the CPU, and `Lens::to_corrected` inverts it (a
+few Newton steps), so the spot tool and the eyedropper map the pointer through it
+(`SpotMap::through_lens`) and a spot lands where the shader samples. With no correction
+`lens_on` is 0 and the pass is the web's, so the parity gate is untouched.
+
 ### Masks (local adjustments)
 
 `M` (or the tool row's "Masks", or the ribbon's Develop → Masks) opens the masks tool. "Add

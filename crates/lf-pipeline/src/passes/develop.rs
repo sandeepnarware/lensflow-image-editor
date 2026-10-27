@@ -63,8 +63,14 @@ pub struct Uniforms {
     pub mask_count: u32,
     /// The working photo's width per unit of height (masks work in a square space).
     pub aspect: f32,
-    pub _mask_pad: [u32; 2],
+    /// Desktop only: 1 when a lens correction is on (0: the web's pass exactly).
+    pub lens_on: u32,
+    pub _lens_pad: u32,
     pub masks: [MaskUniform; MAX_MASKS],
+    /// Distortion (signed strength), lens vignetting, red and blue scale (`lf_settings::lens`).
+    pub lens: [f32; 4],
+    /// Vertical and horizontal keystone, the corner's squared radius, unused.
+    pub persp: [f32; 4],
 }
 
 /// One local adjustment as `develop.wgsl`'s `MaskU` takes it (six 16-byte rows).
@@ -139,7 +145,7 @@ impl MaskUniform {
 const _: () = {
     use std::mem::{offset_of, size_of};
     assert!(size_of::<MaskUniform>() == 96);
-    assert!(size_of::<Uniforms>() == 624 + 16 + MAX_MASKS * 96);
+    assert!(size_of::<Uniforms>() == 624 + 16 + MAX_MASKS * 96 + 32);
     assert!(offset_of!(Uniforms, wb) == 128);
     assert!(offset_of!(Uniforms, pixel) == 232);
     assert!(offset_of!(Uniforms, hsl) == 240);
@@ -147,6 +153,7 @@ const _: () = {
     assert!(offset_of!(Uniforms, band_width) == 240 + 2 * 8 * 16);
     assert!(offset_of!(Uniforms, mask_count) == 624);
     assert!(offset_of!(Uniforms, masks) == 640);
+    assert!(offset_of!(Uniforms, lens) == 640 + MAX_MASKS * 96);
 };
 
 /// Where the develop pass draws from and how (the arguments of `developPass` that are not
@@ -174,6 +181,7 @@ impl Uniforms {
         let m = f.matrix.map(|v| v as f32);
         let v = shader_values(s);
         let masks = Masks::from_settings(s);
+        let lens = lf_settings::lens::Lens::from_settings(s);
         let aspect = f64::from(f.img_size[0]) / f64::from(f.img_size[1].max(1));
         let mut mask_uniforms = [MaskUniform::default(); MAX_MASKS];
         for (slot, mask) in mask_uniforms.iter_mut().zip(&masks.0) {
@@ -233,8 +241,21 @@ impl Uniforms {
             band_width,
             mask_count: masks.0.len() as u32,
             aspect: aspect as f32,
-            _mask_pad: [0; 2],
+            lens_on: u32::from(f.develop && !lens.is_none()),
+            _lens_pad: 0,
             masks: mask_uniforms,
+            lens: [
+                (-lens.distortion / 100.0 * lf_settings::lens::DISTORTION) as f32,
+                (lens.vignetting / 100.0 * lf_settings::lens::VIGNETTING) as f32,
+                (lens.ca_red / 100.0 * lf_settings::lens::CA) as f32,
+                (lens.ca_blue / 100.0 * lf_settings::lens::CA) as f32,
+            ],
+            persp: [
+                (lens.vertical / 100.0 * lf_settings::lens::KEYSTONE) as f32,
+                (lens.horizontal / 100.0 * lf_settings::lens::KEYSTONE) as f32,
+                ((aspect * aspect + 1.0) / 4.0) as f32,
+                0.0,
+            ],
         }
     }
 }

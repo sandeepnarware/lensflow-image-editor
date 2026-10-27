@@ -69,9 +69,11 @@ struct Uniforms {
     band_width: array<vec4<f32>, 8>, // uBandWidth (x)
     mask_count: u32,        // desktop only: 0 is the web's pass exactly
     aspect: f32,            // working width per unit of height
-    _mask_pad0: u32,
-    _mask_pad1: u32,
+    lens_on: u32,           // desktop only: 0 is the web's pass exactly
+    _lens_pad: u32,
     masks: array<MaskU, 8>,
+    lens: vec4<f32>,        // distortion, lens vignetting, red scale, blue scale
+    persp: vec4<f32>,       // vertical and horizontal keystone, corner radius squared
 }
 
 @group(0) @binding(0) var u_img: texture_2d<f32>;    // the photo (after spots)
@@ -136,6 +138,20 @@ fn curve_at(x: f32) -> vec4<f32> {
     return textureSampleLevel(u_curve, s_curve, vec2<f32>(x * 255.0 / 256.0 + 0.5 / 256.0, 0.5), 0.0);
 }
 
+// Desktop only: a corrected position (after lens corrections, before the framing) to where
+// it is in the photo as shot. The same formula as `lf_settings::lens::Lens::to_source`.
+fn lens_to_source(p: vec2<f32>) -> vec2<f32> {
+    var x = p.x - 0.5;
+    var y = p.y - 0.5;
+    let sx = 1.0 + u.persp.x * y;
+    let sy = 1.0 - u.persp.y * x;
+    x *= sx;
+    y *= sy;
+    let r2 = ((x * u.aspect) * (x * u.aspect) + y * y) / u.persp.z;
+    let f = 1.0 + u.lens.x * r2;
+    return vec2<f32>(0.5 + x * f, 0.5 + y * f);
+}
+
 // Desktop only: how much mask `m` applies at `p` (photo UV with x × aspect), 0..1. The same
 // formula as `lf_settings::masks::weight`.
 fn mask_weight(m: MaskU, p: vec2<f32>) -> f32 {
@@ -157,7 +173,9 @@ fn mask_weight(m: MaskU, p: vec2<f32>) -> f32 {
 // The GLSL's develop() after its first two lines (`c = texture(uImg, uv)`, and the early
 // return when uDevelop is off), which fs_develop does: with FXC's optimiser that early return
 // made WARP lose the device.
-fn develop(photo: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
+// `muv`: where the masks are placed (the corrected position; `uv` itself without lens
+// corrections).
+fn develop(photo: vec3<f32>, uv: vec2<f32>, muv: vec2<f32>) -> vec3<f32> {
     var c = photo;
 
     // The sliders a mask can move, as the uniforms set them; masks (desktop only) add their
@@ -172,7 +190,7 @@ fn develop(photo: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
     var clarity = u.clarity;
     var wb = u.wb;
     if (u.mask_count > 0u) {
-        let p = vec2<f32>(uv.x * u.aspect, uv.y);
+        let p = vec2<f32>(muv.x * u.aspect, muv.y);
         for (var i = 0u; i < u.mask_count; i++) {
             let m = u.masks[i];
             let w = mask_weight(m, p);
@@ -331,15 +349,36 @@ fn develop(photo: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
 fn fs_develop(in: VsOut) -> @location(0) vec4<f32> {
     let canvas_uv = vec2<f32>(in.uv.x, select(in.uv.y, 1.0 - in.uv.y, u.flip_y != 0u));
     let out_uv = u.view.xy + canvas_uv * u.view.zw;
-    let uv = (u.matrix * vec3<f32>(out_uv, 1.0)).xy;
+    // `muv`: the corrected position, where masks are placed; `uv`: the photo as shot.
+    let muv = (u.matrix * vec3<f32>(out_uv, 1.0)).xy;
+    var uv = muv;
+    grad_x = (u.matrix * vec3<f32>(u.view.z * u.pixel.x, 0.0, 0.0)).xy;
+    grad_y = (u.matrix * vec3<f32>(0.0, u.view.w * u.pixel.y * select(1.0, -1.0, u.flip_y != 0u), 0.0)).xy;
+    if (u.lens_on != 0u) {
+        // Desktop only: through the lens corrections, and the derivatives with it.
+        uv = lens_to_source(muv);
+        grad_x = lens_to_source(muv + grad_x) - uv;
+        grad_y = lens_to_source(muv + grad_y) - uv;
+    }
     if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0 || out_uv.x < 0.0 || out_uv.y < 0.0 || out_uv.x > 1.0 || out_uv.y > 1.0) {
         return vec4<f32>(0.12, 0.12, 0.13, 1.0);
     }
-    grad_x = (u.matrix * vec3<f32>(u.view.z * u.pixel.x, 0.0, 0.0)).xy;
-    grad_y = (u.matrix * vec3<f32>(0.0, u.view.w * u.pixel.y * select(1.0, -1.0, u.flip_y != 0u), 0.0)).xy;
 
     var c = sample_2d(u_img, s_img, uv).rgb;
-    if (u.develop != 0u) { c = develop(c, uv); }
+    if (u.lens_on != 0u) {
+        // Lateral chromatic aberration: red and blue from a little further in or out.
+        if (u.lens.z != 0.0 || u.lens.w != 0.0) {
+            let d = uv - 0.5;
+            c.r = sample_2d(u_img, s_img, 0.5 + d * (1.0 + u.lens.z)).r;
+            c.b = sample_2d(u_img, s_img, 0.5 + d * (1.0 + u.lens.w)).b;
+        }
+        // The lens's own vignetting, lifted in linear light.
+        if (u.lens.y != 0.0) {
+            let q = vec2<f32>((uv.x - 0.5) * u.aspect, uv.y - 0.5);
+            c = to_gamma(to_linear(c) * (1.0 + u.lens.y * dot(q, q) / u.persp.z));
+        }
+    }
+    if (u.develop != 0u) { c = develop(c, uv, muv); }
 
     if (u.develop != 0u && u.vignette != 0.0) {
         // Elliptical, following the crop's shape; the midpoint sets where it starts.
