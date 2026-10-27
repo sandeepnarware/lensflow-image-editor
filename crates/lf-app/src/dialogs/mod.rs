@@ -5,6 +5,7 @@
 pub mod about;
 pub mod batch;
 pub mod export;
+pub mod gallery_export;
 pub mod group_picker;
 pub mod keys;
 pub mod match_reference;

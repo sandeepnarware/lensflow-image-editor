@@ -53,7 +53,14 @@ pub const RIBBON: &[Tab] = &[
     Tab {
         title: "File",
         groups: &[
-            group("Photos", &[Do(Action::AddFolder), Do(Action::Export)]),
+            group(
+                "Photos",
+                &[
+                    Do(Action::AddFolder),
+                    Do(Action::Export),
+                    Do(Action::ExportToGallery),
+                ],
+            ),
             group("App", &[Do(Action::Preferences), Do(Action::Quit)]),
         ],
     },
@@ -105,7 +112,7 @@ pub const RIBBON: &[Tab] = &[
                     Do(Action::Label(None)),
                 ],
             ),
-            group("Export", &[Do(Action::Export)]),
+            group("Export", &[Do(Action::Export), Do(Action::ExportToGallery)]),
         ],
     },
     Tab {
@@ -204,6 +211,7 @@ pub fn icon(action: Action) -> &'static str {
     match action {
         Action::AddFolder => "📁",
         Action::Export => "📤",
+        Action::ExportToGallery => "☁",
         Action::Quit => "🚪",
         Action::Undo => "⟲",
         Action::Redo => "⟳",
@@ -255,6 +263,7 @@ pub fn short_label(action: Action) -> &'static str {
     match action {
         Action::AddFolder => "Add folder",
         Action::Export => "Export",
+        Action::ExportToGallery => "To gallery",
         Action::CopySettings => "Copy settings",
         Action::ApplyToSelected => "Apply to selected",
         Action::Preferences => "Preferences",
@@ -551,7 +560,7 @@ mod tests {
         h.run();
         // The widest tab fits a 1280-point window: groups are as wide as their buttons.
         {
-            let last = h.get_by_label("Export…").rect();
+            let last = h.get_by_label("Export to gallery…").rect();
             assert!(last.max.x <= 1280.0, "the Library tab overflows: {last:?}");
         }
         h.get_by_label("3 stars").click();

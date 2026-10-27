@@ -497,6 +497,7 @@ impl eframe::App for App {
             // Match a reference: its cost line reads the gate; a fit asked for gets the AI
             // link, whose fresh check before each AI request goes through the session.
             lib.set_match_gate(self.flow.gate());
+            lib.set_gallery_link(self.flow.gallery_link());
             if let Some(shown) = lib.take_match_run() {
                 lib.start_match(self.flow.ai_link(&self.jobs), shown, &self.jobs);
             }

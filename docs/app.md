@@ -289,6 +289,32 @@ click. A drag that starts in the empty space below or beside the cells draws a b
 too. Only the cells on screen are found by a box, and a box that stays in the gaps
 between cells selects nothing until it reaches one.
 
+### Export to a gallery
+
+File → Export to gallery (or the Library tab's Export group) uploads the selected photos
+to a LensFlow gallery. It is on only while the gate allows gallery export
+(`Decision::gallery_export_allowed`: not read-only, not locked); the app hands the library
+the studio's client each frame (`SessionFlow::gallery_link`), and none otherwise. The
+dialog lists the studio's galleries that are not archived (most recently changed first,
+searchable by title or customer) and the chosen one's sections, and asks for the size
+(the original, or a long edge, 3000 px by default) and the JPEG quality (90).
+
+The upload (`gallery_job::run`, on the `Long` lane) renders each photo to a JPEG through
+the disk export (so it carries its EXIF and the sRGB profile) into
+`<cache>/gallery-upload`, uploads it, and removes it, so one rendered photo at a time is
+on disk. Uploads use the web uploader's resumable sessions
+(`lf_account::galleries::upload`): `POST galleries/{g}/uploads` with the file's name, size,
+type and SHA-1, then either the chunks through the API or, when the gallery's storage
+gives a direct link, Azure blocks (ids as the web makes them) and a block list, then
+`complete`. A photo the gallery already holds (409 with `duplicate_photo_id`) counts as
+"already there", not a failure; a photo that fails is listed and the run goes on. Stop
+ends it after the current photo; closing the window leaves it running, with "Uploading 12
+of 40" in the status bar and a toast at the end. Quitting asks first.
+
+As the design says, the rendered JPEG goes up as an ordinary new photo: the server's
+`edit` record needs a photo already in the gallery, so the desktop settings are not
+attached, and re-editing on the web starts from the JPEG.
+
 ### Lens corrections
 
 The "Lens corrections" section (after the web's sections, for every photo) has Distortion

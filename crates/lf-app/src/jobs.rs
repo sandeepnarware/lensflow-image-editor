@@ -163,6 +163,20 @@ pub enum Msg {
     /// An export to disk ended (finished or stopped), or why it was refused (the sentence to
     /// show).
     ExportDone(Result<ExportOutcome, String>),
+    /// The studio's galleries, for the gallery dialog's list of `ticket`.
+    Galleries {
+        ticket: u64,
+        result: Result<Vec<lf_account::galleries::Gallery>, String>,
+    },
+    /// A gallery's sections.
+    GallerySections {
+        gallery: i64,
+        result: Result<Vec<lf_account::galleries::Section>, String>,
+    },
+    /// An upload to a gallery moved on.
+    GalleryProgress { done: usize, total: usize },
+    /// An upload to a gallery finished (or could not start).
+    GalleryDone(Result<crate::gallery_job::GalleryOutcome, String>),
 
     #[cfg(test)]
     Probe(&'static str),
@@ -679,7 +693,11 @@ pub(crate) mod owners {
             | Msg::BatchProgress(..)
             | Msg::Match(..)
             | Msg::ExportProgress { .. }
-            | Msg::ExportDone(..) => Owner::Library,
+            | Msg::ExportDone(..)
+            | Msg::Galleries { .. }
+            | Msg::GallerySections { .. }
+            | Msg::GalleryProgress { .. }
+            | Msg::GalleryDone(..) => Owner::Library,
             Msg::DeviceReset(..) => Owner::App,
             Msg::Probe(..) => Owner::Test,
         }
@@ -768,6 +786,16 @@ pub(crate) mod owners {
             }),
             Msg::ExportProgress { done: 1, total: 2 },
             Msg::ExportDone(Err("no".into())),
+            Msg::Galleries {
+                ticket: 99,
+                result: Err("no".into()),
+            },
+            Msg::GallerySections {
+                gallery: 1,
+                result: Err("no".into()),
+            },
+            Msg::GalleryProgress { done: 1, total: 2 },
+            Msg::GalleryDone(Err("no".into())),
             Msg::DeviceReset(device_reset::Choice::Quit),
             Msg::Probe("probe"),
         ]

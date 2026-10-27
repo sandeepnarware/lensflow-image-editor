@@ -127,6 +127,8 @@ cargo test --workspace                   # includes the 228-render parity suite
 - Since 0.1.1 (unreleased): the console's `grade` (`crates/lf-app/src/grade_cli.rs`) and the
   grid's marquee multi-select (`library/grid.rs`, `library/selection.rs`), and culling:
   flags, stars and colour labels (`lf_catalog::cull`, `library/cull.rs`, `library/cull_ui.rs`).
+  Export to a gallery: `lf_account::galleries` (upload sessions, chunked or direct), `gallery_job.rs`,
+  `dialogs/gallery_export.rs`, `library/gallery_ui.rs`; gated by `SessionFlow::gallery_link`.
   Lens corrections: distortion, lens vignetting, CA, keystone, desktop-only in `desktop.lens`
   (`lf_settings::lens`, `lens_to_source` in `develop.wgsl`, `SpotMap::through_lens`).
   Masks: linear and radial local adjustments, desktop-only in `desktop.masks`

@@ -9,6 +9,7 @@ pub mod cull;
 pub mod cull_ui;
 pub mod export_ui;
 pub mod filmstrip;
+pub mod gallery_ui;
 pub mod grid;
 pub mod import_ui;
 pub mod selection;
@@ -160,6 +161,10 @@ pub struct Library {
     match_wanted: Option<AiGate>,
     /// "Export N photos", while open or while its export runs (hidden).
     export: Option<ExportDialog>,
+    /// "Export to a gallery", while open or while its upload runs (hidden).
+    gallery: Option<crate::dialogs::gallery_export::GalleryDialog>,
+    /// The studio's client while the gate allows gallery export (the app sets it).
+    gallery_link: Option<crate::gallery_job::GalleryLink>,
     /// Preferences → Change…: the catalogue in use until another is chosen (the first-run
     /// screen offers to keep it).
     keep: Option<PathBuf>,
@@ -213,6 +218,8 @@ impl Library {
             match_gate: AiGate::default(),
             match_wanted: None,
             export: None,
+            gallery: None,
+            gallery_link: None,
             keep: None,
             keys: Keys::default(),
         }
@@ -223,6 +230,8 @@ impl Library {
     pub fn restart_blocked(&self) -> Option<&'static str> {
         if self.export.as_ref().is_some_and(ExportDialog::running) {
             Some("Wait for the export to finish, then change the catalogue folder.")
+        } else if self.gallery.as_ref().is_some_and(|g| g.running()) {
+            Some("Wait for the upload to the gallery to finish, then change the catalogue folder.")
         } else if self.batch.as_ref().is_some_and(BatchDialog::running) {
             Some("Wait for the edits to be applied, then change the catalogue folder.")
         } else if self.matching.is_some() {
@@ -359,6 +368,8 @@ impl Library {
     pub fn quit_question(&self) -> Option<&'static str> {
         if self.export.as_ref().is_some_and(ExportDialog::running) {
             Some(crate::dialogs::quit::EXPORT_RUNNING)
+        } else if self.gallery.as_ref().is_some_and(|g| g.running()) {
+            Some(crate::dialogs::quit::GALLERY_RUNNING)
         } else if self.batch.as_ref().is_some_and(BatchDialog::running) {
             Some(crate::dialogs::quit::BATCH_RUNNING)
         } else {
@@ -375,6 +386,9 @@ impl Library {
         }
         if let Some(batch) = &self.batch {
             batch.stop.store(true, Ordering::SeqCst);
+        }
+        if let Some(gallery) = &self.gallery {
+            gallery.stop.store(true, Ordering::SeqCst);
         }
     }
 
@@ -746,6 +760,12 @@ impl Library {
             Msg::Match(step) => return self.match_step(step, env),
             Msg::ExportProgress { done, total } => self.export_progress(done, total),
             Msg::ExportDone(result) => self.export_done(result, env),
+            Msg::Galleries { ticket, result } => self.galleries_loaded(ticket, result),
+            Msg::GallerySections { gallery, result } => {
+                self.gallery_sections_loaded(gallery, result)
+            }
+            Msg::GalleryProgress { done, total } => self.gallery_progress(done, total),
+            Msg::GalleryDone(result) => self.gallery_done(result, env),
             Msg::PresetsSynced(..) => {
                 // The catalogue's presets may have changed; the session handles the rest.
                 self.develop.presets_stale();
@@ -773,6 +793,11 @@ impl Library {
                     "export" => {
                         if self.export.as_ref().is_some_and(ExportDialog::running) {
                             self.export_done(Err(plain), env);
+                        }
+                    }
+                    "gallery upload" => {
+                        if self.gallery.as_ref().is_some_and(|g| g.running()) {
+                            self.gallery_done(Err(plain), env);
                         }
                     }
                     "batch" => {
@@ -1157,6 +1182,7 @@ impl Library {
         self.batch_dialog(ui.ctx(), env);
         self.match_dialog(ui.ctx(), env);
         self.export_dialog(ui.ctx(), env);
+        self.gallery_dialog(ui.ctx(), env);
         self.reveal_active = false;
     }
 
@@ -1169,6 +1195,7 @@ impl Library {
             || self.batch.is_some()
             || self.matching.is_some()
             || self.export.as_ref().is_some_and(|d| d.visible)
+            || self.gallery.as_ref().is_some_and(|d| d.visible)
     }
 
     /// Whether `action` (a menu item or a key) is possible now in the library or Develop.
@@ -1181,6 +1208,9 @@ impl Library {
         match action {
             Action::AddFolder => self.can_add(),
             Action::Export => selected || self.export.is_some(),
+            Action::ExportToGallery => {
+                (selected && self.gallery_allowed()) || self.gallery.is_some()
+            }
             Action::Undo => develop && self.develop.can_undo(),
             Action::Redo => develop && self.develop.can_redo(),
             Action::CopySettings => self.copy_source().is_some(),
@@ -1225,6 +1255,7 @@ impl Library {
         match action {
             Action::AddFolder => self.add_folder(env),
             Action::Export => self.open_export(env),
+            Action::ExportToGallery => self.open_gallery(env),
             Action::Undo => self.develop.undo(env.toasts),
             Action::Redo => self.develop.redo(env.toasts),
             Action::CopySettings => self.copying = true,
@@ -1340,6 +1371,11 @@ impl Library {
         if let Some((done, total)) = self.export_status() {
             ui.separator();
             ui.label(crate::dialogs::export::status_text(done, total));
+            ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).desired_width(160.0));
+        }
+        if let Some((done, total)) = self.gallery_status() {
+            ui.separator();
+            ui.label(format!("Uploading {} of {}", count(done), count(total)));
             ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).desired_width(160.0));
         }
         // While its folder is still being read, the scan's own text says so.

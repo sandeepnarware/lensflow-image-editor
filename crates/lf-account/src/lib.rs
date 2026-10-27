@@ -5,6 +5,7 @@ pub mod auth;
 pub mod client;
 pub mod entitlement;
 pub mod error;
+pub mod galleries;
 pub mod grade;
 pub mod instance;
 pub mod presets;

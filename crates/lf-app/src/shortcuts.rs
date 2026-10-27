@@ -15,6 +15,8 @@ pub enum Action {
     // File
     AddFolder,
     Export,
+    /// Upload the selected photos to a LensFlow gallery (while the plan allows it).
+    ExportToGallery,
     Quit,
     // Edit
     Undo,
@@ -75,6 +77,7 @@ impl Action {
         match self {
             Action::AddFolder => "Add folder…",
             Action::Export => "Export…",
+            Action::ExportToGallery => "Export to gallery…",
             Action::Quit => "Quit",
             Action::Undo => "Undo",
             Action::Redo => "Redo",

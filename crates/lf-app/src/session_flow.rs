@@ -148,6 +148,18 @@ impl SessionFlow {
         self.account.decision.as_ref()
     }
 
+    /// What export to a gallery needs: the studio's client, while the gate allows it (not
+    /// read-only, not locked). `None` otherwise.
+    pub fn gallery_link(&self) -> Option<crate::gallery_job::GalleryLink> {
+        let decision = self.account.decision.as_ref()?;
+        if !decision.gallery_export_allowed() {
+            return None;
+        }
+        Some(crate::gallery_job::GalleryLink {
+            client: self.account.studio_client()?,
+        })
+    }
+
     /// Checks the entitlement now (before an AI call or an export); the answer arrives as
     /// `Msg::Gate` and updates [`SessionFlow::gate`].
     pub fn refresh_now(&mut self, jobs: &Jobs, reason: &str) {

@@ -387,6 +387,7 @@ serde_derive v1.0.229                    MIT OR Apache-2.0
 serde_json v1.0.154                      MIT OR Apache-2.0
 serde_repr v0.1.21                       MIT OR Apache-2.0
 serde_spanned v0.6.9                     MIT OR Apache-2.0
+sha1 v0.11.0                             MIT OR Apache-2.0
 sha2 v0.11.1                             MIT OR Apache-2.0
 signal-hook-registry v1.4.8              MIT OR Apache-2.0
 simd-adler32 v0.3.10                     MIT

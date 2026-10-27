@@ -1973,3 +1973,91 @@ fn masks_are_added_moved_adjusted_and_removed_in_develop() {
     assert_eq!(h.state().lib.develop().tool(), None);
     assert_eq!(masks(&h).0.len(), 1);
 }
+
+#[test]
+fn export_to_a_gallery_lists_galleries_uploads_and_says_how_it_went() {
+    use httpmock::prelude::*;
+    use lf_app::dialogs::gallery_export::{self, Stage as GalleryStage};
+    use lf_app::gallery_job::GalleryLink;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 1);
+    import_folder(&mut h, &shoot, 1);
+    let id = h.state().lib.photos()[0].id;
+    h.state_mut().lib.selection.click(id);
+
+    // Without the gate's client, the action is off.
+    assert!(!h.state().lib.enabled(Action::ExportToGallery));
+
+    let server = MockServer::start();
+    server.mock(|w, t| {
+        w.method(GET).path("/api/galleries");
+        t.status(200).json_body(serde_json::json!({"data": [
+            {"id": 5, "title": "Ana & Raj", "event_date": "2026-11-02", "status": "published"}
+        ]}));
+    });
+    server.mock(|w, t| {
+        w.method(GET).path("/api/galleries/5/sections");
+        t.status(200).json_body(serde_json::json!({"data": []}));
+    });
+    server.mock(|w, t| {
+        w.method(POST).path("/api/galleries/5/uploads");
+        t.status(201).json_body(serde_json::json!({"data": {
+            "id": "8a1f0b0e-1111-4c4c-9999-123456789abc", "chunk_size": 7340032,
+            "chunks_total": 1, "status": "pending", "direct": null
+        }}));
+    });
+    let chunk = server.mock(|w, t| {
+        w.method(PUT)
+            .path("/api/galleries/5/uploads/8a1f0b0e-1111-4c4c-9999-123456789abc/chunks/0");
+        t.status(200).json_body(serde_json::json!({"data": {}}));
+    });
+    server.mock(|w, t| {
+        w.method(POST)
+            .path("/api/galleries/5/uploads/8a1f0b0e-1111-4c4c-9999-123456789abc/complete");
+        t.status(201)
+            .json_body(serde_json::json!({"data": {"upload": {}, "photo": {"id": 900}}}));
+    });
+    let url = reqwest::Url::parse(&server.url("/api")).unwrap();
+    let client = lf_account::Client::new(lf_account::Instance::custom(url).unwrap(), "1.0.0")
+        .with_token("t")
+        .with_studio("frames");
+    h.state_mut()
+        .lib
+        .set_gallery_link(Some(GalleryLink { client }));
+    assert!(h.state().lib.enabled(Action::ExportToGallery));
+
+    // Open it as the ribbon would.
+    {
+        let ctx = h.ctx.clone();
+        let s = h.state_mut();
+        let mut env = Env {
+            jobs: &s.jobs,
+            toasts: &mut s.toasts,
+            prefs: &mut s.prefs,
+            config_dir: &s.config,
+        };
+        assert!(s.lib.run(Action::ExportToGallery, &ctx, &mut env));
+    }
+    step_until_label(&mut h, "Ana & Raj  ·  2026-11-02");
+    h.get_by_label("Ana & Raj  ·  2026-11-02").click();
+    h.step();
+    h.step();
+    step_until(&mut h, "the sections", |_| true);
+    h.get_by_label(gallery_export::UPLOAD).click();
+    h.step();
+    step_until(&mut h, "the upload to finish", |s| {
+        matches!(
+            s.lib.gallery().map(|d| &d.stage),
+            Some(GalleryStage::Done(_))
+        )
+    });
+    chunk.assert();
+    h.get_by_label("1 photo added to the gallery.");
+    h.get_by_label(gallery_export::DONE).click();
+    h.step();
+    assert!(h.state().lib.gallery().is_none());
+}

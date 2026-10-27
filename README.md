@@ -64,6 +64,10 @@ sidecars (a damaged one is left alone and that photo skipped). `Ctrl`+click
 adds or removes one photo and dragging a box over the grid selects everything
 inside it.
 
+Export to a gallery (File or Library tab): uploads the selected photos, rendered as JPEGs,
+to a LensFlow gallery and section, while the plan allows it. Photos already there are
+skipped as duplicates.
+
 Lens corrections (a section after Effects): distortion, lens vignetting, red/cyan and
 blue/yellow fringes, and vertical and horizontal perspective, kept for the desktop only.
 

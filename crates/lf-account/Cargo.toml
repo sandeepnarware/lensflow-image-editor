@@ -15,6 +15,8 @@ url = "2"
 log = "0.4"
 directories = "6"
 sha2.workspace = true
+# Gallery uploads: the checksum the server matches duplicates by (as the web uploader sends).
+sha1 = "0.11"
 hex.workspace = true
 keyring = "4"
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc", "zeroize"] }

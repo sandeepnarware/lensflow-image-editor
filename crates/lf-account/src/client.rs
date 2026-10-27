@@ -91,6 +91,12 @@ impl Client {
         &self.inner.base
     }
 
+    /// The HTTP client itself, for requests that must not carry the API's headers (a
+    /// storage link that holds its own permission).
+    pub(crate) fn http(&self) -> &reqwest::blocking::Client {
+        &self.inner.http
+    }
+
     /// A request with every standard header set; `path` is relative to the API base.
     pub fn request(&self, method: reqwest::Method, path: &str) -> RequestBuilder {
         let url = self
@@ -168,7 +174,7 @@ fn spent(body: &Value) -> u32 {
         .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX))
 }
 
-fn map_body(status: u16, body: Value) -> Result<Value, AccountError> {
+pub(crate) fn map_body(status: u16, body: Value) -> Result<Value, AccountError> {
     if (200..300).contains(&status) {
         return Ok(body);
     }
