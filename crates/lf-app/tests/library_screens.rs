@@ -443,6 +443,108 @@ fn drag_slider(h: &mut Harness<'static, State>, label: &str, dx: f32) {
     h.step();
 }
 
+/// A drag over the grid draws a box and selects every photo it covers; Ctrl+click adds and
+/// removes one. (The fit of a box to cells, and the Ctrl+drag rule, are unit-tested in
+/// `library::grid`.)
+#[test]
+fn a_drag_box_selects_what_it_covers_and_ctrl_click_adds_or_removes() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 4);
+    import_folder(&mut h, &shoot, 4);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    assert_eq!(
+        h.state().lib.selection.current,
+        vec![ids[0]],
+        "the import selects the first photo"
+    );
+
+    // The first two cells share a row; a box from one's corner to the other's covers both,
+    // and nothing of the row below.
+    let first = h.get_by_label("p0.png").rect();
+    let second = h.get_by_label("p1.png").rect();
+    assert!(
+        (first.center().y - second.center().y).abs() < 0.5,
+        "the first two cells are side by side"
+    );
+    let start = first.min + egui::vec2(10.0, 10.0);
+    let end = second.max - egui::vec2(10.0, 10.0);
+    h.drag_at(start);
+    h.step();
+    for i in 1..=4 {
+        h.hover_at(start + (end - start) * (i as f32 / 4.0));
+        h.step();
+    }
+    // While the button is down the box is live and the selection already follows it.
+    let boxed = h
+        .state()
+        .lib
+        .marquee
+        .as_ref()
+        .expect("a box is being dragged");
+    assert!(boxed.live, "grown past a nudge");
+    assert_eq!(h.state().lib.selection.current, vec![ids[0], ids[1]]);
+    h.drop_at(end);
+    h.step();
+    h.step();
+    assert!(h.state().lib.marquee.is_none(), "the box is gone");
+    assert_eq!(h.state().lib.selection.current, vec![ids[0], ids[1]]);
+    assert_eq!(h.state().lib.selection.active(), Some(ids[1]));
+    h.get_by_label("4 photos · 2 selected");
+
+    // Ctrl+click a third photo: it is added, and is active.
+    let third = h.get_by_label("p2.png").rect().center();
+    ctrl_click_at(&mut h, third);
+    assert_eq!(
+        h.state().lib.selection.current,
+        vec![ids[0], ids[1], ids[2]]
+    );
+    assert_eq!(h.state().lib.selection.active(), Some(ids[2]));
+    // Ctrl+click one already selected: it comes out.
+    let second_again = h.get_by_label("p1.png").rect().center();
+    ctrl_click_at(&mut h, second_again);
+    assert_eq!(h.state().lib.selection.current, vec![ids[0], ids[2]]);
+    // A plain click replaces the selection with one photo.
+    let fourth = h.get_by_label("p3.png").rect().center();
+    h.hover_at(fourth);
+    h.step();
+    h.drag_at(fourth);
+    h.step();
+    h.drop_at(fourth);
+    h.step();
+    h.step();
+    assert_eq!(h.state().lib.selection.current, vec![ids[3]]);
+    assert!(h.state().lib.marquee.is_none(), "a click draws no box");
+}
+
+/// Clicks at `pos` with Ctrl held, as a real keyboard would hold it across the press and the
+/// release.
+fn ctrl_click_at(h: &mut Harness<'static, State>, pos: egui::Pos2) {
+    let command = egui::Modifiers::COMMAND;
+    h.hover_at(pos);
+    h.step();
+    h.event(egui::Event::ModifiersChanged(command));
+    h.event(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: command,
+    });
+    h.step();
+    h.event(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: command,
+    });
+    h.step();
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.step();
+}
+
 fn exposure(h: &Harness<'static, State>) -> f64 {
     h.state()
         .lib

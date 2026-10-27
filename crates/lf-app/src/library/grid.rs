@@ -1,5 +1,6 @@
 //! The library grid's geometry: which cells of a long list are on screen (only those are
-//! drawn), as a pure function of the viewport, and the drawing of those cells.
+//! drawn), as a pure function of the viewport, the drawing of those cells, and the box a drag
+//! draws to select several at once.
 
 use super::{FAILED_BADGE, Library, MISSING_BADGE, SIDECAR_BADGE};
 use crate::theme;
@@ -10,6 +11,8 @@ use std::collections::HashSet;
 pub const CELL: f32 = 200.0;
 /// The space between cells, in points.
 pub const GAP: f32 = 8.0;
+/// The smallest box, in points, that counts as a marquee rather than a nudge of the mouse.
+pub const MARQUEE_MIN: f32 = 4.0;
 
 /// The cells on screen: indices `first..last` (end exclusive) of the photo list.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -75,7 +78,47 @@ pub struct GridActions {
     pub open: Option<i64>,
 }
 
-/// Draws the visible cells of the current folder and applies clicks to the selection.
+/// A selection box being dragged over the grid. Ctrl+drag keeps what was already selected.
+#[derive(Debug, Clone)]
+pub struct Marquee {
+    /// Where the drag started, in screen points.
+    pub start: egui::Pos2,
+    /// Where the pointer is now.
+    pub current: egui::Pos2,
+    /// Ctrl was held: the box adds to the selection instead of replacing it.
+    pub additive: bool,
+    /// The selection when the box started (`additive` only).
+    pub base: Vec<i64>,
+    /// The box has grown past [`MARQUEE_MIN`], so it owns the drag.
+    pub live: bool,
+}
+
+impl Marquee {
+    /// The box between the two corners, whichever way the drag went.
+    pub fn rect(&self) -> Rect {
+        Rect::from_two_pos(self.start, self.current)
+    }
+
+    /// Grown enough to be a box rather than a shaky click.
+    fn big_enough(&self) -> bool {
+        let rect = self.rect();
+        rect.width() >= MARQUEE_MIN || rect.height() >= MARQUEE_MIN
+    }
+}
+
+/// The selection a `live` box leaves in `selection`: the photos its `ids` name, or those added
+/// to the ones selected when it started.
+fn apply_marquee(selection: &mut super::selection::Selection, marquee: &Marquee, ids: &[i64]) {
+    if marquee.additive {
+        selection.current = marquee.base.clone();
+        selection.add_all(ids);
+    } else {
+        selection.select(ids);
+    }
+}
+
+/// Draws the visible cells of the current folder and applies clicks and drags to the
+/// selection.
 pub fn show(ui: &mut egui::Ui, lib: &mut Library) -> GridActions {
     let mut open = None;
     let reveal = if lib.reveal_active {
@@ -85,8 +128,6 @@ pub fn show(ui: &mut egui::Ui, lib: &mut Library) -> GridActions {
     } else {
         None
     };
-    let selected: HashSet<i64> = lib.selection.current.iter().copied().collect();
-    let active = lib.selection.active();
     let scroll_y = egui::ScrollArea::vertical()
         .id_salt("library-grid")
         .auto_shrink(false)
@@ -103,19 +144,42 @@ pub fn show(ui: &mut egui::Ui, lib: &mut Library) -> GridActions {
             );
             lib.columns = v.columns;
             ui.set_min_size(egui::vec2(width, v.total_height));
-            let cell_rect = |i: usize| {
-                let (x, y) = Layout::cell_origin(i, v.columns, CELL, GAP);
-                Rect::from_min_size(origin + egui::vec2(x, y), egui::Vec2::splat(CELL))
-            };
+            let cell_rect = |i: usize| cell_box(i, v.columns, origin);
             if let Some(i) = reveal {
                 ui.scroll_to_rect(cell_rect(i), None);
             }
+            // A box started last frame follows the pointer here, before the cells are drawn,
+            // so the highlight is already in step with the pointer this frame.
+            follow_marquee(ui, lib, v.columns, origin, v.first, v.last);
+            let selected: HashSet<i64> = lib.selection.current.iter().copied().collect();
+            let active = lib.selection.active();
             lib.thumbs.visible(&lib.order, v.first, v.last);
             let modifiers = ui.input(|i| i.modifiers);
+            // A drag that starts in the empty space (below the last row, beside the last
+            // column) draws a box too. The cells are made after it, so they stay on top.
+            let backdrop = ui.interact(
+                ui.max_rect(),
+                ui.scope_id().with("grid-backdrop"),
+                Sense::drag(),
+            );
+            if backdrop.drag_started_by(egui::PointerButton::Primary) {
+                begin_marquee(ui, lib, modifiers.command);
+            }
             for i in v.first..v.last {
                 let id = lib.order[i];
                 let rect = cell_rect(i);
-                let response = ui.interact(rect, ui.scope_id().with(("cell", id)), Sense::click());
+                let response = ui.interact(
+                    rect,
+                    ui.scope_id().with(("cell", id)),
+                    Sense::click_and_drag(),
+                );
+                let name = lib
+                    .photo(id)
+                    .map(|photo| crate::develop::open::file_name(&photo.path))
+                    .unwrap_or_default();
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Button, true, name.clone())
+                });
                 let look = Look {
                     selected: selected.contains(&id),
                     active: active == Some(id),
@@ -126,7 +190,9 @@ pub fn show(ui: &mut egui::Ui, lib: &mut Library) -> GridActions {
                     Some(text) => response.on_hover_text(text),
                     None => response,
                 };
-                if response.double_clicked() {
+                if response.drag_started_by(egui::PointerButton::Primary) {
+                    begin_marquee(ui, lib, modifiers.command);
+                } else if response.double_clicked() {
                     open = Some(id);
                 } else if response.clicked() {
                     if modifiers.command {
@@ -138,10 +204,108 @@ pub fn show(ui: &mut egui::Ui, lib: &mut Library) -> GridActions {
                     }
                 }
             }
+            paint_marquee(ui, lib);
             viewport.min.y
         })
         .inner;
     GridActions { scroll_y, open }
+}
+
+/// A cell's rectangle on screen, given the grid's top-left corner.
+pub fn cell_box(index: usize, columns: usize, origin: egui::Pos2) -> Rect {
+    let (x, y) = Layout::cell_origin(index, columns, CELL, GAP);
+    Rect::from_min_size(origin + egui::vec2(x, y), egui::Vec2::splat(CELL))
+}
+
+/// The photo ids whose cells `box` touches, in grid order. Only the cells drawn this frame
+/// (`first..last`) can be found: a box dragged past the bottom of the screen selects what is
+/// on it.
+pub fn cells_in(
+    area: Rect,
+    columns: usize,
+    first: usize,
+    last: usize,
+    origin: egui::Pos2,
+    count: usize,
+) -> Vec<usize> {
+    (first..last.min(count))
+        .filter(|&i| cell_box(i, columns, origin).intersects(area))
+        .collect()
+}
+
+/// Starts a box where the button went down: Ctrl keeps what was already selected.
+fn begin_marquee(ui: &egui::Ui, lib: &mut Library, additive: bool) {
+    let Some(start) = ui
+        .input(|i| i.pointer.press_origin())
+        .or_else(|| ui.input(|i| i.pointer.latest_pos()))
+    else {
+        return;
+    };
+    let base = lib.selection.current.clone();
+    lib.marquee = Some(Marquee {
+        start,
+        current: start,
+        additive,
+        base,
+        live: false,
+    });
+}
+
+/// Moves the box with the pointer, applies it to the selection, and drops it when the button
+/// comes up.
+fn follow_marquee(
+    ui: &egui::Ui,
+    lib: &mut Library,
+    columns: usize,
+    origin: egui::Pos2,
+    first: usize,
+    last: usize,
+) {
+    let Some(mut marquee) = lib.marquee.take() else {
+        return;
+    };
+    let (pointer, down) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.primary_down()));
+    if let Some(pointer) = pointer {
+        marquee.current = pointer;
+    }
+    marquee.live |= marquee.big_enough();
+    if marquee.live {
+        let indexes = cells_in(
+            marquee.rect(),
+            columns,
+            first,
+            last,
+            origin,
+            lib.order.len(),
+        );
+        let ids: Vec<i64> = indexes.into_iter().map(|i| lib.order[i]).collect();
+        apply_marquee(&mut lib.selection, &marquee, &ids);
+    }
+    if down {
+        lib.marquee = Some(marquee);
+    }
+}
+
+/// The box itself: a translucent brand wash with a firm edge, over the cells it covers.
+fn paint_marquee(ui: &egui::Ui, lib: &Library) {
+    let Some(marquee) = &lib.marquee else {
+        return;
+    };
+    if !marquee.live {
+        return;
+    }
+    let rect = marquee.rect().intersect(ui.max_rect());
+    if !rect.is_positive() {
+        return;
+    }
+    let painter = ui.painter();
+    painter.rect_filled(rect, 2.0, theme::BRAND.gamma_multiply(0.14));
+    painter.rect_stroke(
+        rect,
+        2.0,
+        Stroke::new(1.0, theme::BRAND),
+        egui::StrokeKind::Inside,
+    );
 }
 
 /// How a cell is outlined.
@@ -278,5 +442,85 @@ mod tests {
         assert_eq!((none.first, none.last, none.total_height), (0, 0, 0.0));
         // Narrower than one cell still shows one column.
         assert_eq!(Layout::compute(50.0, 0.0, 800.0, 10, CELL, GAP).columns, 1);
+    }
+
+    #[test]
+    fn a_box_finds_the_cells_it_touches_row_by_row() {
+        // Four columns of 200 px with 8 px gaps, from the origin.
+        let (columns, origin, count) = (4, egui::pos2(0.0, 0.0), 12);
+        let step = CELL + GAP;
+        // Over the first two cells of the first row only.
+        let top = Rect::from_min_max(
+            egui::pos2(10.0, 10.0),
+            egui::pos2(step + CELL - 10.0, CELL - 10.0),
+        );
+        assert_eq!(cells_in(top, columns, 0, count, origin, count), [0, 1]);
+        // A tall, narrow box over one column crosses rows: 1 and 5, not a range of 1..=5.
+        let column = Rect::from_min_max(
+            egui::pos2(step + 10.0, 10.0),
+            egui::pos2(step + CELL - 10.0, 2.0 * step - 10.0),
+        );
+        assert_eq!(cells_in(column, columns, 0, count, origin, count), [1, 5]);
+        // The whole grid, but only the cells drawn this frame are found.
+        let all = Rect::from_min_max(origin, egui::pos2(4.0 * step, 3.0 * step));
+        assert_eq!(cells_in(all, columns, 0, count, origin, count).len(), 12);
+        assert_eq!(cells_in(all, columns, 4, 8, origin, count), [4, 5, 6, 7]);
+        // A box in a gap touches nothing.
+        let gap = Rect::from_min_max(
+            egui::pos2(CELL + 1.0, CELL + 1.0),
+            egui::pos2(CELL + GAP - 1.0, CELL + GAP - 1.0),
+        );
+        assert!(cells_in(gap, columns, 0, count, origin, count).is_empty());
+        // Screen origin moves with the scroll area, not with the scroll position.
+        let moved = egui::pos2(500.0, 40.0);
+        let boxed = Rect::from_min_max(moved, moved + egui::vec2(CELL, CELL));
+        assert_eq!(cells_in(boxed, columns, 0, count, moved, count), [0]);
+    }
+
+    #[test]
+    fn a_nudge_is_not_a_box() {
+        let at = egui::pos2(20.0, 20.0);
+        let mut marquee = Marquee {
+            start: at,
+            current: at + egui::vec2(MARQUEE_MIN - 1.0, 0.0),
+            additive: false,
+            base: Vec::new(),
+            live: false,
+        };
+        assert!(!marquee.big_enough());
+        marquee.current = at + egui::vec2(0.0, MARQUEE_MIN);
+        assert!(marquee.big_enough());
+        // Dragged up and left: the rectangle still spans both corners.
+        marquee.current = at - egui::vec2(50.0, 30.0);
+        assert_eq!(marquee.rect().width(), 50.0);
+        assert_eq!(marquee.rect().height(), 30.0);
+    }
+
+    #[test]
+    fn ctrl_drag_adds_to_what_was_selected() {
+        let mut selection = super::super::selection::Selection::default();
+        selection.click(11);
+        let base = selection.current.clone();
+        let mut marquee = Marquee {
+            start: egui::pos2(0.0, 0.0),
+            current: egui::pos2(10.0, 10.0),
+            additive: true,
+            base,
+            live: true,
+        };
+        apply_marquee(&mut selection, &marquee, &[20, 21]);
+        assert_eq!(selection.current, [11, 20, 21]);
+        // The next frame replaces what the box had added rather than piling it up.
+        apply_marquee(&mut selection, &marquee, &[20]);
+        assert_eq!(selection.current, [11, 20]);
+        apply_marquee(&mut selection, &marquee, &[]);
+        assert_eq!(selection.current, [11], "the base is what was selected");
+        // Without Ctrl the box is the whole selection.
+        marquee.additive = false;
+        apply_marquee(&mut selection, &marquee, &[5, 6]);
+        assert_eq!(selection.current, [5, 6]);
+        assert_eq!(selection.active(), Some(6));
+        apply_marquee(&mut selection, &marquee, &[]);
+        assert!(selection.current.is_empty(), "an empty box clears");
     }
 }
