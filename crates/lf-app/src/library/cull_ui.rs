@@ -32,32 +32,46 @@ fn rating_name(min: u8) -> String {
     }
 }
 
+/// The filter bar's lists, by the names screen readers (and the tests) know them.
+pub const FLAG_LIST: &str = "Filter by flag";
+pub const RATING_LIST: &str = "Filter by rating";
+pub const LABEL_LIST: &str = "Filter by label";
+pub const SORT_LIST: &str = "Sort order";
+
+/// Names a list for screen readers: its shown text is the choice, not what it chooses.
+fn named(response: &egui::Response, name: &str) {
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, name));
+}
+
 /// The bar over the grid; returns the filter when the user changed it.
 pub fn filter_bar(ui: &mut egui::Ui, current: Filter) -> Option<Filter> {
     let mut next = current;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Show").color(theme::MUTED));
-        egui::ComboBox::from_id_salt("filter-flag")
+        let flag = egui::ComboBox::from_id_salt("filter-flag")
             .selected_text(next.flag.name())
             .show_ui(ui, |ui| {
                 for f in FlagFilter::ALL {
                     ui.selectable_value(&mut next.flag, f, f.name());
                 }
             });
-        egui::ComboBox::from_id_salt("filter-rating")
+        named(&flag.response, FLAG_LIST);
+        let rating = egui::ComboBox::from_id_salt("filter-rating")
             .selected_text(rating_name(next.min_rating))
             .show_ui(ui, |ui| {
                 for n in 0..=MAX_RATING {
                     ui.selectable_value(&mut next.min_rating, n, rating_name(n));
                 }
             });
-        egui::ComboBox::from_id_salt("filter-label")
+        named(&rating.response, RATING_LIST);
+        let label = egui::ComboBox::from_id_salt("filter-label")
             .selected_text(next.label.name())
             .show_ui(ui, |ui| {
                 for l in LabelFilter::all() {
                     ui.selectable_value(&mut next.label, l, l.name());
                 }
             });
+        named(&label.response, LABEL_LIST);
         if next.narrows() && ui.button("Clear filter").clicked() {
             next = Filter {
                 sort: next.sort,
@@ -65,13 +79,14 @@ pub fn filter_bar(ui: &mut egui::Ui, current: Filter) -> Option<Filter> {
             };
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            egui::ComboBox::from_id_salt("filter-sort")
+            let sort = egui::ComboBox::from_id_salt("filter-sort")
                 .selected_text(next.sort.name())
                 .show_ui(ui, |ui| {
                     for s in Sort::ALL {
                         ui.selectable_value(&mut next.sort, s, s.name());
                     }
                 });
+            named(&sort.response, SORT_LIST);
             ui.label(egui::RichText::new("Sort by").color(theme::MUTED));
         });
     });

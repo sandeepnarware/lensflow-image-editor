@@ -84,6 +84,8 @@ pub struct OpenedPhoto {
     pub full_height: u32,
     /// The working copy was reduced to fit [`WORKING_EDGE`] (or the device's limit).
     pub reduced: bool,
+    /// The photo, small, for the eyedropper and the auto buttons ([`super::auto`]).
+    pub sample: super::auto::Sample,
     /// The develop settings the RAW was decoded with.
     pub develop: DevelopSettings,
     /// The photo's edits from the catalogue (after the sidecar was reconciled).
@@ -165,6 +167,7 @@ fn open_photo(req: &Request) -> Result<OpenedPhoto, String> {
         None => lf_raw::open::open(&req.path, req.quality, &develop, req.max_edge),
     }
     .map_err(|e| e.to_string())?;
+    let sample = super::auto::Sample::of(&opened.picture);
     let renderer = lf_raw::render::renderer_for(&req.gpu, &opened).map_err(|e| e.to_string())?;
     let Opened {
         kind,
@@ -183,6 +186,7 @@ fn open_photo(req: &Request) -> Result<OpenedPhoto, String> {
         full_width,
         full_height,
         reduced,
+        sample,
         develop,
         settings,
         sidecar_error,

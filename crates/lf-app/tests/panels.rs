@@ -24,6 +24,8 @@ fn harness(raw: bool) -> Harness<'static, State> {
                 let ctx = PanelContext {
                     raw: s.raw,
                     histogram: None,
+                    sample: None,
+                    picking_wb: false,
                 };
                 s.last = panels::show(ui, &mut s.panels, &mut s.settings, &ctx);
                 if s.last.commit {
@@ -171,6 +173,8 @@ fn recorded() -> Harness<'static, Recorded> {
                 let ctx = PanelContext {
                     raw: false,
                     histogram: None,
+                    sample: None,
+                    picking_wb: false,
                 };
                 let mut out = PanelOutput::default();
                 let panels = &mut s.panels;
@@ -276,4 +280,90 @@ fn clicking_the_selected_aspect_fits_the_frame_to_it_again() {
         (c.w * 6000.0 / (c.h * 4000.0) - 1.0).abs() < 1e-6,
         "re-fitted to a square: {c:?}"
     );
+}
+
+/// The auto buttons and the eyedropper, with a sample of a dark, warm photo.
+#[test]
+fn auto_tone_auto_white_balance_and_the_eyedropper_button() {
+    use lf_app::develop::auto::Sample;
+    use lf_app::develop::panels::{color, light};
+    struct S {
+        panels: PanelState,
+        settings: EditSettings,
+        sample: Sample,
+        last: PanelOutput,
+        commits: usize,
+        picked: bool,
+    }
+    // Dark, and warmer than neutral: a ramp of greys with red up and blue down.
+    let rgb = (0..64 * 48)
+        .map(|i| {
+            let v = 0.05 + 0.3 * (i % 64) as f32 / 64.0;
+            [v * 1.15, v, v * 0.8]
+        })
+        .collect();
+    let sample = Sample {
+        width: 64,
+        height: 48,
+        rgb,
+    };
+    let mut h = Harness::builder()
+        .with_size([300.0, 1400.0])
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, s: &mut S| {
+                let ctx = PanelContext {
+                    raw: false,
+                    histogram: None,
+                    sample: Some(&s.sample),
+                    picking_wb: false,
+                };
+                s.last = panels::show(ui, &mut s.panels, &mut s.settings, &ctx);
+                s.picked |= s.last.pick_wb;
+                if s.last.commit {
+                    s.commits += 1;
+                }
+            },
+            S {
+                panels: PanelState::default(),
+                settings: EditSettings::default_settings(),
+                sample,
+                last: PanelOutput::default(),
+                commits: 0,
+                picked: false,
+            },
+        );
+    h.run();
+
+    h.get_by_label(light::AUTO_TONE).click();
+    h.run();
+    assert!(
+        h.state().settings.exposure > 0.0,
+        "a dark photo is brightened"
+    );
+    assert_eq!(h.state().commits, 1, "one history step");
+
+    // White balance: the list shows "As shot", Auto cools the warm photo.
+    h.get_by_role_and_label(Role::ComboBox, color::WHITE_BALANCE)
+        .click();
+    h.run();
+    h.get_by_label(color::AUTO_WB).click();
+    h.run();
+    assert!(h.state().settings.temperature < 0.0, "warm made cooler");
+    assert_eq!(h.state().commits, 2);
+    h.get_by_role_and_label(Role::ComboBox, color::WHITE_BALANCE)
+        .click();
+    h.run();
+    h.get_by_label(color::AS_SHOT).click();
+    h.run();
+    assert_eq!(
+        (h.state().settings.temperature, h.state().settings.tint),
+        (0.0, 0.0)
+    );
+    assert_eq!(h.state().commits, 3);
+
+    // The eyedropper's button asks the Develop view to open its tool.
+    h.get_by_label(color::PICK_WB).click();
+    h.run();
+    assert!(h.state().picked, "the eyedropper asks for its tool");
 }

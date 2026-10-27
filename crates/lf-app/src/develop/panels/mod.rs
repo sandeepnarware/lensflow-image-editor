@@ -18,6 +18,7 @@ pub mod raw;
 pub mod slider;
 pub mod versions;
 
+use crate::develop::auto::Sample;
 use crate::theme;
 use eframe::egui::{self, RichText};
 use lf_pipeline::renderer::Histogram;
@@ -99,6 +100,8 @@ pub struct PanelOutput {
     pub commit: bool,
     /// A section's "Reset" was clicked: put these groups back (one history step).
     pub reset: Option<&'static [GroupKey]>,
+    /// The white-balance eyedropper was clicked: open (or leave) its tool.
+    pub pick_wb: bool,
 }
 
 impl PanelOutput {
@@ -114,6 +117,10 @@ pub struct PanelContext<'a> {
     pub raw: bool,
     /// Behind the tone curve.
     pub histogram: Option<&'a Histogram>,
+    /// The photo, small, for Auto tone and Auto white balance (none: their buttons are off).
+    pub sample: Option<&'a Sample>,
+    /// The white-balance eyedropper is open (its button shows pressed).
+    pub picking_wb: bool,
 }
 
 /// A folding section with a "Reset" link; true when the link was clicked.
@@ -184,8 +191,12 @@ pub fn show(
         let mut r = SliderResponse::default();
         let reset = section(ui, sec.key, sec.label, sec.open, |ui| {
             r = match sec.key {
-                "light" => light::show(ui, s),
-                "color" => color::show(ui, s),
+                "light" => light::show(ui, s, ctx.sample),
+                "color" => {
+                    let (r, pick) = color::show(ui, s, ctx.sample, ctx.picking_wb);
+                    out.pick_wb |= pick;
+                    r
+                }
                 "hsl" => hsl::show(ui, &mut state.hsl_mode, s),
                 "curve" => {
                     let c = curve::edit(ui, &mut state.curve, &mut s.curve, ctx.histogram);

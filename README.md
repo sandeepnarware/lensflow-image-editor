@@ -64,6 +64,10 @@ sidecars (a damaged one is left alone and that photo skipped). `Ctrl`+click
 adds or removes one photo and dragging a box over the grid selects everything
 inside it.
 
+White balance: the Colour panel's list (As shot, Auto) and its eyedropper (`W`: click
+something grey or white). Auto tone is a button in Light (`Ctrl+U`); Auto white balance is
+`Ctrl+Shift+U`.
+
 Culling follows Lightroom: `P`, `X` and `U` pick, reject and unflag; `0`–`5`
 set stars; `6`–`9` set a red, yellow, green or blue label (pressed again, it
 comes off). In the grid they mark every selected photo, in Develop the open one.
@@ -87,6 +91,9 @@ and the tool keys work only in Develop.
 | `Ctrl+Shift+E` | Export… |
 | `R` | Crop and straighten |
 | `Q` | Heal and clone spots |
+| `W` | White balance eyedropper (click something grey or white) |
+| `Ctrl+U` | Auto tone |
+| `Ctrl+Shift+U` | Auto white balance |
 | `\` (held) | Before/After |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Shift+Z`, `Ctrl+Y` | Redo |

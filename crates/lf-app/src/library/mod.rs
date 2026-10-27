@@ -1194,9 +1194,12 @@ impl Library {
             | Action::ActualSize
             | Action::ToggleZoom
             | Action::AddVersion
-            | Action::ResetAll => develop && self.develop.is_ready(),
+            | Action::ResetAll
+            | Action::AutoTone
+            | Action::AutoWhiteBalance => develop && self.develop.is_ready(),
             Action::CropTool
             | Action::SpotTool
+            | Action::WhiteBalanceTool
             | Action::LeaveTool
             | Action::ApplyCrop
             | Action::DeleteSpot => develop && self.develop.tool_enabled(action),
@@ -1249,8 +1252,11 @@ impl Library {
             Action::Fit | Action::ActualSize | Action::ToggleZoom => self.develop.zoom(action),
             Action::AddVersion => self.develop.ask_add_version(),
             Action::ResetAll => self.develop.reset_all(env.toasts),
+            Action::AutoTone => self.develop.auto_tone(env.toasts),
+            Action::AutoWhiteBalance => self.develop.auto_white_balance(env.toasts),
             Action::CropTool
             | Action::SpotTool
+            | Action::WhiteBalanceTool
             | Action::LeaveTool
             | Action::ApplyCrop
             | Action::DeleteSpot => self.develop.tool_command(action, env.toasts),

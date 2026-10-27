@@ -1825,3 +1825,75 @@ fn culling_keys_mark_the_selection_and_the_filter_walks_on() {
     assert_eq!(h.state().lib.shown(), ids.as_slice());
     assert!(!h.state().lib.filter().narrows());
 }
+
+#[test]
+fn the_eyedropper_auto_tone_and_auto_white_balance_in_develop() {
+    use lf_app::develop::tools::ToolKind;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    // One warm grey photo (as if lit by tungsten), a little dark.
+    let shoot = dir.path().join("shoot");
+    std::fs::create_dir_all(&shoot).unwrap();
+    image::RgbaImage::from_pixel(300, 200, image::Rgba([120, 96, 70, 255]))
+        .save(shoot.join("warm.png"))
+        .unwrap();
+    import_folder(&mut h, &shoot, 1);
+    let id = h.state().lib.photos()[0].id;
+    h.state_mut().lib.selection.click(id);
+    h.key_press(Key::D);
+    step_until(&mut h, "the photo to open", |s| s.lib.develop().is_ready());
+    let root = dir.path().join("catalogue");
+
+    // W opens the eyedropper; a click on the photo makes that grey neutral and closes it.
+    h.key_press(Key::W);
+    h.step();
+    assert_eq!(h.state().lib.develop().tool(), Some(ToolKind::WhiteBalance));
+    h.get_by_label(lf_app::develop::tools::WB_HINT);
+    // The photo fills the middle of the window (a uniform colour: anywhere on it will do).
+    let centre = egui::pos2(600.0, 330.0);
+    h.hover_at(centre);
+    h.step();
+    h.drag_at(centre);
+    h.step();
+    h.drop_at(centre);
+    h.step();
+    h.step();
+    let picked = settings(&h);
+    assert!(
+        picked.temperature < 0.0,
+        "warm light cooled: {}",
+        picked.temperature
+    );
+    assert_eq!(
+        h.state().lib.develop().tool(),
+        None,
+        "one click, then it closes"
+    );
+    let after_pick = history(&root, id);
+
+    // Back to as shot, then Ctrl+Shift+U finds the same cast on its own.
+    h.state_mut()
+        .lib
+        .develop_mut()
+        .edit(|s| (s.temperature, s.tint) = (0.0, 0.0));
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::U);
+    h.step();
+    let auto = settings(&h);
+    assert!(
+        (auto.temperature - picked.temperature).abs() <= 2.0
+            && (auto.tint - picked.tint).abs() <= 2.0,
+        "auto {:?} vs picked {:?}",
+        (auto.temperature, auto.tint),
+        (picked.temperature, picked.tint)
+    );
+
+    // Ctrl+U: Auto tone brightens the dark photo, one more history step.
+    let before = history(&root, id);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::U);
+    h.step();
+    assert!(settings(&h).exposure > 0.0);
+    assert!(history(&root, id) > before);
+    assert!(before > after_pick, "each auto change is its own step");
+}

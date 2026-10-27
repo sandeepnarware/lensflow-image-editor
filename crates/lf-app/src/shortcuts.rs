@@ -36,6 +36,10 @@ pub enum Action {
     MatchReference,
     AddVersion,
     ResetAll,
+    /// Exposure and the tone sliders from the photo.
+    AutoTone,
+    /// Temperature and tint from the photo.
+    AutoWhiteBalance,
     /// Pick, reject or unflag the selected photos (the open one in Develop).
     Flag(Flag),
     /// 0 (no stars) to 5 stars.
@@ -53,6 +57,7 @@ pub enum Action {
     // Keys only
     CropTool,
     SpotTool,
+    WhiteBalanceTool,
     Previous,
     Next,
     Up,
@@ -85,6 +90,8 @@ impl Action {
             Action::MatchReference => "Match a reference…",
             Action::AddVersion => "Add version…",
             Action::ResetAll => "Reset all edits",
+            Action::AutoTone => "Auto tone",
+            Action::AutoWhiteBalance => "Auto white balance",
             Action::Flag(Flag::Picked) => "Flag as pick",
             Action::Flag(Flag::Rejected) => "Flag as rejected",
             Action::Flag(Flag::Unflagged) => "Unflag",
@@ -108,6 +115,7 @@ impl Action {
             Action::KeyboardShortcuts => "Keyboard shortcuts",
             Action::CropTool => "Crop and straighten",
             Action::SpotTool => "Heal and clone spots",
+            Action::WhiteBalanceTool => "White balance eyedropper",
             Action::Previous => "Previous photo",
             Action::Next => "Next photo",
             Action::Up => "Up a row in the grid",
@@ -160,6 +168,9 @@ pub const MAP: Map = Map(&[
     (Action::Export, cmd_shift(Key::E)),
     (Action::CropTool, key(Key::R)),
     (Action::SpotTool, key(Key::Q)),
+    (Action::WhiteBalanceTool, key(Key::W)),
+    (Action::AutoTone, cmd(Key::U)),
+    (Action::AutoWhiteBalance, cmd_shift(Key::U)),
     (Action::BeforeAfter, key(Key::Backslash)),
     (Action::Undo, cmd(Key::Z)),
     (Action::Redo, cmd_shift(Key::Z)),
@@ -312,6 +323,9 @@ mod tests {
             (Action::Export, cmd_shift(Key::E)),
             (Action::CropTool, key(Key::R)),
             (Action::SpotTool, key(Key::Q)),
+            (Action::WhiteBalanceTool, key(Key::W)),
+            (Action::AutoTone, cmd(Key::U)),
+            (Action::AutoWhiteBalance, cmd_shift(Key::U)),
             (Action::BeforeAfter, key(Key::Backslash)),
             (Action::Undo, cmd(Key::Z)),
             (Action::Redo, cmd_shift(Key::Z)),

@@ -17,6 +17,7 @@
 //! The edit state, the catalogue connection and the sidecar writer live in
 //! [`editing::EditSession`].
 
+pub mod auto;
 pub mod debounce;
 pub mod edit_state;
 pub mod editing;
@@ -58,6 +59,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
+use tools::ToolKind;
 use view::{Viewport, Zoom};
 
 /// The space between the preview and the window's edges and the side panel, in points: the
@@ -650,6 +652,8 @@ impl Develop {
         let ctx = PanelContext {
             raw: opened.kind == Kind::Raw,
             histogram: self.histogram.as_ref(),
+            sample: Some(&opened.sample),
+            picking_wb: self.tools.kind() == Some(ToolKind::WhiteBalance),
         };
         let panels = &mut self.panels;
         let mut out = PanelOutput::default();
@@ -662,6 +666,33 @@ impl Develop {
         } else if out.commit {
             self.commit(toasts);
         }
+        if out.pick_wb {
+            self.toggle_tool(ToolKind::WhiteBalance, toasts);
+        }
+    }
+
+    /// Photo → Auto tone (`Ctrl+U`): exposure and the tone sliders from the photo, one
+    /// history step.
+    pub fn auto_tone(&mut self, toasts: &mut Toasts) {
+        let (Some(opened), Some(edit)) = (self.opened(), self.session.edit()) else {
+            return;
+        };
+        if let Some(tone) = auto::auto_tone(&opened.sample, &edit.settings) {
+            self.commit(toasts);
+            self.edit(|s| tone.apply(s));
+            self.commit(toasts);
+        }
+    }
+
+    /// Photo → Auto white balance (`Ctrl+Shift+U`), one history step.
+    pub fn auto_white_balance(&mut self, toasts: &mut Toasts) {
+        let Some(found) = self.opened().and_then(|o| auto::auto_wb(&o.sample)) else {
+            toasts.push(Level::Info, auto::NO_NEUTRAL);
+            return;
+        };
+        self.commit(toasts);
+        self.edit(|s| (s.temperature, s.tint) = found);
+        self.commit(toasts);
     }
 
     /// The preview area: draws the photo, handles zoom, pan and before/after.

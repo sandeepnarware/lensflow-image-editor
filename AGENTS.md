@@ -126,6 +126,8 @@ cargo test --workspace                   # includes the 228-render parity suite
 - Since 0.1.1 (unreleased): the console's `grade` (`crates/lf-app/src/grade_cli.rs`) and the
   grid's marquee multi-select (`library/grid.rs`, `library/selection.rs`), and culling:
   flags, stars and colour labels (`lf_catalog::cull`, `library/cull.rs`, `library/cull_ui.rs`).
+  White balance eyedropper, Auto WB and Auto tone (`develop/auto.rs`, `ToolKind::WhiteBalance`,
+  `lf_settings::shader_values::{wb_gains, neutral_wb}`).
 - Part 2d plan: `docs/plans/2026-10-26-packaging-and-release.md`; progress ledger in
   `.superpowers/sdd/2026-10-26-packaging-and-release/progress.md`.
 - Merged: Task 1 app release plumbing (PR #59), Task 2 packaging inputs (PR #58).

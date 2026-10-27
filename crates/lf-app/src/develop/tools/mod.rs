@@ -8,9 +8,9 @@
 pub mod crop;
 pub mod spots;
 
-use super::Develop;
 use super::panels;
 use super::view::Viewport;
+use super::{Develop, auto};
 use crate::shortcuts::Action;
 use crate::theme;
 use crate::toast::{Level, Toasts};
@@ -42,10 +42,15 @@ impl ToolOutput {
 pub enum ToolKind {
     Crop,
     Spots,
+    /// The white-balance eyedropper: one click sets temperature and tint, then it closes.
+    WhiteBalance,
 }
 
 pub const CROP: &str = "Crop";
 pub const SPOTS: &str = "Spots";
+pub const WHITE_BALANCE: &str = "White balance";
+/// The eyedropper's hint, in its panel.
+pub const WB_HINT: &str = "Click something that should be grey or white. Esc leaves.";
 /// The crop panel's buttons: apply (`Enter`) and put back (`Esc`).
 pub const DONE: &str = "Done";
 pub const CANCEL: &str = "Cancel";
@@ -55,6 +60,7 @@ pub const CANCEL: &str = "Cancel";
 pub enum Active {
     Crop(Box<CropTool>),
     Spots(SpotTool),
+    WhiteBalance,
 }
 
 /// The tools' state in the Develop view.
@@ -79,6 +85,7 @@ impl Tools {
         match self.active {
             Some(Active::Crop(_)) => Some(ToolKind::Crop),
             Some(Active::Spots(_)) => Some(ToolKind::Spots),
+            Some(Active::WhiteBalance) => Some(ToolKind::WhiteBalance),
             None => None,
         }
     }
@@ -237,6 +244,7 @@ impl Develop {
                 Active::Crop(Box::new(CropTool::enter(&edit.settings)))
             }
             ToolKind::Spots => Active::Spots(SpotTool::new(self.tools.spot_mode)),
+            ToolKind::WhiteBalance => Active::WhiteBalance,
         });
         self.panels.curve.clear_selection();
         self.settings_changed();
@@ -254,7 +262,7 @@ impl Develop {
                 self.tools.spot_mode = tool.mode;
                 self.commit(toasts);
             }
-            None => {}
+            Some(Active::WhiteBalance) | None => {}
         }
     }
 
@@ -279,7 +287,7 @@ impl Develop {
             return false;
         }
         match action {
-            Action::CropTool | Action::SpotTool => true,
+            Action::CropTool | Action::SpotTool | Action::WhiteBalanceTool => true,
             Action::LeaveTool => self.tool().is_some(),
             Action::ApplyCrop => self.tool() == Some(ToolKind::Crop),
             Action::DeleteSpot => {
@@ -294,6 +302,7 @@ impl Develop {
         match action {
             Action::CropTool => self.toggle_tool(ToolKind::Crop, toasts),
             Action::SpotTool => self.toggle_tool(ToolKind::Spots, toasts),
+            Action::WhiteBalanceTool => self.toggle_tool(ToolKind::WhiteBalance, toasts),
             Action::LeaveTool => self.cancel_tool(toasts),
             Action::ApplyCrop => self.leave_tool(toasts),
             Action::DeleteSpot => {
@@ -333,7 +342,21 @@ impl Develop {
             owns_drag: true,
             took_wheel: false,
         };
+        // Where the eyedropper was clicked (the sample is read once the borrows end).
+        let mut picked = None;
         match active {
+            Active::WhiteBalance => {
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+                }
+                if response.clicked()
+                    && let Some(at) = origin.or(pointer)
+                {
+                    picked = Some(SpotMap::new(map, &edit.settings, full, output_w).uv(at));
+                }
+                // A drag still pans the photo.
+                input.owns_drag = false;
+            }
             Active::Crop(tool) => {
                 let (tw, th) = crop::turned(&edit.settings, full.0, full.1);
                 let reach = map.span(HANDLE_REACH);
@@ -423,7 +446,24 @@ impl Develop {
             }
         }
         self.absorb_tool(out, toasts);
+        if let Some(at) = picked {
+            self.pick_white_balance(at, toasts);
+        }
         input
+    }
+
+    /// The eyedropper clicked at `at` (source fractions): the temperature and tint that make
+    /// it grey, one history step, and the tool closes (as Lightroom's does).
+    fn pick_white_balance(&mut self, at: (f64, f64), toasts: &mut Toasts) {
+        match self.opened().and_then(|o| auto::pick(&o.sample, at)) {
+            Some(found) => {
+                self.tools.active = None;
+                self.commit(toasts);
+                self.edit(|s| (s.temperature, s.tint) = found);
+                self.commit(toasts);
+            }
+            None => toasts.push(Level::Info, auto::TOO_DARK),
+        }
     }
 
     /// Draws the open tool's overlay over the photo in `map`, clipped to `area`.
@@ -436,6 +476,7 @@ impl Develop {
         let painter = ui.painter().with_clip_rect(area);
         match active {
             Active::Crop(tool) => paint_crop(&painter, map, &edit.settings.crop, tool.grid()),
+            Active::WhiteBalance => {}
             Active::Spots(tool) => {
                 let spot_map = SpotMap::new(map, &edit.settings, full, output_w);
                 for (i, s) in edit.settings.spots.iter().enumerate() {
@@ -461,6 +502,12 @@ impl Develop {
                 .on_hover_text("Remove spots (Q)");
             if spot.clicked() {
                 toggle = Some(ToolKind::Spots);
+            }
+            let wb = ui
+                .selectable_label(open == Some(ToolKind::WhiteBalance), WHITE_BALANCE)
+                .on_hover_text("Pick a neutral colour (W)");
+            if wb.clicked() {
+                toggle = Some(ToolKind::WhiteBalance);
             }
         });
         if let Some(kind) = toggle {
@@ -496,6 +543,9 @@ impl Develop {
             }
             Active::Spots(tool) => {
                 edit.set(|s| out = spots_panel(ui, tool, &mut s.spots));
+            }
+            Active::WhiteBalance => {
+                ui.label(RichText::new(WB_HINT).color(theme::MUTED));
             }
         }
         ui.separator();

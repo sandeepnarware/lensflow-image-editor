@@ -277,6 +277,27 @@ click. A drag that starts in the empty space below or beside the cells draws a b
 too. Only the cells on screen are found by a box, and a box that stays in the gaps
 between cells selects nothing until it reaches one.
 
+### White balance and Auto tone
+
+Colour has a white-balance list (As shot, Auto) and a "Pick neutral" eyedropper (`W`, also
+the tool row's "White balance"). A click on something that should be grey or white sets
+temperature and tint so its colour (a 5×5 average) comes out neutral, as one history step,
+and the tool closes, as Lightroom's does. Auto white balance (`Ctrl+Shift+U`) averages the
+least saturated two fifths of the photo's midtones (dark and clipped pixels left out) and
+makes that grey. Light has an "Auto tone" button (`Ctrl+U`): exposure brings the
+log-average brightness to 18 % grey; whites and blacks move part way to the brightest and
+darkest 0.5 %; highlights come down when the brightest twentieth sits above 0.8, shadows
+come up when the darkest sits below 0.15; contrast is added to a flat photo.
+
+All three only set sliders the web editor has, so a photo looks the same there. They read a
+small copy of the photo (`develop::auto::Sample`, 256 pixels on the long side, made once
+in the open job), so a click costs nothing. The solve inverts the shader's own gains
+(`lf_settings::shader_values::wb_gains` and `neutral_wb`, kept side by side). The
+temperature slider is a relative shift, not Kelvin: its whole range changes the red/blue
+balance by about 1.9 times, so a very strong cast is only brought nearer neutral, and there
+are no Kelvin presets (Daylight, Tungsten, ...) until RAW white balance can be redone in
+the decoder.
+
 ### Culling: flags, stars and colour labels
 
 `P`, `X` and `U` pick, reject and unflag; `0`–`5` set stars; `6`–`9` set a red,
@@ -311,6 +332,9 @@ even if the filter would hide it.
 | `Ctrl+Shift+E` | Export… |
 | `R` | Crop and straighten tool |
 | `Q` | Heal and clone spots tool |
+| `W` | White balance eyedropper (click something grey or white) |
+| `Ctrl+U` | Auto tone |
+| `Ctrl+Shift+U` | Auto white balance |
 | `\` (held) | Before/After (View → Before/After toggles it) |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Shift+Z`, `Ctrl+Y` | Redo |
