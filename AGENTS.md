@@ -22,17 +22,20 @@ and 2d tasks 1–2 are built; packaging tasks 3–5 are in flight.
 | `lf-account` | Blocking reqwest/rustls LensFlow client: sign-in + 2FA, token store, entitlement gate/offline grace, desktop grade, presets sync, download link. | `src/client.rs`, `src/entitlement.rs` |
 | `lf-catalog` | SQLite catalogue (bundled, WAL, schema v6), sidecars, edit history (cap 50), versions, import, thumbnails, export, presets. Never touches pixels directly. | `src/db.rs`, `src/edits.rs`, `src/export.rs` |
 | `lf-fixtures` | Loads `tests/fixtures` goldens and applies the parity thresholds. | `src/lib.rs` |
-| `lf-app` | The `lensflow-image-editor` binary: eframe/egui-wgpu window, lanes, session, Develop/Library UI, dialogs, release plumbing. | `src/main.rs` → `src/app.rs` |
+| `lf-app` | The `lensflow-image-editor` binary: eframe/egui-wgpu window, lanes, session, Develop/Library UI, dialogs, the console's `grade` (`grade_cli.rs`, before any window), release plumbing. | `src/main.rs` → `src/app.rs` |
 
 Entry points:
 - Binary: `crates/lf-app/src/main.rs` → `App::new` in `src/app.rs`.
-- CLI: `crates/lf-app/src/cli.rs` (`--version`, `--help`).
+- CLI: `crates/lf-app/src/cli.rs` (`--version`, `--help`, `grade`).
+- Console grade: `crates/lf-app/src/grade_cli.rs` (the dialog's fit, no window, no
+  catalogue, no sign-in; sidecars or `--out` JPEG copies).
 - Headless render: `cargo run --release -p lf-raw --example lf-render -- <in> <settings.json> <out.png>`.
 
 ## Commands
 
 ```bash
 cargo run --release -p lf-app            # app
+cargo run --release -p lf-app -- grade   # grade a folder to match a reference
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                   # includes the 228-render parity suite
@@ -91,6 +94,14 @@ cargo test --workspace                   # includes the 228-render parity suite
   `session_flow.rs` runs calls on the `Account` lane and owns generations.
 - `library/` owns catalogue root, folders, grid, filmstrip, selection; `develop/` owns the
   open photo, panels, crop and spots tools, preview texture, history/sidecar debounce.
+- The grid's marquee box lives in `library/grid.rs` (`Marquee`, `cells_in`, `follow_marquee`)
+  with its state in `Library::marquee`; it is followed before the cells paint so the
+  highlight is in step with the pointer, and a drag that starts in the empty space draws one
+  too (the backdrop is made before the cells, so the cells stay on top).
+- `grade_cli.rs` is the console's "Match a reference…": it runs from `cli::answer` before any
+  window, opens its own device (`gpu::headless`), fits with `match_reference`'s own steps and
+  writes sidecars (or `--out` JPEG copies). It never touches a photo and never replaces a
+  damaged sidecar.
 - `develop::preview` renders straight into an `Rgba8Unorm` canvas registered with
   egui-wgpu; no readback while editing. Histogram is throttled to 200 ms.
 - Menus and keys are the same `shortcuts::Action`s; `MAP` is read once per frame.
@@ -111,6 +122,9 @@ cargo test --workspace                   # includes the 228-render parity suite
 
 ## Current state and roadmap
 
+- Shipped in 0.1.1: the DirectX 12 + OpenGL backend pair on Windows, the preview gutter.
+- Since 0.1.1 (unreleased): the console's `grade` (`crates/lf-app/src/grade_cli.rs`) and the
+  grid's marquee multi-select (`library/grid.rs`, `library/selection.rs`).
 - Part 2d plan: `docs/plans/2026-10-26-packaging-and-release.md`; progress ledger in
   `.superpowers/sdd/2026-10-26-packaging-and-release/progress.md`.
 - Merged: Task 1 app release plumbing (PR #59), Task 2 packaging inputs (PR #58).

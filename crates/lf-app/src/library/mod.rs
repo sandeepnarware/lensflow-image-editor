@@ -103,6 +103,8 @@ pub struct Library {
     /// Index of each id in `order`.
     index: HashMap<i64, usize>,
     pub selection: Selection,
+    /// The box being dragged over the grid, while the mouse button is down.
+    pub marquee: Option<grid::Marquee>,
     thumbs: Thumbs,
     frames: Option<Arc<FrameCache>>,
     /// The Develop view (its renderer lives only while a photo is open in it).
@@ -171,6 +173,7 @@ impl Library {
             order: Vec::new(),
             index: HashMap::new(),
             selection: Selection::default(),
+            marquee: None,
             thumbs: Thumbs::default(),
             frames: None,
             develop: Develop::new(gpu),

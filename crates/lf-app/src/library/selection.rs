@@ -56,6 +56,26 @@ impl Selection {
         }
     }
 
+    /// Selects exactly `ids`, in the order given: the last is active and the first becomes
+    /// the anchor. The grid's selection box uses this.
+    pub fn select(&mut self, ids: &[i64]) {
+        self.current = ids.to_vec();
+        self.anchor = ids.first().copied();
+    }
+
+    /// Adds `ids` to the selection (a Ctrl+drag over the grid), keeping the ones already
+    /// selected and their order; the last added is active.
+    pub fn add_all(&mut self, ids: &[i64]) {
+        for &id in ids {
+            if !self.current.contains(&id) {
+                self.current.push(id);
+            }
+        }
+        if let Some(last) = ids.last() {
+            self.anchor = Some(*last);
+        }
+    }
+
     /// Moves the active photo one step (`Left`/`Right`) or one row of `columns` (`Up`/`Down`)
     /// through `order`, clamped to the list, and selects only it. With no active photo in
     /// `order`, the first photo.
@@ -188,6 +208,28 @@ mod tests {
         let mut empty = Selection::default();
         empty.arrow(Dir::Down, 3, &[]);
         assert!(empty.current.is_empty());
+    }
+
+    #[test]
+    fn select_many_replaces_and_add_all_keeps_the_rest() {
+        let mut s = Selection::default();
+        s.select(&[12, 13, 14]);
+        assert_eq!(s.current, [12, 13, 14]);
+        assert_eq!(s.active(), Some(14));
+        assert_eq!(s.anchor, Some(12));
+
+        s.add_all(&[20, 13]);
+        assert_eq!(s.current, [12, 13, 14, 20], "13 was already there");
+        assert_eq!(s.active(), Some(20));
+        assert_eq!(s.anchor, Some(13), "the last added becomes the anchor");
+
+        s.add_all(&[]);
+        assert_eq!(s.active(), Some(20), "nothing added changes nothing");
+
+        s.select(&[]);
+        assert!(s.current.is_empty());
+        assert_eq!(s.active(), None);
+        assert_eq!(s.anchor, None);
     }
 
     #[test]

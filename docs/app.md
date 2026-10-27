@@ -57,6 +57,32 @@ which puts the version and target, the operating system, the graphics adapter
 (name, backend, software or not, largest texture), the log folder, the catalogue
 and the server on the clipboard for a support request. It holds nothing secret.
 
+## The console's grade
+
+`lensflow-image-editor grade` is "Match a reference…" without the window: it fits one
+grade to a whole folder and writes it beside every photo, so a studio can grade a shoot
+faster than by clicking through the dialog. It asks for the reference picture and the
+folder, or takes them as `--reference`/`--folder`; `--out <dir>` writes graded JPEG
+copies instead of edit files, `--strength` blends the grade, `--exposure` evens out
+brightness photo by photo, `--recursive` walks subfolders, `--dry-run` only reports, and
+`--yes` skips the confirmation. It needs no catalogue, no sign-in and no AI: up to 24
+untouched photos are measured against the reference and the grade is calibrated from
+those measurements (`ai: None`, `review: false`), exactly the dialog's own
+`match_reference` code with its pixels opened straight from disk.
+
+The photos are never touched. Without `--out`, each photo's `<photo>.lensflow.json` is
+rewritten keeping its named versions, its unknown keys and its creation time, stamped
+with the current time so it wins the newer-wins rule when the folder is added later; a
+damaged sidecar is never overwritten, and that photo is skipped with the reason. A photo
+keeps its own crop, spots and versions — the grade arrives as a look, as the dialog
+applies it. Exit codes: 0 everything graded, 1 some photos skipped or the question
+answered no, 2 nothing graded (bad paths, no photos, no graphics device).
+
+The command runs before any window work and opens its own device (`gpu::headless`,
+DirectX 12 and OpenGL on Windows, the same adapter choice as the window). A Windows
+release build has no console: it joins the terminal it was started from if there is one
+and otherwise makes a console window, which it keeps open after the report.
+
 ## The window and the one device
 
 `main.rs` opens the window with `NativeOptions { renderer: Wgpu }` and asks
@@ -238,6 +264,18 @@ slider with the arrows) or while a dialog is open. The `Esc` that ends typing in
 a field does not also leave a tool. The tool keys act only in Develop. Holding
 an arrow key or `Ctrl+Z` repeats; holding `Space` or a tool key does not. On macOS,
 `Ctrl` reads as `Cmd`.
+
+### Selecting photos in the grid
+
+A click selects one photo. `Ctrl`+click adds or removes one without touching the
+rest, and `Shift`+click selects the range from the last click. Dragging with the left
+button draws a box (`grid::Marquee`) and selects every cell it covers; holding `Ctrl`
+while dragging adds those to what was selected instead of replacing it. The box is
+followed before the cells are painted, so the highlight tracks the pointer frame by
+frame, and it needs 4 points in either direction to count, so a shaky click stays a
+click. A drag that starts in the empty space below or beside the cells draws a box
+too. Only the cells on screen are found by a box, and a box that stays in the gaps
+between cells selects nothing until it reaches one.
 
 | Key | Action |
 |-----|--------|

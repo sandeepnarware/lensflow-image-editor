@@ -30,7 +30,10 @@ env_logger = "0.11"
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-image.workspace = true
+# `grade --out` writes JPEG copies (the `jpeg` feature; the workspace's has png only).
+image = { workspace = true, features = ["jpeg"] }
+# Sidecar timestamps (`updated_at`), so a grade written beside a photo wins over an older one.
+chrono.workspace = true
 
 [dev-dependencies]
 egui_kittest = "0.37"
@@ -44,9 +47,15 @@ strum_macros = "0.27"
 httpmock = "0.8"
 
 [target.'cfg(windows)'.dependencies]
-# GetDriveTypeW: is the catalogue root on a network drive? AttachConsole: `--version` and
-# `--help` print to the terminal a release build was started from.
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_Console"] }
+# GetDriveTypeW: is the catalogue root on a network drive? AttachConsole/AllocConsole and
+# CreateFileW: `--version`, `--help` and `grade` print to the terminal a release build was
+# started from, and read from it.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+] }
 
 [target.'cfg(windows)'.build-dependencies]
 # Embeds packaging/icons/app.ico and the version info into the .exe (build.rs). MIT.
