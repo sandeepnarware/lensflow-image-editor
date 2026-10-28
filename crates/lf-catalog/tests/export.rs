@@ -827,7 +827,8 @@ fn every_format_carries_the_srgb_profile_and_png_and_webp_keep_the_exif() {
                 assert_eq!(read_summary(&bytes).make.as_deref(), Some("Cam"));
                 assert_eq!(bytes.windows(6).filter(|w| *w == b"Exif\0\0").count(), 1);
             }
-            Format::Tiff16 => {}
+            // Not in this loop: `lossy_webp_avif_png_and_tiff_carry_what_they_can` covers them.
+            Format::Tiff16 | Format::WebPLossy { .. } | Format::Avif { .. } => {}
         }
         // The pixels decode, at the photo's size.
         let img = image::open(path).unwrap();
@@ -945,4 +946,48 @@ fn a_jpeg_carries_the_catalogues_metadata_as_xmp_and_exif() {
     let text =
         String::from_utf8_lossy(&std::fs::read(&done.exported[0].path).unwrap()).into_owned();
     assert!(text.contains("Asha") && !text.contains("Mehndi") && !text.contains("Jaipur"));
+}
+
+#[test]
+fn lossy_webp_avif_png_and_tiff_carry_what_they_can() {
+    use lf_catalog::meta::Field;
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    png(&src.path().join("a.png"), 64, 48);
+    let (c, ids) = catalogue(src.path());
+    c.set_meta(&ids, Field::Title, "Haldi").unwrap();
+    c.set_meta(&ids, Field::Creator, "Asha").unwrap();
+    let run = |format: Format| {
+        let out = tempfile::tempdir().unwrap();
+        let mut sp = spec(format, out.path());
+        sp.metadata = Metadata::All;
+        let done = export::run(try_shared_gpu().unwrap(), &c, &ids, &sp, &mut |_, _| {
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        (std::fs::read(&done.exported[0].path).unwrap(), out)
+    };
+    let _ = gpu;
+    // Lossy WebP: an extended file with the profile, EXIF and XMP; it decodes.
+    let (webp, _keep) = run(Format::WebPLossy { quality: 80 });
+    let text = String::from_utf8_lossy(&webp);
+    assert!(text.contains("VP8X") && text.contains("ICCP") && text.contains("Haldi"));
+    assert_eq!(image::load_from_memory(&webp).unwrap().width(), 64);
+    // Lossless WebP carries the same.
+    let (webp, _keep) = run(Format::WebP);
+    assert!(String::from_utf8_lossy(&webp).contains("Haldi"));
+    // PNG: XMP in iTXt.
+    let (png_bytes, _keep) = run(Format::Png);
+    assert!(String::from_utf8_lossy(&png_bytes).contains("XML:com.adobe.xmp"));
+    // TIFF: XMP and the artist tag.
+    let (tif, _keep) = run(Format::Tiff16);
+    let text = String::from_utf8_lossy(&tif);
+    assert!(text.contains("Haldi") && text.contains("Asha"));
+    assert!(matches!(
+        image::load_from_memory(&tif).unwrap(),
+        image::DynamicImage::ImageRgb16(_)
+    ));
+    // AVIF: an AVIF file.
+    let (avif, _keep) = run(Format::Avif { quality: 70 });
+    assert_eq!(&avif[4..12], b"ftypavif");
 }

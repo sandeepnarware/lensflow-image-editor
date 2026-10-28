@@ -14,7 +14,7 @@
 //! is written. A lost graphics device stops it where it is ([`ExportReport::device_lost`]).
 //! The progress callback can cancel after the current photo.
 
-use std::io::{Cursor, Write};
+use std::io::Write;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -22,7 +22,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
-use image::codecs::tiff::TiffEncoder;
 use image::codecs::webp::WebPEncoder;
 use image::{DynamicImage, ImageBuffer, ImageEncoder};
 use lf_pipeline::Gpu;
@@ -44,8 +43,12 @@ pub enum Format {
     Jpeg { quality: u8 },
     /// 8-bit.
     Png,
-    /// 8-bit, lossless (the encoder has no lossy mode).
+    /// 8-bit, lossless.
     WebP,
+    /// 8-bit, lossy; `quality` 1..=100.
+    WebPLossy { quality: u8 },
+    /// 8-bit AVIF; `quality` 1..=100.
+    Avif { quality: u8 },
     /// 16-bit RGB.
     Tiff16,
 }
@@ -55,7 +58,8 @@ impl Format {
         match self {
             Format::Jpeg { .. } => "jpg",
             Format::Png => "png",
-            Format::WebP => "webp",
+            Format::WebP | Format::WebPLossy { .. } => "webp",
+            Format::Avif { .. } => "avif",
             Format::Tiff16 => "tif",
         }
     }
@@ -513,6 +517,8 @@ fn export_one(
         Metadata::All => xmp_segment(&row.meta, false),
     };
     let exif = app1.as_deref().and_then(finish::exif_payload);
+    // The XMP packet alone, for the formats that hold it in a chunk or tag of their own.
+    let packet = xmp.as_deref().map(crate::exif_embed::xmp_packet);
     let icc = finish::srgb_icc();
     let encode_failed = |e: &dyn std::fmt::Display| fail(e, &row.path);
     // Every encoder here takes a profile; PNG and WebP take EXIF too.
@@ -551,24 +557,66 @@ fn export_one(
                 DynamicImage::ImageRgb8(img),
             )
             .map_err(|e| encode_failed(&e))?;
+            if let Some(packet) = packet {
+                bytes = crate::containers::png_with_xmp(&bytes, packet);
+            }
         }
         (Format::WebP, Pixels::Eight(img)) => {
-            tagged(
-                WebPEncoder::new_lossless(&mut bytes),
-                &icc,
-                exif.as_ref(),
-                DynamicImage::ImageRgb8(img),
+            let (w, h) = img.dimensions();
+            let mut plain = Vec::new();
+            WebPEncoder::new_lossless(&mut plain)
+                .write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgb8)
+                .map_err(|e| encode_failed(&e))?;
+            bytes = crate::containers::webp_with_metadata(
+                &plain,
+                w,
+                h,
+                Some(&icc),
+                exif.as_deref(),
+                packet,
+            );
+        }
+        (Format::WebPLossy { quality }, Pixels::Eight(img)) => {
+            let (w, h) = img.dimensions();
+            let plain = webp::Encoder::from_rgb(img.as_raw(), w, h)
+                .encode(f32::from(quality.clamp(1, 100)))
+                .to_vec();
+            bytes = crate::containers::webp_with_metadata(
+                &plain,
+                w,
+                h,
+                Some(&icc),
+                exif.as_deref(),
+                packet,
+            );
+        }
+        (Format::Avif { quality }, Pixels::Eight(img)) => {
+            // AVIF says "sRGB" in its own colour box; the encoder takes no EXIF or XMP.
+            let (w, h) = img.dimensions();
+            image::codecs::avif::AvifEncoder::new_with_speed_quality(
+                &mut bytes,
+                AVIF_SPEED,
+                quality.clamp(1, 100),
             )
+            .write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgb8)
             .map_err(|e| encode_failed(&e))?;
         }
         (Format::Tiff16, Pixels::Sixteen(img)) => {
-            tagged(
-                TiffEncoder::new(Cursor::new(&mut bytes)),
-                &icc,
-                None,
-                DynamicImage::ImageRgb16(img),
-            )
-            .map_err(|e| encode_failed(&e))?;
+            let (w, h) = img.dimensions();
+            let copyright_only = spec.metadata == Metadata::CopyrightOnly;
+            let tags = if spec.metadata == Metadata::None {
+                crate::containers::TiffTags::default()
+            } else {
+                crate::containers::TiffTags {
+                    artist: facts.artist.clone(),
+                    copyright: facts.copyright.clone(),
+                    description: row.meta.title.clone().filter(|_| !copyright_only),
+                    make: facts.make.clone().filter(|_| !copyright_only),
+                    model: facts.model.clone().filter(|_| !copyright_only),
+                }
+            };
+            bytes = crate::containers::tiff16(w, h, img.as_raw(), &icc, packet, &tags)
+                .map_err(|e| encode_failed(&e))?;
         }
         _ => unreachable!("the render matches the format"),
     }
@@ -590,6 +638,9 @@ static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// The prefix of an export's temp files (`.lfexport-<name>.<pid>-<n>.tmp`): its own, so the
 /// app's sweep of unfinished exports never matches a sidecar's temp file
 /// (`.<photo>.lensflow.json.<pid>-<n>.tmp`) in a folder that also holds catalogued photos.
+/// rav1e's speed for AVIF exports (1 slowest, 10 fastest): a photo in seconds, not minutes.
+const AVIF_SPEED: u8 = 7;
+
 pub const TEMP_PREFIX: &str = ".lfexport-";
 
 /// The hidden temp file a replacing write of `path` goes through.

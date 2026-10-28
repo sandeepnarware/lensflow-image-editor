@@ -184,8 +184,8 @@ cargo test --workspace                   # includes the 228-render parity suite
 
 - HEIC/AVIF unsupported; rawler 0.8 gaps: Nikon HE/HE* NEF, DNG 1.7 JPEG XL, some
   Sony ARW / Phase One IIQ.
-- TIFF exports carry no EXIF (the image crate's TIFF encoder cannot add it); WebP export is
-  lossless only. Every export is sRGB with an embedded profile; no other output space yet.
+- TIFF exports carry baseline tags and XMP but no EXIF IFD; AVIF carries no EXIF or XMP. WebP is lossless or
+  lossy. Every export is sRGB with an embedded profile; no other output space yet.
 - Float (RAW) intermediate renders are not bit-identical to 8-bit; five sharpen/detail
   cases exceed the parity gate — intentional, the gate covers the 8-bit path.
 - The OpenGL backend is the app's hardware path on Windows, and it is not bit-identical to

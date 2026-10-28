@@ -330,6 +330,11 @@ pub fn xmp_segment(meta: &crate::meta::Meta, copyright_only: bool) -> Option<Vec
     Some(seg)
 }
 
+/// The XMP packet inside `segment` (a whole XMP APP1 from [`xmp_segment`]).
+pub fn xmp_packet(segment: &[u8]) -> &[u8] {
+    segment.get(4 + XMP_HEADER.len()..).unwrap_or_default()
+}
+
 /// The JPEG with `segment` (a whole XMP APP1) after its leading APP0/APP1 segments, any XMP
 /// segment already there dropped (the source's XMP, copied with its EXIF, would contradict
 /// the catalogue's).

@@ -70,6 +70,7 @@ pub enum FormatKind {
     Jpeg,
     Png,
     WebP,
+    Avif,
     Tiff16,
 }
 
@@ -116,6 +117,8 @@ pub struct ExportForm {
     pub format: FormatKind,
     /// JPEG quality, 1..=100.
     pub quality: u8,
+    /// WebP without loss (larger); off: lossy at `quality`.
+    pub webp_lossless: bool,
     pub size: SizeKind,
     /// The long or short edge in pixels.
     pub pixels: u32,
@@ -143,6 +146,7 @@ impl Default for ExportForm {
         ExportForm {
             format: FormatKind::Jpeg,
             quality: DEFAULT_QUALITY,
+            webp_lossless: true,
             size: SizeKind::Original,
             pixels: 2048,
             megapixels: 12.0,
@@ -174,6 +178,15 @@ impl ExportForm {
             }
             Format::Png => f.format = FormatKind::Png,
             Format::WebP => f.format = FormatKind::WebP,
+            Format::WebPLossy { quality } => {
+                f.format = FormatKind::WebP;
+                f.webp_lossless = false;
+                f.quality = quality.clamp(1, 100);
+            }
+            Format::Avif { quality } => {
+                f.format = FormatKind::Avif;
+                f.quality = quality.clamp(1, 100);
+            }
             Format::Tiff16 => f.format = FormatKind::Tiff16,
         }
         f.sharpen = spec.sharpen;
@@ -243,7 +256,13 @@ impl ExportForm {
                 quality: self.quality.clamp(1, 100),
             },
             FormatKind::Png => Format::Png,
-            FormatKind::WebP => Format::WebP,
+            FormatKind::WebP if self.webp_lossless => Format::WebP,
+            FormatKind::WebP => Format::WebPLossy {
+                quality: self.quality.clamp(1, 100),
+            },
+            FormatKind::Avif => Format::Avif {
+                quality: self.quality.clamp(1, 100),
+            },
             FormatKind::Tiff16 => Format::Tiff16,
         };
         let watermark = if self.watermark {
@@ -517,12 +536,25 @@ impl ExportDialog {
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut f.format, FormatKind::Jpeg, "JPEG");
                     ui.radio_value(&mut f.format, FormatKind::Png, "PNG");
-                    ui.radio_value(&mut f.format, FormatKind::WebP, "WebP")
-                        .on_hover_text("Lossless WebP: smaller than PNG, the same pixels");
+                    ui.radio_value(&mut f.format, FormatKind::WebP, "WebP");
+                    ui.radio_value(&mut f.format, FormatKind::Avif, "AVIF")
+                        .on_hover_text("Smallest files at the same look; newer browsers and apps");
                     ui.radio_value(&mut f.format, FormatKind::Tiff16, "TIFF 16-bit");
                 });
                 ui.end_row();
-                if f.format == FormatKind::Jpeg {
+                if f.format == FormatKind::WebP {
+                    ui.label("");
+                    ui.checkbox(&mut f.webp_lossless, "Lossless").on_hover_text(
+                        "The same pixels, larger files; off is lossy at the quality below",
+                    );
+                    ui.end_row();
+                }
+                let lossy = match f.format {
+                    FormatKind::Jpeg | FormatKind::Avif => true,
+                    FormatKind::WebP => !f.webp_lossless,
+                    _ => false,
+                };
+                if lossy {
                     let label = ui.label("Quality");
                     ui.add(egui::Slider::new(&mut f.quality, 1..=100))
                         .labelled_by(label.id);
