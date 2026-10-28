@@ -42,7 +42,8 @@ pub enum Shape {
     /// Painted by hand: the strokes, in the order they were made (an erasing stroke takes
     /// away what the ones before it painted).
     Brush { strokes: Vec<Stroke> },
-    /// Found by AI ("subject", "sky"): coverage as a picture of the photo (lens-corrected,
+    /// Found by AI ("subject", "sky", "people", "hair", "face-skin", "body-skin",
+    /// "clothes"): coverage as a picture of the photo (lens-corrected,
     /// before crop and turn), `width` × `height` 8-bit values, run-length coded then base64
     /// ([`encode_coverage`]).
     Image {
@@ -558,8 +559,15 @@ impl Mask {
             Shape::Linear { .. } => "Linear gradient",
             Shape::Radial { .. } => "Radial gradient",
             Shape::Brush { .. } => "Brush",
-            Shape::Image { what, .. } if what == "sky" => "Sky",
-            Shape::Image { .. } => "Subject",
+            Shape::Image { what, .. } => match what.as_str() {
+                "sky" => "Sky",
+                "people" => "People",
+                "hair" => "Hair",
+                "face-skin" => "Face skin",
+                "body-skin" => "Body skin",
+                "clothes" => "Clothes",
+                _ => "Subject",
+            },
         }
     }
 

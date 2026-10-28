@@ -1367,8 +1367,8 @@ impl Library {
         if let Some(q) = self.develop.take_lens_profile_request(env.toasts) {
             self.find_lens_profile(q, env);
         }
-        if let Some(sky) = self.develop.take_ai_mask_request() {
-            self.open_ai(crate::ai_job::AiTool::Mask { sky });
+        if let Some(target) = self.develop.take_ai_mask_request() {
+            self.open_ai(crate::ai_job::AiTool::Mask { target });
         }
         if self.develop.take_lut_import() {
             self.pick_lut(env);

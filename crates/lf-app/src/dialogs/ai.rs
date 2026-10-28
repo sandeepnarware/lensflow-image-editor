@@ -23,6 +23,7 @@ pub const ABOUT_RETOUCH: &str = "Finds the faces and smooths their skin, leaving
 pub const ABOUT_CUTOUT: &str = "Keeps the main subject and makes the background transparent, saved beside each photo as a PNG.";
 pub const ABOUT_SUBJECT: &str =
     "Finds the main subject and adds it as a mask, ready for its own adjustments.";
+pub const ABOUT_PEOPLE: &str = "Finds the people in the photo (or their hair, skin or clothes) and adds them as a mask, ready for their own adjustments. Works best on people who fill a good part of the frame.";
 pub const ABOUT_SKY: &str = "Finds the sky and adds it as a mask, ready for its own adjustments.";
 pub const ABOUT_CULL: &str = "Checks each photo for blur, missed focus on the eyes and closed eyes, so the likely rejects can be found at once. Nothing is flagged until you say so.";
 pub const REJECT_THEM: &str = "Reject them";
@@ -148,8 +149,13 @@ impl AiDialog {
             AiTool::Retouch { .. } => ABOUT_RETOUCH,
             AiTool::Cutout => ABOUT_CUTOUT,
             AiTool::Remove => ABOUT_REMOVE,
-            AiTool::Mask { sky: false } => ABOUT_SUBJECT,
-            AiTool::Mask { sky: true } => ABOUT_SKY,
+            AiTool::Mask {
+                target: lf_ai::segment::Target::Subject,
+            } => ABOUT_SUBJECT,
+            AiTool::Mask {
+                target: lf_ai::segment::Target::Sky,
+            } => ABOUT_SKY,
+            AiTool::Mask { .. } => ABOUT_PEOPLE,
             AiTool::Cull => ABOUT_CULL,
         };
         ui.label(RichText::new(about).color(theme::MUTED));

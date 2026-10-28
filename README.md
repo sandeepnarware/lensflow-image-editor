@@ -80,7 +80,9 @@ white balance, saturation and clarity. Gradients are moved by their handles on t
 brush mask is painted (size, feather, flow; Alt or "Erase" rubs out). A Range narrows any
 mask to a brightness band (only the highlights of the sky) or a colour (only the blues;
 Alt-click the photo to pick it). Select subject and Select sky (AI, on this computer)
-add a mask of the main subject or the sky, found in the photo. They are kept for
+add a mask of the main subject or the sky, found in the photo; the People buttons add a
+mask of everyone in it, or of their face skin, body skin, hair or clothes (best on people
+who fill a good part of the frame). They are kept for
 the desktop only (the web editor keeps them but does not draw them).
 
 White balance: the Colour panel's list (As shot, Auto, and presets: Daylight, Cloudy, Shade,

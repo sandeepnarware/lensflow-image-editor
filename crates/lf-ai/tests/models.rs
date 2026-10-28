@@ -158,3 +158,22 @@ fn a_landscape_is_scored_sharp_with_no_faces() {
     assert_eq!(score.eyes_closed, 0);
     assert_eq!(score.eye_sharpness, None);
 }
+
+#[test]
+fn people_masks_are_sized_as_asked_and_empty_in_a_landscape() {
+    let Some(engine) = engine(&lf_ai::segment::PEOPLE_MODELS) else {
+        return;
+    };
+    let img = scene(640, 480);
+    for target in [
+        Target::People,
+        Target::Hair,
+        Target::FaceSkin,
+        Target::Clothes,
+    ] {
+        let mask = lf_ai::segment::mask(&engine, target, &img, 320, 240).expect("mask");
+        assert_eq!((mask.w, mask.h), (320, 240));
+        let mean = mask.data.iter().sum::<f32>() / mask.data.len() as f32;
+        assert!(mean < 0.2, "{target:?}: {mean}");
+    }
+}

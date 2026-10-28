@@ -6,7 +6,7 @@
 //!
 //! The licences: ONNX Runtime MIT; IS-Net (subject) Apache-2.0; SkySeg MIT; SCUNet
 //! Apache-2.0; Real-ESRGAN BSD-3-Clause; LaMa Apache-2.0; YuNet MIT;
-//! open-closed-eye-0001 Apache-2.0. See `NOTICE`.
+//! open-closed-eye-0001 Apache-2.0; MediaPipe selfie multiclass Apache-2.0. See `NOTICE`.
 
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -141,6 +141,17 @@ pub const FACES: Asset = Asset {
     url: "https://huggingface.co/opencv/face_detection_yunet/resolve/main/face_detection_yunet_2023mar.onnx",
     size: 232_589,
     sha256: "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+    unpack: Unpack::File,
+};
+
+/// MediaPipe's selfie multiclass segmenter (Google, Apache-2.0), 256 × 256: background,
+/// hair, body skin, face skin, clothes, accessories. The TFLite model converted to ONNX
+/// with its weights unchanged (the conversion's card pins the source TFLite's SHA-256).
+pub const PEOPLE: Asset = Asset {
+    file: "selfie_multiclass_256x256.onnx",
+    url: "https://huggingface.co/senty-au/selfie_multiclass_256x256-ONNX/resolve/6db8421a7150ac20558f2c24675078eb3a1a04d0/onnx/model.onnx",
+    size: 16_454_560,
+    sha256: "35ec1ecd9ee7f85073c99c00020b7f6751b69506eeacf683bc8665f6117f85b0",
     unpack: Unpack::File,
 };
 
@@ -353,6 +364,8 @@ mod tests {
             UPSCALE,
             INPAINT,
             FACES,
+            EYES,
+            PEOPLE,
             LENSFUN,
         ]
         .into_iter()

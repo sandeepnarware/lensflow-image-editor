@@ -985,12 +985,17 @@ fn masks_panel(
             }
         }
     });
-    // AI: the subject or the sky, found in the photo (on this computer).
+    // AI: the subject, the sky, or people and their parts, found in the photo (on this
+    // computer).
     ui.horizontal_wrapped(|ui| {
-        for (label, sky) in [(masks::SELECT_SUBJECT, false), (masks::SELECT_SKY, true)] {
-            let button = ui.add_enabled(tool.ai_allowed, egui::Button::new(label));
+        for target in lf_ai::segment::Target::ALL {
+            if target == lf_ai::segment::Target::People {
+                ui.end_row();
+                ui.label(egui::RichText::new(masks::PEOPLE).color(crate::theme::MUTED));
+            }
+            let button = ui.add_enabled(tool.ai_allowed, egui::Button::new(target.button()));
             if button.on_disabled_hover_text(masks::AI_OFF).clicked() {
-                tool.ai_request = Some(sky);
+                tool.ai_request = Some(target);
             }
         }
     });

@@ -496,8 +496,8 @@ impl Develop {
         self.local_ai = allowed;
     }
 
-    /// "Select subject" (false) or "Select sky" (true) pressed since the last call.
-    pub fn take_ai_mask_request(&mut self) -> Option<bool> {
+    /// An AI mask's button pressed since the last call: what it should find.
+    pub fn take_ai_mask_request(&mut self) -> Option<lf_ai::segment::Target> {
         match &mut self.tools.active {
             Some(tools::Active::Masks(tool)) => tool.ai_request.take(),
             _ => None,

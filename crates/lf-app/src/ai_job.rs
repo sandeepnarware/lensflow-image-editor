@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use image::ImageEncoder as _;
+use lf_ai::segment::Target;
 use lf_ai::{Engine, Gray, Rgb};
 use lf_catalog::{Catalog, edits};
 use lf_pipeline::Gpu;
@@ -31,8 +32,9 @@ pub enum AiTool {
     Cutout,
     /// What a painted mask covers, filled from its surroundings (the mask comes with the run).
     Remove,
-    /// A mask of the subject (or the sky) for the open photo, added in Develop.
-    Mask { sky: bool },
+    /// A mask of the subject, the sky, the people or a part of them for the open photo,
+    /// added in Develop.
+    Mask { target: Target },
     /// Sharpness, faces and closed eyes scored into the catalogue ([`lf_ai::cull`]).
     Cull,
 }
@@ -46,8 +48,7 @@ impl AiTool {
             AiTool::Retouch { .. } => lf_ai::faces::FACE_MODELS.to_vec(),
             AiTool::Cutout => lf_ai::segment::SUBJECT_MODELS.to_vec(),
             AiTool::Remove => lf_ai::inpaint::INPAINT_MODELS.to_vec(),
-            AiTool::Mask { sky: false } => lf_ai::segment::SUBJECT_MODELS.to_vec(),
-            AiTool::Mask { sky: true } => lf_ai::segment::SKY_MODELS.to_vec(),
+            AiTool::Mask { target } => target.models().to_vec(),
             AiTool::Cull => lf_ai::cull::CULL_MODELS.to_vec(),
         }
     }
@@ -60,8 +61,15 @@ impl AiTool {
             AiTool::Retouch { .. } => "Retouch portrait",
             AiTool::Cutout => "Remove background",
             AiTool::Remove => "Remove objects",
-            AiTool::Mask { sky: false } => "Select subject",
-            AiTool::Mask { sky: true } => "Select sky",
+            AiTool::Mask { target } => match target {
+                Target::Subject => "Select subject",
+                Target::Sky => "Select sky",
+                Target::People => "Select people",
+                Target::Hair => "Select hair",
+                Target::FaceSkin => "Select face skin",
+                Target::BodySkin => "Select body skin",
+                Target::Clothes => "Select clothes",
+            },
             AiTool::Cull => "Assisted culling",
         }
     }
@@ -186,8 +194,8 @@ pub fn run(
                 total,
             });
         };
-        let result = if let AiTool::Mask { sky } = tool {
-            mask(&gpu, engine, &catalog, id, &row.path, sky).map(|shape| {
+        let result = if let AiTool::Mask { target } = tool {
+            mask(&gpu, engine, &catalog, id, &row.path, target).map(|shape| {
                 report.masks.push((id, shape));
             })
         } else {
@@ -304,7 +312,7 @@ fn mask(
     catalog: &Catalog,
     id: i64,
     path: &Path,
-    sky: bool,
+    target: Target,
 ) -> Result<lf_settings::masks::Shape, String> {
     let mut settings = edits::get_settings(catalog, id)
         .map_err(|e| e.to_string())?
@@ -326,22 +334,13 @@ fn mask(
         ((img.w as f64 * k).round() as usize).max(1),
         ((img.h as f64 * k).round() as usize).max(1),
     );
-    let target = if sky {
-        lf_ai::segment::Target::Sky
-    } else {
-        lf_ai::segment::Target::Subject
-    };
     let found = lf_ai::segment::mask(engine, target, &img, w, h).map_err(|e| e.to_string())?;
     let values: Vec<u8> = found.to_luma8().into_raw();
     if values.iter().all(|&v| v < 13) {
-        return Err(if sky {
-            "No sky was found.".to_owned()
-        } else {
-            "No subject was found.".to_owned()
-        });
+        return Err(format!("No {} was found.", target.noun()));
     }
     Ok(lf_settings::masks::Shape::Image {
-        what: if sky { "sky" } else { "subject" }.to_owned(),
+        what: target.key().to_owned(),
         width: w as u32,
         height: h as u32,
         data: lf_settings::masks::encode_coverage(&values),

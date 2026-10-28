@@ -150,7 +150,7 @@ cargo test --workspace                   # includes the 228-render parity suite
   `AiTool::Cull` in `ai_job.rs`, `ReviewFilter` and `Sort::Sharpness` in `library/cull.rs`.
   Stacks + auto-stack: `lf_catalog::stacks` (schema v11, dhash fingerprints, `group`), `stack_job.rs`,
   `library/stacks_ui.rs`, `dialogs/auto_stack.rs`, `Action::{Stack, Unstack, ToggleStack, AutoStack}`.
-  AI masks: `Shape::Image` (RLE + base64 coverage) in `lf_settings::masks`, drawn into the brush layers; `ai_job::mask`.
+  AI masks: `Shape::Image` (RLE + base64 coverage; subject, sky, people, face/body skin, hair, clothes via `lf_ai::segment::Target`) in `lf_settings::masks`, drawn into the brush layers; `ai_job::mask`.
   LUT looks: `lf_settings::lut` (`.cube` parser, `desktop.lut`), `lf_pipeline::lut` (process-wide
   registry, 3D texture at bindings 15–16, `lut_amount` uniform), `luts.rs` (`.lensflow/luts/`).
   Merge to HDR: `lf-merge` (align + fuse), `merge_job.rs` (16-bit TIFF beside the first frame),

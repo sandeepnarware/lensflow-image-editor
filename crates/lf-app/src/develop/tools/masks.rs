@@ -29,8 +29,8 @@ pub const BRUSH_HINT: &str = "Paint on the photo. Hold Alt to erase.";
 pub const ERASE: &str = "Erase";
 pub const REMOVE: &str = "Remove mask";
 pub const INVERT: &str = "Invert";
-pub const SELECT_SUBJECT: &str = "Select subject";
-pub const SELECT_SKY: &str = "Select sky";
+/// Before the people buttons (People, Face skin, Body skin, Hair, Clothes).
+pub const PEOPLE: &str = "People:";
 pub const AI_OFF: &str = "The AI tools need the studio in good standing.";
 pub const RANGE: &str = "Range";
 pub const RANGE_PICK: &str = "Alt-click the photo to pick the colour.";
@@ -82,8 +82,8 @@ pub struct MaskTool {
     pub painting: Option<usize>,
     /// The AI buttons may be used (the studio in good standing).
     pub ai_allowed: bool,
-    /// "Select subject" (false) or "Select sky" (true) was pressed.
-    pub ai_request: Option<bool>,
+    /// An AI mask's button was pressed: what it should find.
+    pub ai_request: Option<lf_ai::segment::Target>,
 }
 
 /// A point in the square space (x × aspect), where distances mean the same both ways.
