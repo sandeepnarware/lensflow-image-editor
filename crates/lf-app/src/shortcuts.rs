@@ -53,6 +53,8 @@ pub enum Action {
     AiRetouch,
     /// The subject on a transparent background; a PNG beside each.
     AiCutout,
+    /// Paint over things and have them filled from their surroundings; a new photo beside it.
+    AiRemoveObjects,
     // Albums
     /// Make an album (with the selected photos).
     NewAlbum,
@@ -135,6 +137,7 @@ impl Action {
             Action::AiUpscale => "AI Upscale…",
             Action::AiRetouch => "Retouch portrait…",
             Action::AiCutout => "Remove background…",
+            Action::AiRemoveObjects => "Remove objects…",
             Action::NewAlbum => "New album…",
             Action::NewSmartAlbum => "New smart album…",
             Action::AddToAlbum => "Add to album…",

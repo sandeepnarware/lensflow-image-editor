@@ -29,6 +29,8 @@ pub enum AiTool {
     Retouch { amount: f32 },
     /// The main subject on a transparent background.
     Cutout,
+    /// What a painted mask covers, filled from its surroundings (the mask comes with the run).
+    Remove,
     /// A mask of the subject (or the sky) for the open photo, added in Develop.
     Mask { sky: bool },
 }
@@ -41,6 +43,7 @@ impl AiTool {
             AiTool::Upscale { .. } => lf_ai::restore::UPSCALE_MODELS.to_vec(),
             AiTool::Retouch { .. } => lf_ai::faces::FACE_MODELS.to_vec(),
             AiTool::Cutout => lf_ai::segment::SUBJECT_MODELS.to_vec(),
+            AiTool::Remove => lf_ai::inpaint::INPAINT_MODELS.to_vec(),
             AiTool::Mask { sky: false } => lf_ai::segment::SUBJECT_MODELS.to_vec(),
             AiTool::Mask { sky: true } => lf_ai::segment::SKY_MODELS.to_vec(),
         }
@@ -53,6 +56,7 @@ impl AiTool {
             AiTool::Upscale { .. } => "AI Upscale",
             AiTool::Retouch { .. } => "Retouch portrait",
             AiTool::Cutout => "Remove background",
+            AiTool::Remove => "Remove objects",
             AiTool::Mask { sky: false } => "Select subject",
             AiTool::Mask { sky: true } => "Select sky",
         }
@@ -65,6 +69,7 @@ impl AiTool {
             AiTool::Upscale { factor } => (format!("Upscaled-{factor}x"), "tif"),
             AiTool::Retouch { .. } => ("Retouched".into(), "tif"),
             AiTool::Cutout => ("Cutout".into(), "png"),
+            AiTool::Remove => ("Removed".into(), "tif"),
             AiTool::Mask { .. } => (String::new(), ""),
         }
     }
@@ -118,12 +123,14 @@ pub fn free_name(dir: &Path, stem: &str, suffix: &str, ext: &str) -> PathBuf {
 
 /// Runs `tool` on `ids`. A photo that fails is reported and the others go on; only a
 /// problem with the AI folder (or a stop) ends the run.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     gpu: Arc<Gpu>,
     engine: &Engine,
     root: &Path,
     ids: &[i64],
     tool: AiTool,
+    painted: Option<&Gray>,
     mut progress: impl FnMut(Step),
     stop: &AtomicBool,
 ) -> Result<Report, String> {
@@ -164,7 +171,10 @@ pub fn run(
                 report.masks.push((id, shape));
             })
         } else {
-            one(&gpu, engine, &catalog, id, &row.path, tool, &mut tick, stop).map(|path| {
+            one(
+                &gpu, engine, &catalog, id, &row.path, tool, painted, &mut tick, stop,
+            )
+            .map(|path| {
                 log::info!("{} wrote {}", tool.name(), path.display());
                 report.written.push(path);
             })
@@ -189,6 +199,7 @@ fn one(
     id: i64,
     path: &Path,
     tool: AiTool,
+    painted: Option<&Gray>,
     progress: &mut dyn FnMut(usize, usize),
     stop: &AtomicBool,
 ) -> Result<PathBuf, String> {
@@ -235,6 +246,12 @@ fn one(
             write_tiff16(&out, &done)?;
         }
         AiTool::Mask { .. } => return Err("Not a file.".to_owned()),
+        AiTool::Remove => {
+            let painted = painted.ok_or_else(|| "Nothing was painted.".to_owned())?;
+            let mask = painted.resized(img.w, img.h);
+            let done = lf_ai::inpaint::remove(engine, &img, &mask, progress, stop).map_err(text)?;
+            write_tiff16(&out, &done)?;
+        }
         AiTool::Cutout => {
             let long = img.w.max(img.h).max(1);
             let k = (1024.0 / long as f64).min(1.0);

@@ -131,7 +131,7 @@ red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.
 
 AI tools (the AI tab), run on this computer, nothing uploaded: AI Denoise, AI Upscale
-(2× or 4×), Retouch portrait (smooths the skin of the faces found) and Remove background
+(2× or 4×), Remove objects (paint over what should go), Retouch portrait (smooths the skin of the faces found) and Remove background
 (a PNG with transparency). Each photo is rendered with its edits and the result saved
 beside it as a new file, catalogued next to the original, which is never changed. The
 first use of a tool downloads the AI engine (ONNX Runtime) and that tool's model once

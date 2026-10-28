@@ -120,6 +120,8 @@ pub struct Library {
     ai: Option<crate::dialogs::ai::AiDialog>,
     /// A mask with nothing to download starts on the next frame.
     start_ai_now: bool,
+    /// Remove objects' painting dialog, while open.
+    remove: Option<crate::dialogs::remove::RemoveDialog>,
     local_ai: bool,
     /// Compare, while open (it shows in place of the grid).
     compare: Option<compare::Compare>,
@@ -225,6 +227,7 @@ impl Library {
             current_album: None,
             ai: None,
             start_ai_now: false,
+            remove: None,
             local_ai: false,
             compare: None,
             compare_generation: 0,
@@ -872,6 +875,7 @@ impl Library {
             Msg::MergeDone(result) => self.merge_done(result, env),
             Msg::Albums { root, result } => self.albums_loaded(root, result),
             Msg::AiProgress(step) => self.ai_progress(step),
+            Msg::RemoveRendered { id, result } => self.remove_rendered(id, result),
             Msg::AiDone(result) => self.ai_done(result, env),
             Msg::CompareRendered {
                 generation,
@@ -1349,6 +1353,7 @@ impl Library {
         self.merge_dialog(ui.ctx(), env);
         self.album_dialogs(ui.ctx(), env);
         self.ai_dialog(ui.ctx(), env);
+        self.remove_dialog(ui.ctx());
         self.reveal_active = false;
     }
 
@@ -1367,6 +1372,7 @@ impl Library {
             || self.merge.is_some()
             || self.album_dialog_open()
             || self.ai.is_some()
+            || self.remove.is_some()
     }
 
     /// Whether `action` (a menu item or a key) is possible now in the library or Develop.
@@ -1408,6 +1414,9 @@ impl Library {
             }
             Action::AiDenoise | Action::AiUpscale | Action::AiRetouch | Action::AiCutout => {
                 self.ai_ready()
+            }
+            Action::AiRemoveObjects => {
+                self.ai_ready() && self.remove.is_none() && self.ai_targets().len() == 1
             }
             Action::NewAlbum | Action::NewSmartAlbum => true,
             Action::AddToAlbum => develop || selected,
@@ -1486,6 +1495,7 @@ impl Library {
             Action::AiUpscale => self.open_ai(crate::ai_job::AiTool::Upscale { factor: 2 }),
             Action::AiRetouch => self.open_ai(crate::ai_job::AiTool::Retouch { amount: 0.6 }),
             Action::AiCutout => self.open_ai(crate::ai_job::AiTool::Cutout),
+            Action::AiRemoveObjects => self.open_remove(env),
             Action::NewAlbum => self.open_album_dialog(crate::dialogs::album::Purpose::New),
             Action::NewSmartAlbum => {
                 self.open_album_dialog(crate::dialogs::album::Purpose::NewSmart)

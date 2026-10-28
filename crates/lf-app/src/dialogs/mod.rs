@@ -17,6 +17,7 @@ pub mod merge;
 pub mod preferences;
 pub mod print;
 pub mod quit;
+pub mod remove;
 pub mod save_preset;
 
 use crate::theme;

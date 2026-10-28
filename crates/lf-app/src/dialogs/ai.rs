@@ -24,6 +24,7 @@ pub const ABOUT_CUTOUT: &str = "Keeps the main subject and makes the background 
 pub const ABOUT_SUBJECT: &str =
     "Finds the main subject and adds it as a mask, ready for its own adjustments.";
 pub const ABOUT_SKY: &str = "Finds the sky and adds it as a mask, ready for its own adjustments.";
+pub const ABOUT_REMOVE: &str = "Fills what was painted from its surroundings and saves the photo beside the original as a new 16-bit TIFF.";
 
 /// "AI Denoise: 3 photos".
 pub fn title(tool: AiTool, n: usize) -> String {
@@ -65,6 +66,8 @@ pub struct AiDialog {
     pub stop: Arc<AtomicBool>,
     /// What the first run still has to download (bytes).
     pub download: u64,
+    /// Remove objects: what was painted (the photo's shape).
+    pub mask: Option<Arc<lf_ai::Gray>>,
 }
 
 impl AiDialog {
@@ -75,6 +78,7 @@ impl AiDialog {
             stage: Stage::Confirm,
             stop: Arc::new(AtomicBool::new(false)),
             download,
+            mask: None,
         }
     }
 
@@ -120,6 +124,7 @@ impl AiDialog {
             AiTool::Upscale { .. } => ABOUT_UPSCALE,
             AiTool::Retouch { .. } => ABOUT_RETOUCH,
             AiTool::Cutout => ABOUT_CUTOUT,
+            AiTool::Remove => ABOUT_REMOVE,
             AiTool::Mask { sky: false } => ABOUT_SUBJECT,
             AiTool::Mask { sky: true } => ABOUT_SKY,
         };
@@ -146,7 +151,7 @@ impl AiDialog {
                     .labelled_by(label.id);
                 *amount = pct / 100.0;
             }
-            AiTool::Cutout | AiTool::Mask { .. } => {}
+            AiTool::Cutout | AiTool::Mask { .. } | AiTool::Remove => {}
         }
         ui.add_space(8.0);
         if let Some(text) = download_text(self.download) {

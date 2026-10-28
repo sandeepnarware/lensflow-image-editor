@@ -159,7 +159,14 @@ pub const RIBBON: &[Tab] = &[
         title: "AI",
         groups: &[
             group("Enhance", &[Do(Action::AiDenoise), Do(Action::AiUpscale)]),
-            group("Retouch", &[Do(Action::AiRetouch), Do(Action::AiCutout)]),
+            group(
+                "Retouch",
+                &[
+                    Do(Action::AiRemoveObjects),
+                    Do(Action::AiRetouch),
+                    Do(Action::AiCutout),
+                ],
+            ),
         ],
     },
     Tab {
@@ -257,6 +264,7 @@ pub fn icon(action: Action) -> &'static str {
         Action::AiUpscale => "⛶",
         Action::AiRetouch => "☺",
         Action::AiCutout => "✂",
+        Action::AiRemoveObjects => "🗑",
         Action::NewAlbum => "🗀",
         Action::NewSmartAlbum => "⚙",
         Action::AddToAlbum => "➕",
@@ -336,6 +344,7 @@ pub fn short_label(action: Action) -> &'static str {
         Action::AiUpscale => "Upscale",
         Action::AiRetouch => "Retouch",
         Action::AiCutout => "Background",
+        Action::AiRemoveObjects => "Remove",
         Action::NewAlbum => "New album",
         Action::NewSmartAlbum => "Smart album",
         Action::AddToAlbum => "Add to album",
@@ -681,6 +690,7 @@ mod tests {
             Action::AiUpscale,
             Action::AiRetouch,
             Action::AiCutout,
+            Action::AiRemoveObjects,
             Action::Compare,
             Action::NewAlbum,
             Action::NewSmartAlbum,

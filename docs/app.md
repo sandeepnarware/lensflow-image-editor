@@ -580,6 +580,14 @@ little of the fine texture back. The library rescans the catalogue folders writt
 tools need `Decision::local_ai_allowed` (good standing); quitting or changing the catalogue
 while one runs asks first (`quit::AI_RUNNING`).
 
+AI → Remove objects (`Action::AiRemoveObjects`, one photo) opens `dialogs/remove.rs`: the photo
+rendered with its edits on the `Open` lane (`compare::render`, `Msg::RemoveRendered`) with a
+brush (Alt rubs out) painting a mask at most 1024 px long, shown as a red overlay. "Remove" hands
+the mask to the AI dialog as `AiTool::Remove` (`AiDialog::mask`); the job grows it to the full
+render and `lf_ai::inpaint::remove` fills each painted region: cut out with room around it,
+shrunk to LaMa's 512², filled, grown back and blended in through a feathered mask, so only what
+was painted changes. The result is `-Removed.tif`.
+
 `crates/lf-ai/tests/models.rs` runs the real models when `LF_AI_DIR` names a folder holding
 them (`LF_AI_DOWNLOAD=1` fetches them there); otherwise those tests return at once.
 

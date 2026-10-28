@@ -6,6 +6,7 @@
 use super::{Env, Library, Mode};
 use crate::ai_job::{self, AiTool, Report, Step};
 use crate::dialogs::ai::{AiAction, AiDialog, Stage};
+use crate::dialogs::remove::{RemoveAction, RemoveDialog};
 use crate::jobs::{Lane, Msg};
 use eframe::egui;
 use std::sync::atomic::Ordering;
@@ -36,7 +37,7 @@ impl Library {
     }
 
     /// The photos an AI tool works on: the open one in Develop, else the selection.
-    fn ai_targets(&self) -> Vec<i64> {
+    pub(super) fn ai_targets(&self) -> Vec<i64> {
         match self.mode {
             Mode::Develop(id) => vec![id],
             Mode::Library => self.selected_in_order(),
@@ -89,6 +90,7 @@ impl Library {
         dialog.started();
         let ids = dialog.ids.clone();
         let stop = dialog.stop.clone();
+        let painted = dialog.mask.clone();
         let gpu = self.gpu.clone();
         let engine = self.ai_engine();
         let reporter = env.jobs.reporter();
@@ -100,6 +102,7 @@ impl Library {
                 &root,
                 &ids,
                 tool,
+                painted.as_deref(),
                 |step| reporter.send(Msg::AiProgress(step)),
                 &stop,
             );
@@ -158,6 +161,62 @@ impl Library {
     pub(super) fn stop_ai(&self) {
         if let Some(ai) = &self.ai {
             ai.stop.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+impl Library {
+    /// AI → Remove objects: the painting dialog for the one photo (the open one in Develop),
+    /// its picture rendered on the `Open` lane.
+    pub(super) fn open_remove(&mut self, env: &mut Env) {
+        let ids = self.ai_targets();
+        let (Some(&id), Some(root)) = (ids.first(), self.root.clone()) else {
+            return;
+        };
+        let Some(path) = self.photo(id).map(|p| p.path.clone()) else {
+            return;
+        };
+        // The open photo's gesture is recorded first, so the picture shows it.
+        self.develop.finish_edit(env.toasts);
+        let gpu = self.gpu.clone();
+        let cache = self.frames.clone();
+        let quality = crate::develop::open::quality(env.prefs.develop_quality);
+        env.jobs.spawn(Lane::Open, "remove preview", move || {
+            let result =
+                crate::library::compare::render(&gpu, &root, id, &path, cache.as_deref(), quality)
+                    .map(|p| Box::new(crate::library::compare::Pixels(p)));
+            Msg::RemoveRendered { id, result }
+        });
+        self.remove = Some(RemoveDialog::new(id));
+    }
+
+    pub(super) fn remove_rendered(
+        &mut self,
+        id: i64,
+        result: Result<Box<crate::library::compare::Pixels>, String>,
+    ) {
+        if let Some(dialog) = self.remove.as_mut().filter(|d| d.id == id) {
+            dialog.rendered(result.map(|p| p.0));
+        }
+    }
+
+    pub(super) fn remove_dialog(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = &mut self.remove else {
+            return;
+        };
+        match dialog.show(ctx) {
+            RemoveAction::None => {}
+            RemoveAction::Close => self.remove = None,
+            RemoveAction::Remove(mask) => {
+                let id = dialog.id;
+                self.remove = None;
+                let tool = AiTool::Remove;
+                let download = self.ai_engine().to_download(&tool.models());
+                let mut ai = AiDialog::new(vec![id], tool, download);
+                ai.mask = Some(std::sync::Arc::new(mask));
+                self.ai = Some(ai);
+                self.start_ai_now = download == 0;
+            }
         }
     }
 }
