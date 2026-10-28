@@ -500,3 +500,23 @@ and is skipped. A backup copy that fails is counted, not fatal. The card is only
 When the copy ends, the destination is catalogued: rescanned with the catalogue folder it
 lies in, or added as a new folder (as "Add folder…" would). If another import holds the
 catalogue then, a toast says where the copies are, to add by hand.
+
+### LUT looks
+
+Develop's "LUT look" section (`develop/panels/lut.rs`) picks a 3D LUT and its Amount;
+"Import .cube…" copies a `.cube` file into the catalogue's `.lensflow/luts/` (`luts.rs`,
+replacing one of the same name) and puts it on the open photo. A photo stores only the
+LUT's name and amount (`desktop.lut`, `lf_settings::lut::LutChoice`), so the web editor
+ignores it and a sidecar stays small. The `.cube` reader (`Lut::parse_cube`) takes 3D tables
+of size 2 to 129 with the 0..1 domain; 1D and log/HDR (other domain) LUTs are refused with a
+reason.
+
+The tables live in a process-wide registry (`lf_pipeline::lut`), filled from the LUT folder
+when the catalogue opens (in `catalog_ext::open`, before the thumbnail pool starts) and when
+one is imported; the preview, thumbnails and exports all find them by name. A renderer
+uploads the chosen table into a 3D `Rgba16Float` texture (binding 15, its sampler 16) when
+the choice changes; the develop shader looks the finished colour up (after the develop step,
+before vignette and grain, each grid point at a texel centre) and mixes it in by
+`lut_amount` (the uniform that was the lens block's padding). A LUT that is not loaded (a
+sidecar from another machine) renders as none, and the panel says so. With no LUT,
+`lut_amount` is 0 and the pass is the web's: the parity gate is untouched.

@@ -87,6 +87,9 @@ The bar over the grid shows only some flags, ratings or labels and sorts by
 capture time, file name or rating. Marks live in the catalogue, not in the edit
 files. See [docs/app.md](docs/app.md).
 
+LUT looks (Develop → LUT look): `.cube` 3D LUTs imported into the catalogue, applied to
+the finished colour with an amount; desktop only (`desktop.lut`).
+
 Import from card (File → From card): copies the photos on a memory card (or any
 folder) into a folder you name, optionally renamed (`{date}_{seq}`, ...) and copied to a
 backup folder too, skipping photos the catalogue already has, then catalogues the

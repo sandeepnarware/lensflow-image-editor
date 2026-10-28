@@ -70,7 +70,7 @@ struct Uniforms {
     mask_count: u32,        // desktop only: 0 is the web's pass exactly
     aspect: f32,            // working width per unit of height
     lens_on: u32,           // desktop only: 0 is the web's pass exactly
-    _lens_pad: u32,
+    lut_amount: f32,        // desktop only: the 3D LUT look's strength (0: none)
     masks: array<MaskU, 8>,
     lens: vec4<f32>,        // distortion, lens vignetting, red scale, blue scale
     persp: vec4<f32>,       // vertical and horizontal keystone, corner radius squared
@@ -92,6 +92,9 @@ struct Uniforms {
 // Desktop only: the brush masks' coverage, one layer per mask (8) stacked top to bottom.
 @group(0) @binding(13) var u_brush: texture_2d<f32>;
 @group(0) @binding(14) var s_brush: sampler;
+// Desktop only: the 3D LUT look (a stand-in while `lut_amount` is 0).
+@group(0) @binding(15) var u_lut: texture_3d<f32>;
+@group(0) @binding(16) var s_lut: sampler;
 
 // d(uv)/dx and d(uv)/dy per output pixel, set by fs_develop.
 var<private> grad_x: vec2<f32>;
@@ -388,6 +391,13 @@ fn fs_develop(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
     if (u.develop != 0u) { c = develop(c, uv, muv); }
+
+    if (u.lut_amount > 0.0) {
+        // Desktop only: the LUT on the finished colour, each grid point at a texel centre.
+        let n = f32(textureDimensions(u_lut).x);
+        let at = (clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)) * (n - 1.0) + 0.5) / n;
+        c = mix(c, textureSampleLevel(u_lut, s_lut, at, 0.0).rgb, u.lut_amount);
+    }
 
     if (u.develop != 0u && u.vignette != 0.0) {
         // Elliptical, following the crop's shape; the midpoint sets where it starts.

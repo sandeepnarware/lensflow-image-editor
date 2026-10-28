@@ -17,6 +17,7 @@ pub mod grade_cli;
 pub mod jobs;
 pub mod library;
 pub mod logging;
+pub mod luts;
 pub mod menu;
 pub mod platform;
 pub mod prefs;

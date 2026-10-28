@@ -13,6 +13,7 @@ pub mod gallery_ui;
 pub mod grid;
 pub mod import_ui;
 pub mod ingest_ui;
+pub mod lut_ui;
 pub mod meta_ui;
 pub mod selection;
 
@@ -793,6 +794,16 @@ impl Library {
             Msg::IngestPlanned(result) => self.ingest_planned(result),
             Msg::IngestProgress { done, total } => self.ingest_progress(done, total),
             Msg::IngestDone(result) => self.ingest_done(result, env),
+            Msg::LutImported(result) => match result {
+                Ok(name) => {
+                    env.toasts
+                        .push(Level::Success, format!("The LUT '{name}' was added."));
+                    self.develop.choose_lut(name, env.toasts);
+                }
+                Err(e) => env
+                    .toasts
+                    .push(Level::Error, format!("The LUT could not be added. {e}")),
+            },
             Msg::PresetsSynced(..) => {
                 // The catalogue's presets may have changed; the session handles the rest.
                 self.develop.presets_stale();
@@ -1195,6 +1206,9 @@ impl Library {
                 .exact_size(histogram_panel_width())
                 .frame(frame)
                 .show(ui, |ui| develop.side_ui(ui, photo, env.toasts));
+        }
+        if self.develop.take_lut_import() {
+            self.pick_lut(env);
         }
         match self.mode {
             Mode::Library => {

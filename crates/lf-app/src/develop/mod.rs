@@ -144,6 +144,8 @@ pub struct Develop {
     tools: tools::Tools,
     /// The Looks, Studio presets and Versions sections.
     extras: extras::Extras,
+    /// "Import .cube…" was clicked; the library opens the file picker.
+    lut_import_asked: bool,
 }
 
 impl Develop {
@@ -170,6 +172,7 @@ impl Develop {
             reopen: false,
             tools: tools::Tools::default(),
             extras: extras::Extras::default(),
+            lut_import_asked: false,
         }
     }
 
@@ -305,6 +308,25 @@ impl Develop {
     pub fn take_edited(&mut self, now: Instant) -> Vec<i64> {
         let open = self.photo_id();
         self.session.take_edited(open, now)
+    }
+
+    /// "Import .cube…" was clicked since the last call.
+    pub fn take_lut_import(&mut self) -> bool {
+        std::mem::take(&mut self.lut_import_asked)
+    }
+
+    /// Puts the LUT `name` on the open photo (keeping the amount it had), one history step.
+    pub fn choose_lut(&mut self, name: String, toasts: &mut Toasts) {
+        use lf_settings::lut::LutChoice;
+        if self.session.edit().is_none() {
+            return;
+        }
+        self.commit(toasts);
+        self.edit(|s| {
+            let amount = LutChoice::from_settings(s).map_or(100.0, |c| c.amount);
+            LutChoice::write_into(Some(&LutChoice { name, amount }), s);
+        });
+        self.commit(toasts);
     }
 
     /// The `Io` lane wrote the waiting sidecars.
@@ -649,7 +671,9 @@ impl Develop {
         let (State::Ready(opened, _), Some(edit)) = (&self.state, self.session.edit_mut()) else {
             return;
         };
+        let luts = lf_pipeline::lut::names();
         let ctx = PanelContext {
+            luts: &luts,
             raw: opened.kind == Kind::Raw,
             histogram: self.histogram.as_ref(),
             sample: Some(&opened.sample),
@@ -669,6 +693,7 @@ impl Develop {
         if out.pick_wb {
             self.toggle_tool(ToolKind::WhiteBalance, toasts);
         }
+        self.lut_import_asked |= out.import_lut;
     }
 
     /// Develop → Auto tone (`Ctrl+U`): exposure and the tone sliders from the photo, one

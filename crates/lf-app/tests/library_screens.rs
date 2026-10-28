@@ -2283,3 +2283,41 @@ fn importing_from_a_card_copies_renames_backs_up_and_catalogues() {
     });
     h.get_by_label("3 already in the catalogue (same name and size).");
 }
+
+#[test]
+fn an_imported_lut_goes_on_the_open_photo_and_stays_with_the_catalogue() {
+    use lf_settings::lut::{Lut, LutChoice};
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    let mut text = String::from("TITLE \"Cool\"\nLUT_3D_SIZE 3\n");
+    for p in Lut::identity(3).data {
+        text.push_str(&format!("{} {} {}\n", p[0], p[1], p[2] * 0.5 + 0.5));
+    }
+    let file = dir.path().join("Cool blue.cube");
+    std::fs::write(&file, text).unwrap();
+    {
+        let s = h.state_mut();
+        let mut env = Env {
+            jobs: &s.jobs,
+            toasts: &mut s.toasts,
+            prefs: &mut s.prefs,
+            config_dir: &s.config,
+        };
+        s.lib.import_lut(file, &mut env);
+    }
+    step_until(&mut h, "the LUT on the photo", |s| {
+        s.lib
+            .develop()
+            .edit_state()
+            .and_then(|e| LutChoice::from_settings(&e.settings))
+            .is_some_and(|c| c.name == "Cool blue" && c.amount == 100.0)
+    });
+    assert!(
+        dir.path()
+            .join("catalogue/.lensflow/luts/Cool blue.cube")
+            .exists()
+    );
+}

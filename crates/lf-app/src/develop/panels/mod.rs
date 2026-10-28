@@ -14,6 +14,7 @@ pub mod hsl;
 pub mod lens;
 pub mod light;
 pub mod looks;
+pub mod lut;
 pub mod presets;
 pub mod raw;
 pub mod slider;
@@ -103,6 +104,8 @@ pub struct PanelOutput {
     pub reset: Option<&'static [GroupKey]>,
     /// The white-balance eyedropper was clicked: open (or leave) its tool.
     pub pick_wb: bool,
+    /// "Import .cube…" was clicked.
+    pub import_lut: bool,
 }
 
 impl PanelOutput {
@@ -122,6 +125,8 @@ pub struct PanelContext<'a> {
     pub sample: Option<&'a Sample>,
     /// The white-balance eyedropper is open (its button shows pressed).
     pub picking_wb: bool,
+    /// The LUT looks loaded (`lf_pipeline::lut::names`).
+    pub luts: &'a [String],
 }
 
 /// A folding section with a "Reset" link; true when the link was clicked.
@@ -221,6 +226,22 @@ pub fn show(
     if section(ui, "lens", lens::TITLE, false, |ui| r = lens::show(ui, s)) {
         let before = s.clone();
         lens::reset(s);
+        if *s != before {
+            r = SliderResponse {
+                changed: true,
+                released: true,
+            };
+        }
+    }
+    out.absorb(r);
+    let mut r = SliderResponse::default();
+    if section(ui, "lut", lut::TITLE, false, |ui| {
+        let (lr, import) = lut::show(ui, s, ctx.luts);
+        r = lr;
+        out.import_lut |= import;
+    }) {
+        let before = s.clone();
+        lut::reset(s);
         if *s != before {
             r = SliderResponse {
                 changed: true,

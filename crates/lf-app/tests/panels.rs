@@ -26,6 +26,7 @@ fn harness(raw: bool) -> Harness<'static, State> {
                     histogram: None,
                     sample: None,
                     picking_wb: false,
+                    luts: &[],
                 };
                 s.last = panels::show(ui, &mut s.panels, &mut s.settings, &ctx);
                 if s.last.commit {
@@ -175,6 +176,7 @@ fn recorded() -> Harness<'static, Recorded> {
                     histogram: None,
                     sample: None,
                     picking_wb: false,
+                    luts: &[],
                 };
                 let mut out = PanelOutput::default();
                 let panels = &mut s.panels;
@@ -317,6 +319,7 @@ fn auto_tone_auto_white_balance_and_the_eyedropper_button() {
                     histogram: None,
                     sample: Some(&s.sample),
                     picking_wb: false,
+                    luts: &[],
                 };
                 s.last = panels::show(ui, &mut s.panels, &mut s.settings, &ctx);
                 s.picked |= s.last.pick_wb;

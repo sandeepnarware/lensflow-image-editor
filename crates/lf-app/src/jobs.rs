@@ -189,6 +189,8 @@ pub enum Msg {
     IngestProgress { done: usize, total: usize },
     /// Copying from a card ended: the folder the copies are in, and what was done.
     IngestDone(Result<(PathBuf, lf_catalog::ingest::IngestOutcome), String>),
+    /// A `.cube` LUT was copied into the catalogue and loaded (its name), or why not.
+    LutImported(Result<String, String>),
 
     #[cfg(test)]
     Probe(&'static str),
@@ -713,7 +715,8 @@ pub(crate) mod owners {
             | Msg::GalleryDone(..)
             | Msg::IngestPlanned(..)
             | Msg::IngestProgress { .. }
-            | Msg::IngestDone(..) => Owner::Library,
+            | Msg::IngestDone(..)
+            | Msg::LutImported(..) => Owner::Library,
             Msg::DeviceReset(..) => Owner::App,
             Msg::Probe(..) => Owner::Test,
         }
@@ -819,6 +822,7 @@ pub(crate) mod owners {
             Msg::IngestPlanned(Err("no".into())),
             Msg::IngestProgress { done: 1, total: 2 },
             Msg::IngestDone(Err("no".into())),
+            Msg::LutImported(Err("no".into())),
             Msg::DeviceReset(device_reset::Choice::Quit),
             Msg::Probe("probe"),
         ]

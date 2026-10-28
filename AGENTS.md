@@ -130,6 +130,8 @@ cargo test --workspace                   # includes the 228-render parity suite
   Metadata and search: title, caption, creator, copyright, keywords (`lf_catalog::meta`,
   schema v7, XMP in JPEG exports via `exif_embed::xmp_segment`; `library/meta_ui.rs`,
   `Filter::text`).
+  LUT looks: `lf_settings::lut` (`.cube` parser, `desktop.lut`), `lf_pipeline::lut` (process-wide
+  registry, 3D texture at bindings 15–16, `lut_amount` uniform), `luts.rs` (`.lensflow/luts/`).
   Import from card: copy, rename, backup, suspected duplicates (`lf_catalog::ingest`,
   `dialogs/ingest.rs`, `library/ingest_ui.rs`, `Action::ImportFromCard`).
   Export to a gallery: `lf_account::galleries` (upload sessions, chunked or direct), `gallery_job.rs`,

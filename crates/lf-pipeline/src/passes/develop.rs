@@ -65,7 +65,8 @@ pub struct Uniforms {
     pub aspect: f32,
     /// Desktop only: 1 when a lens correction is on (0: the web's pass exactly).
     pub lens_on: u32,
-    pub _lens_pad: u32,
+    /// Desktop only: how much of the 3D LUT look to mix in, 0..1 (0: none, the web's pass).
+    pub lut_amount: f32,
     pub masks: [MaskUniform; MAX_MASKS],
     /// Distortion (signed strength), lens vignetting, red and blue scale (`lf_settings::lens`).
     pub lens: [f32; 4],
@@ -249,7 +250,9 @@ impl Uniforms {
             mask_count: masks.0.len() as u32,
             aspect: aspect as f32,
             lens_on: u32::from(f.develop && !lens.is_none()),
-            _lens_pad: 0,
+            lut_amount: lf_settings::lut::LutChoice::from_settings(s)
+                .filter(|_| f.develop)
+                .map_or(0.0, |c| (c.amount / 100.0) as f32),
             masks: mask_uniforms,
             lens: [
                 (-lens.distortion / 100.0 * lf_settings::lens::DISTORTION) as f32,
@@ -268,13 +271,25 @@ impl Uniforms {
 }
 
 /// The develop pipeline: six textures (bindings 0–5), a sampler for each (6–11), the
-/// uniforms (12), and (desktop only) the brush masks' coverage and its sampler (13, 14).
+/// uniforms (12), and (desktop only) the brush masks' coverage and its sampler (13, 14) and the
+/// 3D LUT and its sampler (15, 16).
 pub(crate) fn pipeline(device: &wgpu::Device, source: &str) -> FullscreenPass {
     let mut entries: Vec<_> = (0..6).map(texture_entry).collect();
     entries.extend((6..12).map(sampler_entry));
     entries.push(uniform_entry(12));
     entries.push(texture_entry(13));
     entries.push(sampler_entry(14));
+    entries.push(wgpu::BindGroupLayoutEntry {
+        binding: 15,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D3,
+            multisampled: false,
+        },
+        count: None,
+    });
+    entries.push(sampler_entry(16));
     FullscreenPass::with_entries(device, "develop", source, "fs_develop", &entries)
 }
 
@@ -290,6 +305,8 @@ pub struct Inputs<'a> {
     /// Desktop only: the brush masks' coverage, one layer per mask stacked top to bottom
     /// ([`crate::brush`]); a 1×1 stand-in when no mask is a brush.
     pub brush: &'a Target,
+    /// Desktop only: the 3D LUT (a stand-in when the photo has none).
+    pub lut: &'a wgpu::TextureView,
 }
 
 /// A one-entry arena for the develop uniforms, to pass to [`run`] draw after draw.
@@ -351,6 +368,14 @@ pub fn run(
     });
     entries.push(wgpu::BindGroupEntry {
         binding: 14,
+        resource: wgpu::BindingResource::Sampler(&gpu.samplers.linear_level0),
+    });
+    entries.push(wgpu::BindGroupEntry {
+        binding: 15,
+        resource: wgpu::BindingResource::TextureView(inputs.lut),
+    });
+    entries.push(wgpu::BindGroupEntry {
+        binding: 16,
         resource: wgpu::BindingResource::Sampler(&gpu.samplers.linear_level0),
     });
     let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {

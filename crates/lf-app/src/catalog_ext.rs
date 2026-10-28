@@ -86,6 +86,8 @@ pub fn open(
     let catalog = Catalog::open(root).map_err(text)?;
     let folders = catalog.folders().map_err(text)?;
     drop(catalog);
+    // Before the thumbnails start, so none is made without its look.
+    crate::luts::load_all(root);
     let thumbs = pool(gpu, root)?;
     let frames = FrameCache::open(frames_dir, frame_cache_bytes).map_err(text)?;
     Ok(Opened {

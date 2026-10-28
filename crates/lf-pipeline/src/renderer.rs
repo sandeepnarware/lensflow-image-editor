@@ -10,6 +10,7 @@ use crate::brush::BrushTexture;
 use crate::curve_texture::CurveTexture;
 use crate::error::PipelineError;
 use crate::gpu::Gpu;
+use crate::lut::LutTexture;
 use crate::passes::develop::{self, Frame, Inputs, Uniforms};
 use crate::passes::{UniformArena, copy, gaussian, spots};
 use crate::texture::{FLOAT_FORMAT, FORMAT, FloatFrame, Source, Target, read_back, read_back_f16};
@@ -102,6 +103,8 @@ pub struct Renderer {
     curve: CurveTexture,
     /// Desktop only: the brush masks' coverage.
     brush: BrushTexture,
+    /// Desktop only: the 3D LUT look.
+    lut: LutTexture,
     blur_m: Target,
     blur_l: Target,
     /// Kept, as the web keeps them, though only the constructor draws into them.
@@ -207,6 +210,7 @@ impl Renderer {
         let chain = source.format;
         let curve = CurveTexture::new(&gpu)?;
         let brush = BrushTexture::new(&gpu)?;
+        let lut = LutTexture::new(&gpu);
 
         let k = SMALL_EDGE / f64::from(width.max(height));
         let small_size = |v: u32| ((f64::from(v) * k.min(1.0)).round() as u32).max(1);
@@ -234,6 +238,7 @@ impl Renderer {
             chain,
             curve,
             brush,
+            lut,
             blur_m,
             blur_l,
             _small: small,
@@ -429,6 +434,7 @@ impl Renderer {
         self.detail_key = None;
         self.curve.invalidate();
         self.brush.invalidate();
+        self.lut.invalidate();
     }
 
     /// Test hook: the next call provokes a validation error inside its own error scope.
@@ -545,7 +551,16 @@ impl Renderer {
         } else {
             (None, None)
         };
-        let uniforms = Uniforms::new(s, &frame, sharp.is_some(), texture.is_some());
+        let mut uniforms = Uniforms::new(s, &frame, sharp.is_some(), texture.is_some());
+        // A LUT that is not loaded (or too big for the device) is no LUT.
+        let lut_ready = develop
+            && self.lut.update(&self.gpu, s).unwrap_or_else(|e| {
+                log::warn!("the LUT look could not be used: {e}");
+                false
+            });
+        if !lut_ready {
+            uniforms.lut_amount = 0.0;
+        }
         let inputs = Inputs {
             // `self.image(spotted)`, by field so the arena below can be borrowed mutably.
             image: if spotted {
@@ -559,6 +574,7 @@ impl Renderer {
             blur_t: texture.unwrap_or(&self.blur_m),
             curve: &self.curve.target,
             brush: &self.brush.target,
+            lut: &self.lut.view,
         };
         develop::run(
             &self.gpu,
