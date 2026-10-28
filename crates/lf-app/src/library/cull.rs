@@ -156,33 +156,9 @@ impl Filter {
     }
 }
 
-/// Whether every word of `text` is somewhere in `row`: its file name, camera, lens, or its
-/// title, caption, creator and keywords. No words keeps every row.
+/// Whether every word of `text` is somewhere in `row` ([`lf_catalog::meta::row_matches`]).
 pub fn matches_text(row: &PhotoRow, text: &str) -> bool {
-    if text.trim().is_empty() {
-        return true;
-    }
-    let m = &row.meta;
-    let name = row
-        .path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned());
-    let fields: Vec<String> = [
-        &name,
-        &row.camera,
-        &row.lens,
-        &m.title,
-        &m.caption,
-        &m.creator,
-    ]
-    .into_iter()
-    .flatten()
-    .chain(&m.keywords)
-    .map(|s| s.to_lowercase())
-    .collect();
-    text.split_whitespace()
-        .map(str::to_lowercase)
-        .all(|word| fields.iter().any(|f| f.contains(&word)))
+    lf_catalog::meta::row_matches(row, text)
 }
 
 /// The mark a key or menu item sets on `targets`. A colour label already on every target is

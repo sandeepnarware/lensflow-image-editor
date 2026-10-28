@@ -201,6 +201,23 @@ pub enum Msg {
     MergeProgress { done: usize, total: usize },
     /// Merge to HDR wrote the merged photo, or why not.
     MergeDone(Result<PathBuf, String>),
+    /// The catalogue's albums (`root`: the catalogue asked).
+    Albums {
+        root: PathBuf,
+        result: Result<Vec<lf_catalog::albums::Album>, String>,
+    },
+    /// An album's photos (a smart album's as its rule picks them now).
+    AlbumPhotos {
+        root: PathBuf,
+        album_id: i64,
+        result: Result<Vec<PhotoRow>, String>,
+    },
+    /// An album was made, changed, filled or emptied: what to say, and the album to show
+    /// (a new one), or why not.
+    AlbumChanged {
+        root: PathBuf,
+        result: Result<(String, Option<i64>), String>,
+    },
 
     #[cfg(test)]
     Probe(&'static str),
@@ -731,7 +748,10 @@ pub(crate) mod owners {
             | Msg::PrintProgress { .. }
             | Msg::PrintDone(..)
             | Msg::MergeProgress { .. }
-            | Msg::MergeDone(..) => Owner::Library,
+            | Msg::MergeDone(..)
+            | Msg::Albums { .. }
+            | Msg::AlbumPhotos { .. }
+            | Msg::AlbumChanged { .. } => Owner::Library,
             Msg::DeviceReset(..) => Owner::App,
             Msg::Probe(..) => Owner::Test,
         }
@@ -843,6 +863,19 @@ pub(crate) mod owners {
             Msg::PrintDone(Err("no".into())),
             Msg::MergeProgress { done: 1, total: 2 },
             Msg::MergeDone(Err("no".into())),
+            Msg::Albums {
+                root: dir.to_path_buf(),
+                result: Ok(Vec::new()),
+            },
+            Msg::AlbumPhotos {
+                root: dir.to_path_buf(),
+                album_id: 1,
+                result: Ok(Vec::new()),
+            },
+            Msg::AlbumChanged {
+                root: dir.to_path_buf(),
+                result: Err("no".into()),
+            },
             Msg::DeviceReset(device_reset::Choice::Quit),
             Msg::Probe("probe"),
         ]

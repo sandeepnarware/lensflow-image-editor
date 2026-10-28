@@ -21,7 +21,7 @@ and 2d tasks 1–2 are built; packaging tasks 3–5 are in flight.
 | `lf-grade` | CPU maths for "Match a reference": measure, correct, calibrate (injected renderer), strength/exposure, contact sheet. | `src/lib.rs` |
 | `lf-merge` | CPU merging: exposure fusion (Mertens) through Laplacian pyramids, median-threshold-bitmap alignment; panoramas (`panorama.rs`: cylinder fit, NCC registration, gain and feather blending). No GPU, no catalogue. | `src/lib.rs` |
 | `lf-account` | Blocking reqwest/rustls LensFlow client: sign-in + 2FA, token store, entitlement gate/offline grace, desktop grade, presets sync, download link. | `src/client.rs`, `src/entitlement.rs` |
-| `lf-catalog` | SQLite catalogue (bundled, WAL, schema v7), sidecars, edit history (cap 50), versions, import, thumbnails, export, presets. Never touches pixels directly. | `src/db.rs`, `src/edits.rs`, `src/export.rs` |
+| `lf-catalog` | SQLite catalogue (bundled, WAL, schema v8), sidecars, edit history (cap 50), versions, import, thumbnails, export, presets. Never touches pixels directly. | `src/db.rs`, `src/edits.rs`, `src/export.rs` |
 | `lf-fixtures` | Loads `tests/fixtures` goldens and applies the parity thresholds. | `src/lib.rs` |
 | `lf-app` | The `lensflow-image-editor` binary: eframe/egui-wgpu window, lanes, session, Develop/Library UI, dialogs, the console's `grade` (`grade_cli.rs`, before any window), release plumbing. | `src/main.rs` → `src/app.rs` |
 
@@ -131,6 +131,8 @@ cargo test --workspace                   # includes the 228-render parity suite
   Metadata and search: title, caption, creator, copyright, keywords (`lf_catalog::meta`,
   schema v7, XMP in JPEG exports via `exif_embed::xmp_segment`; `library/meta_ui.rs`,
   `Filter::text`).
+  Albums and smart albums: `lf_catalog::albums` (schema v8, `Rule` as JSON), `library/albums_ui.rs`,
+  `dialogs/album.rs`, `Action::{NewAlbum, NewSmartAlbum, AddToAlbum, RemoveFromAlbum}`.
   LUT looks: `lf_settings::lut` (`.cube` parser, `desktop.lut`), `lf_pipeline::lut` (process-wide
   registry, 3D texture at bindings 15–16, `lut_amount` uniform), `luts.rs` (`.lensflow/luts/`).
   Merge to HDR: `lf-merge` (align + fuse), `merge_job.rs` (16-bit TIFF beside the first frame),

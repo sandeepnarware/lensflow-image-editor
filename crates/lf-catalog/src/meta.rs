@@ -43,6 +43,36 @@ impl Meta {
     }
 }
 
+/// Whether every word of `text` is somewhere in `row`: its file name, camera, lens, or its
+/// title, caption, creator and keywords (case ignored). No words keeps every row. The
+/// library's search box and smart albums ([`crate::albums`]) both ask this.
+pub fn row_matches(row: &crate::db::PhotoRow, text: &str) -> bool {
+    if text.trim().is_empty() {
+        return true;
+    }
+    let m = &row.meta;
+    let name = row
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned());
+    let fields: Vec<String> = [
+        &name,
+        &row.camera,
+        &row.lens,
+        &m.title,
+        &m.caption,
+        &m.creator,
+    ]
+    .into_iter()
+    .flatten()
+    .chain(&m.keywords)
+    .map(|s| s.to_lowercase())
+    .collect();
+    text.split_whitespace()
+        .map(str::to_lowercase)
+        .all(|word| fields.iter().any(|f| f.contains(&word)))
+}
+
 /// One text field of [`Meta`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {

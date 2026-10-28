@@ -25,6 +25,8 @@ pub enum CatalogError {
     Export(String),
     #[error("You already have a preset called {0}.")]
     PresetNameTaken(String),
+    #[error("You already have an album called {0}.")]
+    AlbumNameTaken(String),
     #[error("already exists: {}", .0.display())]
     Exists(std::path::PathBuf),
     #[error(
@@ -201,6 +203,23 @@ CREATE TABLE keywords (
     PRIMARY KEY (photo_id, keyword)
 );
 CREATE INDEX keywords_word ON keywords(keyword);
+"#,
+    // Albums (`crate::albums`): a smart album keeps its rule as JSON and no rows in
+    // `album_photos`; a plain one keeps its photos in the order they were added.
+    r#"
+CREATE TABLE albums (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    rule TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE album_photos (
+    album_id INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+    photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    PRIMARY KEY (album_id, photo_id)
+);
+CREATE INDEX album_photos_photo ON album_photos(photo_id);
 "#,
 ];
 
@@ -445,14 +464,15 @@ pub struct PhotoRow {
     pub meta: Meta,
 }
 
-const PHOTO_COLUMNS: &str = "p.id, p.folder_id, p.path, p.width, p.height, p.camera, p.lens,
+pub(crate) const PHOTO_COLUMNS: &str =
+    "p.id, p.folder_id, p.path, p.width, p.height, p.camera, p.lens,
      p.captured_at, p.kind, p.error, p.sidecar_error, p.missing,
      EXISTS (SELECT 1 FROM edits e WHERE e.photo_id = p.id), p.updated_at,
      p.flag, p.rating, p.label, p.title, p.caption, p.creator, p.copyright,
      (SELECT group_concat(keyword, char(31)) FROM
          (SELECT keyword FROM keywords k WHERE k.photo_id = p.id ORDER BY keyword))";
 
-fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
+pub(crate) fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
     Ok(PhotoRow {
         id: r.get(0)?,
         folder_id: r.get(1)?,

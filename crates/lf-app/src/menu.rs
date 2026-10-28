@@ -80,6 +80,15 @@ pub const RIBBON: &[Tab] = &[
                 ],
             ),
             group("Selection", &[Do(Action::SelectAll)]),
+            group(
+                "Albums",
+                &[
+                    Do(Action::NewAlbum),
+                    Do(Action::NewSmartAlbum),
+                    Do(Action::AddToAlbum),
+                    Do(Action::RemoveFromAlbum),
+                ],
+            ),
         ],
     },
     Tab {
@@ -234,6 +243,10 @@ pub fn icon(action: Action) -> &'static str {
         Action::ActualSize => "🔍",
         Action::ToggleZoom => "🔍",
         Action::Metadata => "📝",
+        Action::NewAlbum => "🗀",
+        Action::NewSmartAlbum => "⚙",
+        Action::AddToAlbum => "➕",
+        Action::RemoveFromAlbum => "➖",
         Action::MatchReference => "🎯",
         Action::EditIn => "✏",
         Action::MergeHdr => "◑",
@@ -304,6 +317,10 @@ pub fn short_label(action: Action) -> &'static str {
         Action::ShowLogFolder => "Log folder",
         Action::KeyboardShortcuts => "Shortcuts",
         Action::Metadata => "Metadata",
+        Action::NewAlbum => "New album",
+        Action::NewSmartAlbum => "Smart album",
+        Action::AddToAlbum => "Add to album",
+        Action::RemoveFromAlbum => "Remove",
         other => other.label(),
     }
 }
@@ -639,6 +656,10 @@ mod tests {
             Action::Print,
             Action::MergeHdr,
             Action::MergePanorama,
+            Action::NewAlbum,
+            Action::NewSmartAlbum,
+            Action::AddToAlbum,
+            Action::RemoveFromAlbum,
             Action::Export,
             Action::Quit,
             Action::Undo,

@@ -40,6 +40,15 @@ pub enum Action {
     ToggleZoom,
     /// Show or hide the Library's Metadata panel (title, caption, keywords).
     Metadata,
+    // Albums
+    /// Make an album (with the selected photos).
+    NewAlbum,
+    /// Make an album that gathers photos by a rule.
+    NewSmartAlbum,
+    /// Put the selected photos in an album.
+    AddToAlbum,
+    /// Take the selected photos out of the album shown.
+    RemoveFromAlbum,
     // Photo
     MatchReference,
     /// Render the photo to a TIFF beside it and open it in the studio's external editor.
@@ -107,6 +116,10 @@ impl Action {
             Action::ActualSize => "100 %",
             Action::ToggleZoom => "Fit / 100 %",
             Action::Metadata => "Metadata panel",
+            Action::NewAlbum => "New album…",
+            Action::NewSmartAlbum => "New smart album…",
+            Action::AddToAlbum => "Add to album…",
+            Action::RemoveFromAlbum => "Remove from album",
             Action::MatchReference => "Match a reference…",
             Action::EditIn => "Edit in external editor…",
             Action::MergeHdr => "Merge to HDR…",
@@ -194,6 +207,8 @@ pub const MAP: Map = Map(&[
     (Action::Print, cmd(Key::P)),
     (Action::MergeHdr, cmd(Key::H)),
     (Action::MergePanorama, cmd(Key::M)),
+    (Action::NewAlbum, cmd(Key::N)),
+    (Action::AddToAlbum, cmd(Key::B)),
     (Action::CropTool, key(Key::R)),
     (Action::SpotTool, key(Key::Q)),
     (Action::WhiteBalanceTool, key(Key::W)),
@@ -354,6 +369,8 @@ mod tests {
             (Action::Print, cmd(Key::P)),
             (Action::MergeHdr, cmd(Key::H)),
             (Action::MergePanorama, cmd(Key::M)),
+            (Action::NewAlbum, cmd(Key::N)),
+            (Action::AddToAlbum, cmd(Key::B)),
             (Action::CropTool, key(Key::R)),
             (Action::SpotTool, key(Key::Q)),
             (Action::WhiteBalanceTool, key(Key::W)),

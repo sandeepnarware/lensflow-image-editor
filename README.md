@@ -112,6 +112,12 @@ the selected photos, with the folder's keywords a click away. The search box ove
 the grid finds photos by those, the file name, camera or lens. Exported JPEGs
 carry them as XMP (and the creator and copyright in EXIF).
 
+Albums (Home → Albums, or the sidebar under the folders): gather photos from any
+folders into an album (`Ctrl+N` makes one with the selection, `Ctrl+B` adds to one),
+in the order you add them. A smart album keeps a rule instead (stars, flag, colour
+label, words, taken within the last week or month) and always holds what matches.
+Albums live in the catalogue; deleting one never touches its photos.
+
 The window needs a graphics adapter. With no driver it runs on a software
 adapter (WARP on Windows, lavapipe on Linux) and says "No graphics driver found:
 previews will be slow."

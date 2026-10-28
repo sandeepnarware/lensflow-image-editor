@@ -5,6 +5,7 @@
 //! and rescans on the `Long` lane, each job with its own `Catalog`, answering with a [`Msg`]. So a folder never waits behind an import to
 //! show. The thumbnail pool has its own connections.
 
+pub mod albums_ui;
 pub mod cull;
 pub mod cull_ui;
 pub mod edit_in_ui;
@@ -111,6 +112,15 @@ pub struct Library {
     pub mode: Mode,
     folders: Vec<Folder>,
     current_folder: Option<i64>,
+    /// The album shown in place of a folder ([`albums_ui`]); never both.
+    current_album: Option<i64>,
+    albums: Vec<lf_catalog::albums::Album>,
+    /// New album, New smart album or Edit album, while open.
+    album_dialog: Option<crate::dialogs::album::AlbumDialog>,
+    /// The "Add to album" picker is open.
+    adding_to_album: bool,
+    /// Asking before an album is deleted.
+    confirm_delete_album: Option<lf_catalog::albums::Album>,
     /// Every photo of the folder, in capture order (the catalogue's).
     photos: Vec<PhotoRow>,
     /// Index of each id in `photos`.
@@ -202,6 +212,11 @@ impl Library {
             mode: Mode::Library,
             folders: Vec::new(),
             current_folder: None,
+            current_album: None,
+            albums: Vec::new(),
+            album_dialog: None,
+            adding_to_album: false,
+            confirm_delete_album: None,
             photos: Vec::new(),
             rows: HashMap::new(),
             order: Vec::new(),
@@ -693,6 +708,8 @@ impl Library {
                     | Msg::FolderRemoved { .. }
                     | Msg::Marked { .. }
                     | Msg::MetaSaved { .. }
+                    | Msg::AlbumPhotos { .. }
+                    | Msg::AlbumChanged { .. }
                     | Msg::PoolReady(..)
             )
         {
@@ -766,6 +783,9 @@ impl Library {
                         self.show_folder(None, env);
                     }
                     self.refresh_folders(env);
+                    // Its photos left every album.
+                    self.refresh_albums(env);
+                    self.load_album(env);
                 }
                 Err(e) => env.toasts.push(
                     Level::Error,
@@ -775,7 +795,13 @@ impl Library {
             Msg::MetaSaved { root, result } => self.meta_saved(root, result, env),
             Msg::Marked { root, result } => match result {
                 _ if self.root.as_deref() != Some(root.as_path()) => {}
-                Ok(n) => log::debug!("marked {n} photos"),
+                Ok(n) => {
+                    log::debug!("marked {n} photos");
+                    // A smart album's photos follow their marks.
+                    if self.smart_album_shown() {
+                        self.load_album(env);
+                    }
+                }
                 Err(e) => {
                     env.toasts.push(Level::Error, format!("{MARK_FAILED} {e}"));
                     // The grid showed the mark before it was saved: show what is saved.
@@ -816,6 +842,13 @@ impl Library {
             Msg::PrintDone(result) => self.print_done(result),
             Msg::MergeProgress { done, total } => self.merge_progress(done, total),
             Msg::MergeDone(result) => self.merge_done(result, env),
+            Msg::Albums { root, result } => self.albums_loaded(root, result),
+            Msg::AlbumPhotos {
+                root,
+                album_id,
+                result,
+            } => self.album_photos_loaded(root, album_id, result, env),
+            Msg::AlbumChanged { root, result } => self.album_changed(root, result, env),
             Msg::LutImported(result) => match result {
                 Ok(name) => {
                     env.toasts
@@ -904,6 +937,7 @@ impl Library {
                 self.develop.set_root(&root);
                 self.stage = Stage::Ready;
                 self.folders_loaded(opened.folders, env);
+                self.refresh_albums(env);
             }
             Err(e) => {
                 log::error!("could not open the catalogue at {}: {e}", root.display());
@@ -927,6 +961,11 @@ impl Library {
         if self.current_folder != Some(folder_id) {
             return;
         }
+        self.rows_loaded(rows);
+    }
+
+    /// The rows of the folder or album shown arrived (again).
+    fn rows_loaded(&mut self, rows: Vec<PhotoRow>) {
         // A photo whose file or row changed (a rescan) gets a new thumbnail.
         let before: HashMap<i64, &str> = self
             .photos
@@ -1015,6 +1054,10 @@ impl Library {
 
     /// Reads the current folder's rows again.
     fn reload_photos(&self, env: &mut Env) {
+        if self.current_album.is_some() {
+            self.load_album(env);
+            return;
+        }
         if let (Some(folder_id), Some(root)) = (self.current_folder, self.root.clone()) {
             env.jobs.spawn(Lane::Query, "photos", move || {
                 let result = catalog_ext::photos_in(&root, folder_id);
@@ -1029,7 +1072,7 @@ impl Library {
 
     /// Shows `folder` (or nothing) and loads its photos.
     fn show_folder(&mut self, folder: Option<i64>, env: &mut Env) {
-        if self.current_folder != folder {
+        if self.current_folder != folder || self.current_album.is_some() {
             self.selection = Selection::default();
             self.photos.clear();
             self.rows.clear();
@@ -1039,6 +1082,7 @@ impl Library {
             self.reveal_active = true;
         }
         self.current_folder = folder;
+        self.current_album = None;
         self.loading = folder;
         self.revive_thumbs(env);
         if let (Some(folder_id), Some(root)) = (folder, self.root.clone()) {
@@ -1259,6 +1303,7 @@ impl Library {
         self.ingest_dialog(ui.ctx(), env);
         self.print_dialog(ui.ctx(), env);
         self.merge_dialog(ui.ctx(), env);
+        self.album_dialogs(ui.ctx(), env);
         self.reveal_active = false;
     }
 
@@ -1275,6 +1320,7 @@ impl Library {
             || self.ingest.as_ref().is_some_and(|d| d.visible)
             || self.print.is_some()
             || self.merge.is_some()
+            || self.album_dialog_open()
     }
 
     /// Whether `action` (a menu item or a key) is possible now in the library or Develop.
@@ -1309,6 +1355,9 @@ impl Library {
             }
             Action::SelectAll | Action::Previous | Action::Next => !self.order.is_empty(),
             Action::Metadata => !develop,
+            Action::NewAlbum | Action::NewSmartAlbum => true,
+            Action::AddToAlbum => develop || selected,
+            Action::RemoveFromAlbum => !develop && self.can_remove_from_album(),
             Action::Library => develop,
             Action::Develop => !develop && self.selection.active().is_some(),
             Action::Up | Action::Down => !develop && !self.order.is_empty(),
@@ -1375,6 +1424,12 @@ impl Library {
                 }
             }
             Action::Metadata => self.toggle_metadata(),
+            Action::NewAlbum => self.open_album_dialog(crate::dialogs::album::Purpose::New),
+            Action::NewSmartAlbum => {
+                self.open_album_dialog(crate::dialogs::album::Purpose::NewSmart)
+            }
+            Action::AddToAlbum => self.adding_to_album = true,
+            Action::RemoveFromAlbum => self.remove_from_album(env),
             Action::Previous => self.step(Dir::Left, env),
             Action::Next => self.step(Dir::Right, env),
             Action::Up => self.step(Dir::Up, env),
@@ -1507,8 +1562,11 @@ impl Library {
         let can_add = self.can_add();
         // A folder being imported (on the `Long` lane) stays until its import ends.
         let importing = self.importing.as_ref().map(|i| i.folder.clone());
+        // The folders take up to half the height; the albums sit below them.
+        let folders_height = (ui.available_height() * 0.5).max(80.0);
         egui::ScrollArea::vertical()
             .id_salt("folder-list")
+            .max_height(folders_height)
             .show(ui, |ui| {
                 for folder in &self.folders {
                     let selected = self.current_folder == Some(folder.id);
@@ -1545,6 +1603,9 @@ impl Library {
         if let Some(folder) = rescan {
             self.rescan(&folder, env);
         }
+        egui::ScrollArea::vertical()
+            .id_salt("album-list")
+            .show(ui, |ui| self.albums_sidebar(ui, env));
     }
 
     fn confirm_remove_dialog(&mut self, ctx: &egui::Context, env: &mut Env) {

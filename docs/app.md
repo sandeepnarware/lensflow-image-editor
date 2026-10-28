@@ -480,6 +480,26 @@ The catalogue's creator and copyright also replace the file's EXIF Artist and Co
 the EXIF is built (a JPEG's own EXIF is still copied byte for byte). PNG, WebP and TIFF carry
 no XMP yet. Gallery uploads are JPEG exports, so they carry it too.
 
+### Albums
+
+Albums (`lf_catalog::albums`, schema v8: `albums` and `album_photos`) gather photos from any
+folders. The sidebar lists them under the folders (`library/albums_ui.rs`); clicking one shows
+it in the grid in place of a folder (`Library::current_album`; a folder and an album are never
+shown together), and the filter bar, marks, Develop and export work on it as on a folder. A
+plain album keeps its photos in the order they were added (`album_photos.position`); a smart
+album keeps a `Rule` as JSON (minimum stars, flag, colour label, words as the search box
+matches them, taken within N days) and holds no rows: `Catalog::album_photos` runs the rule
+over every present photo when the album is shown, and again after each mark, so it keeps up.
+Unknown rule fields are ignored; a rule that no longer reads holds nothing.
+
+Home → Albums: New album (`Ctrl+N`, offering the selection), New smart album, Add to album
+(`Ctrl+B`, a list of plain albums) and Remove from album (the album shown). An album's right-
+click menu adds the selection, renames (or edits the rule) and deletes, after asking. Names
+are unique without regard to case (`CatalogError::AlbumNameTaken`, shown in the dialog). Every
+change runs on the `Io` lane (`Msg::AlbumChanged`), then the list is read again on `Query`
+(`Msg::Albums`) and the album shown reloaded (`Msg::AlbumPhotos`). Removing a folder from the
+catalogue takes its photos out of every album (`ON DELETE CASCADE`).
+
 ### Import from a card
 
 File → From card (`Action::ImportFromCard`) opens "Import from a card"
