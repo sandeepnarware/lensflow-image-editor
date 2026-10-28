@@ -13,6 +13,7 @@ pub const MERGE: &str = "Merge";
 pub const CANCEL: &str = "Cancel";
 pub const CLOSE: &str = "Close";
 pub const STOP: &str = "Stop";
+pub const DEGHOST: &str = "Remove ghosts (people or branches that moved)";
 pub const ABOUT_HDR: &str = "The photos are lined up and blended, each part taken from the frames where it is best exposed. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
 pub const ABOUT_PANORAMA: &str = "The photos are stitched in their order in the grid, left to right or right to left, one row. Neighbours should overlap by a third or so. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
 
@@ -43,6 +44,8 @@ pub struct MergeDialog {
     pub kind: MergeKind,
     pub stage: Stage,
     pub stop: Arc<AtomicBool>,
+    /// HDR: leave out what moved between the frames (on unless turned off).
+    pub deghost: bool,
 }
 
 impl MergeDialog {
@@ -52,6 +55,7 @@ impl MergeDialog {
             kind,
             stage: Stage::Confirm,
             stop: Arc::new(AtomicBool::new(false)),
+            deghost: true,
         }
     }
 
@@ -86,6 +90,11 @@ impl MergeDialog {
                         MergeKind::Panorama => ABOUT_PANORAMA,
                     };
                     ui.label(RichText::new(about).color(theme::MUTED));
+                    if self.kind == MergeKind::Hdr {
+                        ui.add_space(6.0);
+                        ui.checkbox(&mut self.deghost, DEGHOST)
+                            .on_hover_text("Something that moved between the shots shows once, as in the middle photo");
+                    }
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
                         if ui.button(MERGE).clicked() {

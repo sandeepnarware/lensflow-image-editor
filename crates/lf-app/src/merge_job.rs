@@ -88,13 +88,15 @@ pub fn merged_stem(dir: &Path, stem: &str, suffix: &str) -> String {
     }
 }
 
-/// Merges `ids` (in the order given); returns the merged file. `progress(done, total)` as
+/// Merges `ids` (in the order given); returns the merged file. `deghost`: an HDR leaves out
+/// what moved between the frames ([`lf_merge::fuse_deghosted`]). `progress(done, total)` as
 /// it goes; `stop` ends it between frames (nothing is written).
 pub fn run(
     gpu: Arc<Gpu>,
     root: &Path,
     ids: &[i64],
     kind: MergeKind,
+    deghost: bool,
     mut progress: impl FnMut(usize, usize),
     stop: &AtomicBool,
 ) -> Result<PathBuf, String> {
@@ -162,7 +164,7 @@ pub fn run(
         return Err("The merge was stopped.".to_owned());
     }
     let merged = match kind {
-        MergeKind::Hdr => fuse_bracket(frames)?,
+        MergeKind::Hdr => fuse_bracket(frames, deghost)?,
         MergeKind::Panorama => {
             let rgb: Vec<Rgb> = frames.iter().map(Held::rgb).collect();
             drop(frames);
@@ -177,7 +179,7 @@ pub fn run(
 
 /// An HDR bracket: every frame lined up with the middle one (the most likely to be well
 /// exposed), then fused.
-fn fuse_bracket(mut frames: Vec<Held>) -> Result<Rgb, String> {
+fn fuse_bracket(mut frames: Vec<Held>, deghost: bool) -> Result<Rgb, String> {
     let middle = frames.len() / 2;
     let reference = frames[middle].rgb();
     for (i, frame) in frames.iter_mut().enumerate() {
@@ -187,7 +189,12 @@ fn fuse_bracket(mut frames: Vec<Held>) -> Result<Rgb, String> {
         }
     }
     drop(reference);
-    lf_merge::fuse(frames.len(), |i| frames[i].rgb()).map_err(|e| e.to_string())
+    if deghost {
+        lf_merge::fuse_deghosted(frames.len(), middle, |i| frames[i].rgb())
+    } else {
+        lf_merge::fuse(frames.len(), |i| frames[i].rgb())
+    }
+    .map_err(|e| e.to_string())
 }
 
 /// Writes `merged` as a 16-bit TIFF with the sRGB profile beside `first`, through a
@@ -275,6 +282,7 @@ mod tests {
             dir.path(),
             &ids,
             MergeKind::Hdr,
+            true,
             |d, t| steps.push((d, t)),
             &AtomicBool::new(false),
         )
@@ -303,15 +311,24 @@ mod tests {
                 dir.path(),
                 &[1],
                 MergeKind::Hdr,
+                true,
                 |_, _| {},
                 &stop
             )
             .is_err()
         );
         assert!(
-            run(gpu, dir.path(), &[1; 8], MergeKind::Hdr, |_, _| {}, &stop)
-                .unwrap_err()
-                .contains("at most")
+            run(
+                gpu,
+                dir.path(),
+                &[1; 8],
+                MergeKind::Hdr,
+                true,
+                |_, _| {},
+                &stop
+            )
+            .unwrap_err()
+            .contains("at most")
         );
     }
 }

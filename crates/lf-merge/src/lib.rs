@@ -330,7 +330,100 @@ impl std::error::Error for MergeError {}
 /// Fuses the frames (already lined up) into one, by exposure fusion. `frame(i)` gives frame
 /// `i` of `count`; it is asked for twice (weights, then blending), so a caller short of
 /// memory can render each again instead of keeping them all.
-pub fn fuse(count: usize, mut frame: impl FnMut(usize) -> Rgb) -> Result<Rgb, MergeError> {
+pub fn fuse(count: usize, frame: impl FnMut(usize) -> Rgb) -> Result<Rgb, MergeError> {
+    fuse_with(count, None, frame)
+}
+
+/// Fuses as [`fuse`] does, but where a frame disagrees with frame `reference` (something
+/// moved between the shots: a person, a branch, a car), that frame is left out there, so
+/// the moving thing shows once, as in the reference, instead of as a faint double.
+///
+/// Each frame is first brought to the reference's exposure (the median ratio of their
+/// brightness where both are well exposed); a pixel whose brightness then still differs by
+/// more than about 40 % is a ghost. Pixels clipped in either frame say nothing and are not
+/// counted. The ghost map is grown and softened so the seam does not show.
+pub fn fuse_deghosted(
+    count: usize,
+    reference: usize,
+    frame: impl FnMut(usize) -> Rgb,
+) -> Result<Rgb, MergeError> {
+    fuse_with(count, Some(reference.min(count.saturating_sub(1))), frame)
+}
+
+/// The brightness of every pixel of `img`.
+fn lumas(img: &Rgb) -> Vec<f32> {
+    img.data
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|p| luma(*p))
+        .collect()
+}
+
+/// Where `other` (brought to `reference`'s exposure) disagrees with `reference`: 1 where it
+/// is a ghost, 0 where it agrees, grown by `grow` pixels and softened.
+pub fn ghost_map(reference: &[f32], other: &[f32], w: usize, h: usize) -> Vec<f32> {
+    let usable = |v: f32| (0.04..0.92).contains(&v);
+    let mut ratios: Vec<f32> = reference
+        .iter()
+        .zip(other)
+        .filter(|(r, o)| usable(**r) && usable(**o))
+        .map(|(r, o)| r / o)
+        .collect();
+    if ratios.len() < 16 {
+        return vec![0.0; w * h];
+    }
+    let mid = ratios.len() / 2;
+    let ratio = *ratios.select_nth_unstable_by(mid, f32::total_cmp).1;
+    let hard: Vec<f32> = reference
+        .iter()
+        .zip(other)
+        .map(|(r, o)| {
+            let o = o * ratio;
+            if !usable(*r) || !(0.04..0.92).contains(&o) {
+                return 0.0;
+            }
+            if ((o + 0.01) / (r + 0.01)).ln().abs() > 0.35 {
+                1.0
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    // Grow (a square's reach) then soften over the same distance.
+    let grow = (w.max(h) / 200).max(2);
+    let pass = |src: &[f32], horizontal: bool, max: bool| -> Vec<f32> {
+        let mut out = vec![0.0f32; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let mut acc = 0.0f32;
+                for k in 0..=2 * grow {
+                    let (sx, sy) = if horizontal {
+                        ((x + k).saturating_sub(grow).min(w - 1), y)
+                    } else {
+                        (x, (y + k).saturating_sub(grow).min(h - 1))
+                    };
+                    let v = src[sy * w + sx];
+                    acc = if max { acc.max(v) } else { acc + v };
+                }
+                out[y * w + x] = if max {
+                    acc
+                } else {
+                    acc / (2 * grow + 1) as f32
+                };
+            }
+        }
+        out
+    };
+    let grown = pass(&pass(&hard, true, true), false, true);
+    pass(&pass(&grown, true, false), false, false)
+}
+
+fn fuse_with(
+    count: usize,
+    reference: Option<usize>,
+    mut frame: impl FnMut(usize) -> Rgb,
+) -> Result<Rgb, MergeError> {
     if count < 2 {
         return Err(MergeError::TooFew);
     }
@@ -345,6 +438,20 @@ pub fn fuse(count: usize, mut frame: impl FnMut(usize) -> Rgb) -> Result<Rgb, Me
             return Err(MergeError::SizesDiffer);
         }
         all.push(weights(&img));
+    }
+    if let Some(r) = reference {
+        let base = lumas(&frame(r));
+        for (i, wt) in all.iter_mut().enumerate() {
+            if i == r {
+                // Never zero: where every other frame is a ghost, the reference stands alone.
+                wt.iter_mut().for_each(|v| *v += 1e-3);
+                continue;
+            }
+            let ghost = ghost_map(&base, &lumas(&frame(i)), w, h);
+            for (v, g) in wt.iter_mut().zip(&ghost) {
+                *v *= 1.0 - g.clamp(0.0, 1.0);
+            }
+        }
     }
     let mut total = vec![0.0f32; w * h];
     for wt in &all {
@@ -510,5 +617,65 @@ mod tests {
             fuse(2, |i| sizes[i].clone()).unwrap_err(),
             MergeError::SizesDiffer
         );
+    }
+}
+
+#[cfg(test)]
+mod ghost_tests {
+    use super::*;
+
+    /// A textured grey scene at `gain`, with a dark square at `square` (its left edge).
+    fn shot(gain: f32, square: Option<usize>) -> Rgb {
+        let (w, h) = (96, 64);
+        let mut img = Rgb::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let t = if (x / 6 + y / 6) % 2 == 0 { 0.45 } else { 0.35 };
+                let mut v = t;
+                if let Some(sx) = square
+                    && (sx..sx + 16).contains(&x)
+                    && (24..40).contains(&y)
+                {
+                    v = 0.05;
+                }
+                let v = (v * gain).min(1.0);
+                img.data[(y * w + x) * 3..(y * w + x) * 3 + 3].copy_from_slice(&[v, v, v]);
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn something_that_moved_shows_once_not_as_a_double() {
+        // The square is at 20 in the reference (the middle frame), at 60 in the bright one.
+        let frames = [
+            shot(0.6, Some(20)),
+            shot(1.0, Some(20)),
+            shot(1.6, Some(60)),
+        ];
+        let plain = fuse(3, |i| frames[i].clone()).unwrap();
+        let clean = fuse_deghosted(3, 1, |i| frames[i].clone()).unwrap();
+        let at = |img: &Rgb, x: usize, y: usize| img.data[(y * img.w + x) * 3];
+        // Where the square was only in the bright frame: plain fusion shows a faint ghost.
+        let ghost_plain = at(&plain, 68, 32);
+        let ghost_clean = at(&clean, 68, 32);
+        let wall = at(&clean, 68, 10);
+        assert!(
+            ghost_plain < wall - 0.03,
+            "no ghost to remove: {ghost_plain} vs {wall}"
+        );
+        assert!(
+            (ghost_clean - wall).abs() < (ghost_plain - wall).abs() * 0.6,
+            "plain {ghost_plain} clean {ghost_clean} wall {wall}"
+        );
+        // The reference's square is still there.
+        assert!(at(&clean, 28, 32) < 0.2);
+    }
+
+    #[test]
+    fn frames_that_agree_make_no_ghost_map() {
+        let a = lumas(&shot(1.0, None));
+        let b = lumas(&shot(0.5, None));
+        assert!(ghost_map(&a, &b, 96, 64).iter().all(|&g| g < 1e-6));
     }
 }

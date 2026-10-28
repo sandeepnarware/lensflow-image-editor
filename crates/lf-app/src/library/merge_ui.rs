@@ -46,6 +46,7 @@ impl Library {
         dialog.started();
         let ids = dialog.ids.clone();
         let kind = dialog.kind;
+        let deghost = dialog.deghost;
         let stop = dialog.stop.clone();
         let gpu = self.gpu.clone();
         let reporter = env.jobs.reporter();
@@ -56,6 +57,7 @@ impl Library {
                 &root,
                 &ids,
                 kind,
+                deghost,
                 |done, total| reporter.send(Msg::MergeProgress { done, total }),
                 &stop,
             );

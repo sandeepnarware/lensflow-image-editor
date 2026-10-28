@@ -727,6 +727,13 @@ subjects are not de-ghosted.
 
 `lf-merge` is CPU-only (rayon), with no GPU and no catalogue.
 
+Ghosts: with "Remove ghosts" on (`MergeDialog::deghost`, the default) the bracket is fused by
+`lf_merge::fuse_deghosted` with the middle frame as the reference. Each other frame is brought
+to its exposure (the median brightness ratio where both are well exposed); where it still
+differs by more than about 40 % (|ln| > 0.35, clipped pixels not judged) its weight is taken
+away through a grown and softened ghost map (`ghost_map`), so a moving subject comes from the
+reference alone. The reference keeps a small weight everywhere, so no pixel is left with none.
+
 ### Merge to panorama
 
 `Ctrl+M` (File → Merge; `Action::MergePanorama`) stitches two to twelve selected photos,
