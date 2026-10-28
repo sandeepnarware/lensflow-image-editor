@@ -2117,3 +2117,77 @@ fn a_brush_mask_is_painted_by_dragging_as_one_step() {
     h.step();
     assert_eq!(h.state().lib.develop().tool(), None);
 }
+
+fn saved_meta(dir: &Path, id: i64) -> lf_catalog::meta::Meta {
+    let c = lf_catalog::Catalog::open(&dir.join("catalogue")).unwrap();
+    c.photo(id).unwrap().unwrap().meta
+}
+
+#[test]
+fn the_metadata_panel_describes_the_selection_and_search_finds_it() {
+    use lf_app::library::meta_ui;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 3);
+    import_folder(&mut h, &shoot, 3);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+
+    // The ribbon's View → Metadata shows the panel; nothing is selected yet.
+    assert!(run_action(&mut h, Action::Metadata));
+    h.state_mut().lib.selection = Default::default();
+    h.step();
+    h.get_by_label(meta_ui::NOTHING_SELECTED);
+
+    // Two photos: a title typed and the field left saves on both.
+    h.state_mut().lib.selection.select_all(&ids[..2]);
+    h.step();
+    h.get_by_label("2 photos selected");
+    h.get_by_role_and_label(Role::TextInput, "Title").click();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, "Title")
+        .type_text("Haldi");
+    h.step();
+    h.key_press(Key::Tab);
+    step_until(&mut h, "the title saved", |_| {
+        saved_meta(dir.path(), ids[1]).title.as_deref() == Some("Haldi")
+    });
+    assert_eq!(saved_meta(dir.path(), ids[2]).title, None);
+
+    // Keywords typed with commas, then Enter.
+    h.get_by_label(meta_ui::ADD_KEYWORDS).click();
+    h.step();
+    h.get_by_label(meta_ui::ADD_KEYWORDS)
+        .type_text("Jaipur, family");
+    h.step();
+    h.key_press(Key::Enter);
+    step_until(&mut h, "the keywords saved", |_| {
+        saved_meta(dir.path(), ids[0]).keywords == ["family", "Jaipur"]
+    });
+    h.get_by_label("Jaipur ×");
+
+    // The third photo alone has none; the folder's list adds one with a click.
+    h.state_mut().lib.selection.click(ids[2]);
+    h.step();
+    h.get_by_label("Jaipur 2").click();
+    step_until(&mut h, "the folder keyword added", |_| {
+        saved_meta(dir.path(), ids[2]).keywords == ["Jaipur"]
+    });
+
+    // Search: every word must match somewhere (title, keyword, file name).
+    let search = |h: &mut Harness<'static, State>, text: &str| {
+        h.state_mut().lib.set_filter(Filter {
+            text: text.into(),
+            ..Filter::default()
+        });
+        h.step();
+        h.state().lib.shown().to_vec()
+    };
+    assert_eq!(search(&mut h, "jaipur"), ids);
+    assert_eq!(search(&mut h, "haldi FAMILY"), ids[..2]);
+    assert_eq!(search(&mut h, "p2 jaipur"), ids[2..]);
+    assert!(search(&mut h, "mountains").is_empty());
+    h.get_by_label("0 of 3 photos");
+}

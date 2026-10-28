@@ -34,6 +34,8 @@ pub enum Action {
     ActualSize,
     /// `Space`: fit ⇄ 100 %.
     ToggleZoom,
+    /// Show or hide the Library's Metadata panel (title, caption, keywords).
+    Metadata,
     // Photo
     MatchReference,
     AddVersion,
@@ -92,6 +94,7 @@ impl Action {
             Action::Fit => "Fit",
             Action::ActualSize => "100 %",
             Action::ToggleZoom => "Fit / 100 %",
+            Action::Metadata => "Metadata panel",
             Action::MatchReference => "Match a reference…",
             Action::AddVersion => "Add version…",
             Action::ResetAll => "Reset all edits",

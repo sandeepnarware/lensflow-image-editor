@@ -146,11 +146,13 @@ fn migration_6_keeps_existing_presets_under_no_studio() {
     let db = dir.path().join(".lensflow");
     std::fs::create_dir_all(&db).unwrap();
     {
-        // A version-5 catalogue's presets table (the other tables do not matter here).
+        // A version-5 catalogue's presets table, and a bare photos table (the later
+        // migrations add columns to it; its other columns do not matter here).
         let conn = rusqlite::Connection::open(db.join("catalog.sqlite")).unwrap();
         conn.execute_batch(
             "CREATE TABLE schema_version (version INTEGER NOT NULL);
              INSERT INTO schema_version (version) VALUES (1), (2), (3), (4), (5);
+             CREATE TABLE photos (id INTEGER PRIMARY KEY);
              CREATE TABLE presets (
                  id INTEGER PRIMARY KEY,
                  name TEXT NOT NULL UNIQUE,
@@ -166,7 +168,7 @@ fn migration_6_keeps_existing_presets_under_no_studio() {
         .unwrap();
     }
     let c = Catalog::open(dir.path()).unwrap();
-    assert_eq!(c.schema_version().unwrap(), 6);
+    assert_eq!(c.schema_version().unwrap(), 7);
     let rows = presets::list(&c, 0).unwrap();
     assert_eq!(names(&rows), ["Old"]);
     assert_eq!(rows[0].remote_id, Some(4));

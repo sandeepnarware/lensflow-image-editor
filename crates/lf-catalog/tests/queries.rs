@@ -129,5 +129,5 @@ fn remove_folder_cascades() {
 fn migration_5_adds_sidecar_error() {
     let d = tempfile::tempdir().unwrap();
     let c = Catalog::open(d.path()).unwrap();
-    assert_eq!(c.schema_version().unwrap(), 6);
+    assert_eq!(c.schema_version().unwrap(), 7);
 }

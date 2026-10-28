@@ -446,3 +446,32 @@ even if the filter would hide it.
 | `0`–`5` | No stars to five stars |
 | `6`–`9` | Red, yellow, green, blue label (again: off) |
 | `F1` | About |
+
+### Metadata, keywords and search
+
+View → Metadata shows a panel on the Library's right (`library/meta_ui.rs`) for the selected
+photos: Title, Caption, Creator and Copyright, and their keywords. A text field is saved when
+it loses the keyboard (Enter or Tab), and only when it changed; with several photos selected,
+a field they disagree on shows "Several values" and is left alone unless something is typed.
+Keywords are typed separated by commas and added with Enter; each keyword on the selection is
+a button that takes it off (`word (2/5)` when only some have it); "Keywords in this folder"
+lists every keyword in the folder with its count, and a click puts it on the selection. Like
+a mark, a change shows at once (`meta::Change::apply` on the rows in memory) and is saved on
+the `Io` lane (`Catalog::change_meta`); a failed save reloads the rows.
+
+The text fields are columns of `photos` and keywords a table of their own (`keywords`,
+`COLLATE NOCASE`: a word is the same in any case, the first spelling kept), added in
+schema v7 (`lf_catalog::meta`). Like marks they live only in the catalogue and never touch
+`photos.updated_at`.
+
+The search box in the bar over the grid (`Filter::text`) keeps the photos where every word
+appears somewhere: the file name, camera, lens, title, caption, creator or a keyword (case
+ignored). It is part of the filter, so the status bar's "12 of 340 photos" and "Clear
+filter" cover it.
+
+Exports carry the metadata: a JPEG gets an XMP APP1 (`exif_embed::xmp_segment`:
+`dc:title`, `dc:description`, `dc:creator`, `dc:rights`, `dc:subject`) after its EXIF,
+replacing any XMP the source had; "Copyright only" writes just the creator and copyright.
+The catalogue's creator and copyright also replace the file's EXIF Artist and Copyright when
+the EXIF is built (a JPEG's own EXIF is still copied byte for byte). PNG, WebP and TIFF carry
+no XMP yet. Gallery uploads are JPEG exports, so they carry it too.

@@ -902,3 +902,41 @@ fn a_missing_watermark_logo_stops_the_export_before_anything_is_written() {
     assert!(e.contains("could not be read"), "{e}");
     assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
 }
+
+#[test]
+fn a_jpeg_carries_the_catalogues_metadata_as_xmp_and_exif() {
+    use lf_catalog::meta::Field;
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    png(&src.path().join("a.png"), 40, 30);
+    let (c, ids) = catalogue(src.path());
+    c.set_meta(&ids, Field::Title, "Mehndi night").unwrap();
+    c.set_meta(&ids, Field::Creator, "Asha").unwrap();
+    c.add_keywords(&ids, &["wedding".to_string(), "Jaipur".to_string()])
+        .unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let mut sp = spec(Format::Jpeg { quality: 90 }, out.path());
+    sp.metadata = Metadata::All;
+    let done = export::run(gpu, &c, &ids, &sp, &mut |_, _| ControlFlow::Continue(())).unwrap();
+    let bytes = std::fs::read(&done.exported[0].path).unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("http://ns.adobe.com/xap/1.0/"));
+    assert!(text.contains("Mehndi night"));
+    assert!(text.contains("<rdf:li>Jaipur</rdf:li><rdf:li>wedding</rdf:li>"));
+    // The EXIF's Artist is the catalogue's creator.
+    assert_eq!(read_summary(&bytes).artist.as_deref(), Some("Asha"));
+    // The file still decodes.
+    image::load_from_memory(&bytes).unwrap();
+
+    // Copyright only: the creator, no title or keywords.
+    let out = tempfile::tempdir().unwrap();
+    let mut sp = spec(Format::Jpeg { quality: 90 }, out.path());
+    sp.metadata = Metadata::CopyrightOnly;
+    let done = export::run(try_shared_gpu().unwrap(), &c, &ids, &sp, &mut |_, _| {
+        ControlFlow::Continue(())
+    })
+    .unwrap();
+    let text =
+        String::from_utf8_lossy(&std::fs::read(&done.exported[0].path).unwrap()).into_owned();
+    assert!(text.contains("Asha") && !text.contains("Mehndi") && !text.contains("Jaipur"));
+}

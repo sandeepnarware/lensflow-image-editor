@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 use crate::cull::{Flag, Label, MAX_RATING};
+use crate::meta::Meta;
 use crate::model::{NewPhoto, now, ts};
 
 #[derive(Debug, thiserror::Error)]
@@ -186,6 +187,20 @@ INSERT INTO presets_new (id, studio_id, name, settings, updated_at, remote_id, s
     SELECT id, 0, name, settings, updated_at, remote_id, synced_at FROM presets;
 DROP TABLE presets;
 ALTER TABLE presets_new RENAME TO presets;
+"#,
+    // Descriptive metadata (`crate::meta`): text fields on the photo, keywords apart (one
+    // row per photo and word; a word is the same word in any case).
+    r#"
+ALTER TABLE photos ADD COLUMN title TEXT;
+ALTER TABLE photos ADD COLUMN caption TEXT;
+ALTER TABLE photos ADD COLUMN creator TEXT;
+ALTER TABLE photos ADD COLUMN copyright TEXT;
+CREATE TABLE keywords (
+    photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+    keyword TEXT NOT NULL COLLATE NOCASE,
+    PRIMARY KEY (photo_id, keyword)
+);
+CREATE INDEX keywords_word ON keywords(keyword);
 "#,
 ];
 
@@ -426,12 +441,16 @@ pub struct PhotoRow {
     pub rating: u8,
     /// `None` also when the stored label is one this version does not know.
     pub label: Option<Label>,
+    /// Title, caption, creator, copyright and keywords ([`crate::meta`]).
+    pub meta: Meta,
 }
 
 const PHOTO_COLUMNS: &str = "p.id, p.folder_id, p.path, p.width, p.height, p.camera, p.lens,
      p.captured_at, p.kind, p.error, p.sidecar_error, p.missing,
      EXISTS (SELECT 1 FROM edits e WHERE e.photo_id = p.id), p.updated_at,
-     p.flag, p.rating, p.label";
+     p.flag, p.rating, p.label, p.title, p.caption, p.creator, p.copyright,
+     (SELECT group_concat(keyword, char(31)) FROM
+         (SELECT keyword FROM keywords k WHERE k.photo_id = p.id ORDER BY keyword))";
 
 fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
     Ok(PhotoRow {
@@ -456,6 +475,16 @@ fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
             .get::<_, Option<String>>(16)?
             .as_deref()
             .and_then(Label::from_key),
+        meta: Meta {
+            title: r.get(17)?,
+            caption: r.get(18)?,
+            creator: r.get(19)?,
+            copyright: r.get(20)?,
+            keywords: r
+                .get::<_, Option<String>>(21)?
+                .map(|k| k.split('\u{1f}').map(str::to_owned).collect())
+                .unwrap_or_default(),
+        },
     })
 }
 

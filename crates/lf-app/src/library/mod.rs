@@ -12,6 +12,7 @@ pub mod filmstrip;
 pub mod gallery_ui;
 pub mod grid;
 pub mod import_ui;
+pub mod meta_ui;
 pub mod selection;
 
 use crate::app::THUMBS_STOPPED_BANNER;
@@ -116,6 +117,8 @@ pub struct Library {
     index: HashMap<i64, usize>,
     /// The filter bar: which photos the grid shows and how they are sorted.
     filter: cull::Filter,
+    /// The Metadata panel (shown or not, and what is being typed in it).
+    meta: meta_ui::MetaPanel,
     pub selection: Selection,
     /// The box being dragged over the grid, while the mouse button is down.
     pub marquee: Option<grid::Marquee>,
@@ -220,6 +223,7 @@ impl Library {
             export: None,
             gallery: None,
             gallery_link: None,
+            meta: meta_ui::MetaPanel::default(),
             keep: None,
             keys: Keys::default(),
         }
@@ -314,7 +318,7 @@ impl Library {
 
     /// The filter bar's choice.
     pub fn filter(&self) -> cull::Filter {
-        self.filter
+        self.filter.clone()
     }
 
     /// Shows the photos `filter` keeps, in its order.
@@ -652,6 +656,7 @@ impl Library {
                     | Msg::MarkedMissing { .. }
                     | Msg::FolderRemoved { .. }
                     | Msg::Marked { .. }
+                    | Msg::MetaSaved { .. }
                     | Msg::PoolReady(..)
             )
         {
@@ -731,6 +736,7 @@ impl Library {
                     format!("Could not remove the folder from the catalogue. {e}"),
                 ),
             },
+            Msg::MetaSaved { root, result } => self.meta_saved(root, result, env),
             Msg::Marked { root, result } => match result {
                 _ if self.root.as_deref() != Some(root.as_path()) => {}
                 Ok(n) => log::debug!("marked {n} photos"),
@@ -1147,6 +1153,16 @@ impl Library {
             .default_size(220.0)
             .resizable(true)
             .show(ui, |ui| self.sidebar(ui, env));
+        if self.metadata_shown() {
+            egui::Panel::right("metadata")
+                .default_size(meta_ui::WIDTH)
+                .resizable(true)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("metadata-scroll")
+                        .show(ui, |ui| self.metadata_panel(ui, env));
+                });
+        }
         if let Mode::Develop(id) = self.mode {
             let photo = self.rows.get(&id).map(|&i| &self.photos[i]);
             let develop = &mut self.develop;
@@ -1216,6 +1232,7 @@ impl Library {
             Action::CopySettings => self.copy_source().is_some(),
             Action::PasteSettings | Action::ApplyToSelected | Action::MatchReference => selected,
             Action::SelectAll | Action::Previous | Action::Next => !self.order.is_empty(),
+            Action::Metadata => !develop,
             Action::Library => develop,
             Action::Develop => !develop && self.selection.active().is_some(),
             Action::Up | Action::Down => !develop && !self.order.is_empty(),
@@ -1276,6 +1293,7 @@ impl Library {
                     self.open_photo(id, env);
                 }
             }
+            Action::Metadata => self.toggle_metadata(),
             Action::Previous => self.step(Dir::Left, env),
             Action::Next => self.step(Dir::Right, env),
             Action::Up => self.step(Dir::Up, env),
@@ -1523,7 +1541,7 @@ impl Library {
             });
             return;
         }
-        if let Some(filter) = cull_ui::filter_bar(ui, self.filter) {
+        if let Some(filter) = cull_ui::filter_bar(ui, &self.filter) {
             self.set_filter(filter);
         }
         if self.order.is_empty() {

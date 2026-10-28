@@ -87,6 +87,11 @@ The bar over the grid shows only some flags, ratings or labels and sorts by
 capture time, file name or rating. Marks live in the catalogue, not in the edit
 files. See [docs/app.md](docs/app.md).
 
+Metadata (View → Metadata): a title, caption, creator, copyright and keywords for
+the selected photos, with the folder's keywords a click away. The search box over
+the grid finds photos by those, the file name, camera or lens. Exported JPEGs
+carry them as XMP (and the creator and copyright in EXIF).
+
 The window needs a graphics adapter. With no driver it runs on a software
 adapter (WARP on Windows, lavapipe on Linux) and says "No graphics driver found:
 previews will be slow."

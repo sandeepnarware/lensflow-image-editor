@@ -20,7 +20,7 @@ and 2d tasks 1–2 are built; packaging tasks 3–5 are in flight.
 | `lf-raw` | Magic-byte kind sniffing, rawler decode, demosaic (bilinear/AHD/X-Trans/preview bin), WB + colour + highlight handling, f16 headroom, EXIF, frame cache, `lf-render` example. | `src/open.rs`, `src/develop.rs` |
 | `lf-grade` | CPU maths for "Match a reference": measure, correct, calibrate (injected renderer), strength/exposure, contact sheet. | `src/lib.rs` |
 | `lf-account` | Blocking reqwest/rustls LensFlow client: sign-in + 2FA, token store, entitlement gate/offline grace, desktop grade, presets sync, download link. | `src/client.rs`, `src/entitlement.rs` |
-| `lf-catalog` | SQLite catalogue (bundled, WAL, schema v6), sidecars, edit history (cap 50), versions, import, thumbnails, export, presets. Never touches pixels directly. | `src/db.rs`, `src/edits.rs`, `src/export.rs` |
+| `lf-catalog` | SQLite catalogue (bundled, WAL, schema v7), sidecars, edit history (cap 50), versions, import, thumbnails, export, presets. Never touches pixels directly. | `src/db.rs`, `src/edits.rs`, `src/export.rs` |
 | `lf-fixtures` | Loads `tests/fixtures` goldens and applies the parity thresholds. | `src/lib.rs` |
 | `lf-app` | The `lensflow-image-editor` binary: eframe/egui-wgpu window, lanes, session, Develop/Library UI, dialogs, the console's `grade` (`grade_cli.rs`, before any window), release plumbing. | `src/main.rs` → `src/app.rs` |
 
@@ -127,6 +127,9 @@ cargo test --workspace                   # includes the 228-render parity suite
 - Since 0.1.1 (unreleased): the console's `grade` (`crates/lf-app/src/grade_cli.rs`) and the
   grid's marquee multi-select (`library/grid.rs`, `library/selection.rs`), and culling:
   flags, stars and colour labels (`lf_catalog::cull`, `library/cull.rs`, `library/cull_ui.rs`).
+  Metadata and search: title, caption, creator, copyright, keywords (`lf_catalog::meta`,
+  schema v7, XMP in JPEG exports via `exif_embed::xmp_segment`; `library/meta_ui.rs`,
+  `Filter::text`).
   Export to a gallery: `lf_account::galleries` (upload sessions, chunked or direct), `gallery_job.rs`,
   `dialogs/gallery_export.rs`, `library/gallery_ui.rs`; gated by `SessionFlow::gallery_link`.
   Lens corrections: distortion, lens vignetting, CA, keystone, desktop-only in `desktop.lens`

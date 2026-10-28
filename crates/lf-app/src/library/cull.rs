@@ -110,23 +110,32 @@ impl Sort {
 }
 
 /// What the filter bar asks for.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Filter {
     pub flag: FlagFilter,
     /// At least this many stars (0: any).
     pub min_rating: u8,
     pub label: LabelFilter,
     pub sort: Sort,
+    /// Words that must each appear in the file name, the camera or lens, or the title,
+    /// caption, creator or a keyword (case ignored).
+    pub text: String,
 }
 
 impl Filter {
     /// Some photos may be hidden (the sort alone hides none).
     pub fn narrows(&self) -> bool {
-        self.flag != FlagFilter::All || self.min_rating > 0 || self.label != LabelFilter::Any
+        self.flag != FlagFilter::All
+            || self.min_rating > 0
+            || self.label != LabelFilter::Any
+            || !self.text.trim().is_empty()
     }
 
     fn keeps(&self, row: &PhotoRow) -> bool {
-        self.flag.keeps(row.flag) && row.rating >= self.min_rating && self.label.keeps(row.label)
+        self.flag.keeps(row.flag)
+            && row.rating >= self.min_rating
+            && self.label.keeps(row.label)
+            && matches_text(row, &self.text)
     }
 
     /// The ids the grid shows, in its order. `rows` come in capture order.
@@ -145,6 +154,35 @@ impl Filter {
         }
         kept.into_iter().map(|r| r.id).collect()
     }
+}
+
+/// Whether every word of `text` is somewhere in `row`: its file name, camera, lens, or its
+/// title, caption, creator and keywords. No words keeps every row.
+pub fn matches_text(row: &PhotoRow, text: &str) -> bool {
+    if text.trim().is_empty() {
+        return true;
+    }
+    let m = &row.meta;
+    let name = row
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned());
+    let fields: Vec<String> = [
+        &name,
+        &row.camera,
+        &row.lens,
+        &m.title,
+        &m.caption,
+        &m.creator,
+    ]
+    .into_iter()
+    .flatten()
+    .chain(&m.keywords)
+    .map(|s| s.to_lowercase())
+    .collect();
+    text.split_whitespace()
+        .map(str::to_lowercase)
+        .all(|word| fields.iter().any(|f| f.contains(&word)))
 }
 
 /// The mark a key or menu item sets on `targets`. A colour label already on every target is
@@ -299,6 +337,24 @@ mod tests {
         );
         apply(&mut r, Mark::Label(None));
         assert_eq!(r.label, None);
+    }
+
+    #[test]
+    fn search_words_must_each_match_somewhere() {
+        let mut r = row(1, "IMG_0042.jpg", Flag::Unflagged, 0, None);
+        r.camera = Some("Nikon Z6".into());
+        r.meta.title = Some("Sangeet".into());
+        r.meta.keywords = vec!["Udaipur".into()];
+        assert!(matches_text(&r, ""));
+        assert!(matches_text(&r, "img_0042 nikon"));
+        assert!(matches_text(&r, "SANGEET udaipur"));
+        assert!(!matches_text(&r, "sangeet goa"));
+        let f = Filter {
+            text: " udaipur ".into(),
+            ..Filter::default()
+        };
+        assert!(f.narrows());
+        assert_eq!(f.arrange(&[r]), [1]);
     }
 
     #[test]

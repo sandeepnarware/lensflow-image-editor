@@ -253,3 +253,174 @@ fn clone_entry(e: &Entry) -> Entry {
         data: e.data.clone(),
     }
 }
+
+/// The signature that opens an XMP APP1 segment.
+const XMP_HEADER: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
+
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            // XML 1.0 has no place for other control characters.
+            c if c.is_control() && !matches!(c, '\n' | '\t') => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// A whole APP1 XMP segment with `meta`'s title (`dc:title`), caption (`dc:description`),
+/// creator (`dc:creator`), copyright (`dc:rights`) and keywords (`dc:subject`), or (when
+/// `copyright_only`) just the creator and copyright. None when there is nothing to write,
+/// or when it would not fit one segment (64 KB).
+pub fn xmp_segment(meta: &crate::meta::Meta, copyright_only: bool) -> Option<Vec<u8>> {
+    let alt = |tag: &str, v: &str| {
+        format!(
+            "<dc:{tag}><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:{tag}>",
+            xml_escape(v)
+        )
+    };
+    let mut body = String::new();
+    if !copyright_only {
+        if let Some(t) = &meta.title {
+            body.push_str(&alt("title", t));
+        }
+        if let Some(c) = &meta.caption {
+            body.push_str(&alt("description", c));
+        }
+    }
+    if let Some(c) = &meta.creator {
+        body.push_str(&format!(
+            "<dc:creator><rdf:Seq><rdf:li>{}</rdf:li></rdf:Seq></dc:creator>",
+            xml_escape(c)
+        ));
+    }
+    if let Some(c) = &meta.copyright {
+        body.push_str(&alt("rights", c));
+    }
+    if !copyright_only && !meta.keywords.is_empty() {
+        body.push_str("<dc:subject><rdf:Bag>");
+        for k in &meta.keywords {
+            body.push_str(&format!("<rdf:li>{}</rdf:li>", xml_escape(k)));
+        }
+        body.push_str("</rdf:Bag></dc:subject>");
+    }
+    if body.is_empty() {
+        return None;
+    }
+    let packet = format!(
+        "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\
+         <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\
+         <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+         <rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+         {body}</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"w\"?>"
+    );
+    let len = 2 + XMP_HEADER.len() + packet.len();
+    if len > usize::from(u16::MAX) {
+        return None;
+    }
+    let mut seg = vec![0xff, 0xe1];
+    seg.extend((len as u16).to_be_bytes());
+    seg.extend(XMP_HEADER);
+    seg.extend(packet.as_bytes());
+    Some(seg)
+}
+
+/// The JPEG with `segment` (a whole XMP APP1) after its leading APP0/APP1 segments, any XMP
+/// segment already there dropped (the source's XMP, copied with its EXIF, would contradict
+/// the catalogue's).
+pub fn insert_xmp(jpeg: &[u8], segment: &[u8]) -> Vec<u8> {
+    if jpeg.get(..2) != Some(&SOI) {
+        return jpeg.to_vec();
+    }
+    let mut out = SOI.to_vec();
+    let mut at = 2usize;
+    let mut placed = false;
+    while at + 4 <= jpeg.len() && jpeg[at] == 0xff {
+        let marker = jpeg[at + 1];
+        if marker == 0xda || marker == 0xd9 {
+            break;
+        }
+        if !placed && !matches!(marker, 0xe0 | 0xe1) {
+            out.extend(segment);
+            placed = true;
+        }
+        let len = u16::from_be_bytes([jpeg[at + 2], jpeg[at + 3]]) as usize;
+        let end = (at + 2 + len).min(jpeg.len());
+        let is_xmp = marker == 0xe1 && jpeg[at + 4..end].starts_with(XMP_HEADER);
+        if !is_xmp {
+            out.extend(&jpeg[at..end]);
+        }
+        at = end;
+    }
+    if !placed {
+        out.extend(segment);
+    }
+    out.extend(&jpeg[at..]);
+    out
+}
+
+#[cfg(test)]
+mod xmp_tests {
+    use super::*;
+    use crate::meta::Meta;
+
+    fn meta() -> Meta {
+        Meta {
+            title: Some("Sunset <Goa>".into()),
+            caption: Some("Fish & chips".into()),
+            creator: Some("Asha".into()),
+            copyright: Some("© Studio".into()),
+            keywords: vec!["beach".into(), "wedding".into()],
+        }
+    }
+
+    #[test]
+    fn the_packet_carries_every_field_escaped() {
+        let seg = xmp_segment(&meta(), false).unwrap();
+        assert_eq!(&seg[..2], &[0xff, 0xe1]);
+        let len = u16::from_be_bytes([seg[2], seg[3]]) as usize;
+        assert_eq!(len, seg.len() - 2);
+        let text = String::from_utf8_lossy(&seg[4 + XMP_HEADER.len()..]);
+        for want in [
+            "Sunset &lt;Goa&gt;",
+            "Fish &amp; chips",
+            "<rdf:li>Asha</rdf:li>",
+            "© Studio",
+            "<rdf:li>beach</rdf:li><rdf:li>wedding</rdf:li>",
+        ] {
+            assert!(text.contains(want), "{want} in {text}");
+        }
+        let short = xmp_segment(&meta(), true).unwrap();
+        let text = String::from_utf8_lossy(&short);
+        assert!(text.contains("Asha") && !text.contains("Sunset") && !text.contains("beach"));
+        assert_eq!(xmp_segment(&Meta::default(), false), None);
+    }
+
+    #[test]
+    fn the_segment_goes_after_the_app_segments_and_replaces_an_old_one() {
+        let seg = xmp_segment(&meta(), false).unwrap();
+        // SOI, APP0 (len 4), an old XMP APP1, DQT (len 3), SOS.
+        let mut old = vec![0xff, 0xe1, 0x00, 0x00];
+        old.extend(XMP_HEADER);
+        old.extend(b"<old/>");
+        let n = (old.len() - 2) as u16;
+        old[2..4].copy_from_slice(&n.to_be_bytes());
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 1, 2];
+        jpeg.extend(&old);
+        jpeg.extend([
+            0xff, 0xdb, 0x00, 0x03, 9, 0xff, 0xda, 0x00, 0x02, 0xff, 0xd9,
+        ]);
+        let out = insert_xmp(&jpeg, &seg);
+        let mut want = vec![0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 1, 2];
+        want.extend(&seg);
+        want.extend([
+            0xff, 0xdb, 0x00, 0x03, 9, 0xff, 0xda, 0x00, 0x02, 0xff, 0xd9,
+        ]);
+        assert_eq!(out, want);
+    }
+}

@@ -37,6 +37,9 @@ pub const FLAG_LIST: &str = "Filter by flag";
 pub const RATING_LIST: &str = "Filter by rating";
 pub const LABEL_LIST: &str = "Filter by label";
 pub const SORT_LIST: &str = "Sort order";
+/// The search box (titles, captions, keywords, file names, camera and lens).
+pub const SEARCH: &str = "Search photos";
+pub const SEARCH_HINT: &str = "Search: keywords, titles…";
 
 /// Names a list for screen readers: its shown text is the choice, not what it chooses.
 fn named(response: &egui::Response, name: &str) {
@@ -44,8 +47,8 @@ fn named(response: &egui::Response, name: &str) {
 }
 
 /// The bar over the grid; returns the filter when the user changed it.
-pub fn filter_bar(ui: &mut egui::Ui, current: Filter) -> Option<Filter> {
-    let mut next = current;
+pub fn filter_bar(ui: &mut egui::Ui, current: &Filter) -> Option<Filter> {
+    let mut next = current.clone();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Show").color(theme::MUTED));
         let flag = egui::ComboBox::from_id_salt("filter-flag")
@@ -72,6 +75,12 @@ pub fn filter_bar(ui: &mut egui::Ui, current: Filter) -> Option<Filter> {
                 }
             });
         named(&label.response, LABEL_LIST);
+        let search = ui.add(
+            egui::TextEdit::singleline(&mut next.text)
+                .hint_text(SEARCH_HINT)
+                .desired_width(170.0),
+        );
+        search.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, SEARCH));
         if next.narrows() && ui.button("Clear filter").clicked() {
             next = Filter {
                 sort: next.sort,
@@ -91,7 +100,7 @@ pub fn filter_bar(ui: &mut egui::Ui, current: Filter) -> Option<Filter> {
         });
     });
     ui.add_space(4.0);
-    (next != current).then_some(next)
+    (next != *current).then_some(next)
 }
 
 /// The marks a cell shows, and the words for its hover text and accessibility label.

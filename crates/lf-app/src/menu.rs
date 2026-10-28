@@ -146,6 +146,7 @@ pub const RIBBON: &[Tab] = &[
         title: "View",
         groups: &[
             group("Mode", &[Do(Action::Library), Do(Action::Develop)]),
+            group("Panels", &[Do(Action::Metadata)]),
             group(
                 "Preview",
                 &[
@@ -226,6 +227,7 @@ pub fn icon(action: Action) -> &'static str {
         Action::Fit => "⛶",
         Action::ActualSize => "🔍",
         Action::ToggleZoom => "🔍",
+        Action::Metadata => "📝",
         Action::MatchReference => "🎯",
         Action::AddVersion => "➕",
         Action::ResetAll => "↺",
@@ -288,6 +290,7 @@ pub fn short_label(action: Action) -> &'static str {
         Action::CheckEntitlement => "Check now",
         Action::ShowLogFolder => "Log folder",
         Action::KeyboardShortcuts => "Shortcuts",
+        Action::Metadata => "Metadata",
         other => other.label(),
     }
 }
@@ -642,6 +645,7 @@ mod tests {
             Action::About,
             Action::ShowLogFolder,
             Action::KeyboardShortcuts,
+            Action::Metadata,
             Action::CropTool,
             Action::SpotTool,
             Action::WhiteBalanceTool,

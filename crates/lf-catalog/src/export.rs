@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::{Catalog, CatalogError, Result};
 use crate::edits;
-use crate::exif_embed::{build_exif, insert_exif};
+use crate::exif_embed::{build_exif, insert_exif, insert_xmp, xmp_segment};
 use crate::finish::{self, Pixels, Prepared, Sharpen, Watermark};
 use crate::model::{now, ts};
 
@@ -237,9 +237,11 @@ struct PhotoRow {
     camera: Option<String>,
     captured_at: Option<String>,
     mtime: i64,
+    meta: crate::meta::Meta,
 }
 
 fn photo_row(catalog: &Catalog, id: i64) -> Result<PhotoRow> {
+    let meta = catalog.photo(id)?.map(|p| p.meta).unwrap_or_default();
     catalog
         .conn
         .query_row(
@@ -251,6 +253,7 @@ fn photo_row(catalog: &Catalog, id: i64) -> Result<PhotoRow> {
                     camera: r.get(1)?,
                     captured_at: r.get(2)?,
                     mtime: r.get(3)?,
+                    meta: meta.clone(),
                 })
             },
         )
@@ -476,14 +479,28 @@ fn export_one(
         finish::watermark(&mut pixels, mark);
     }
 
-    // The EXIF as a JPEG APP1 segment; PNG and WebP take the TIFF part inside it.
+    // The EXIF as a JPEG APP1 segment; PNG and WebP take the TIFF part inside it. The
+    // catalogue's creator and copyright ([`crate::meta`]) win over the file's.
+    let mut facts = opened.exif.clone();
+    if let Some(c) = &row.meta.creator {
+        facts.artist = Some(c.clone());
+    }
+    if let Some(c) = &row.meta.copyright {
+        facts.copyright = Some(c.clone());
+    }
     let app1 = match spec.metadata {
         Metadata::None => None,
-        Metadata::CopyrightOnly => build_exif(&opened.exif, true),
+        Metadata::CopyrightOnly => build_exif(&facts, true),
         Metadata::All => match (&opened.kind, &opened.jpeg_exif_bytes) {
             (Kind::Jpeg, Some(kept)) => Some(kept.clone()),
-            _ => build_exif(&opened.exif, false),
+            _ => build_exif(&facts, false),
         },
+    };
+    // Title, caption, keywords (and creator, copyright) as XMP, in JPEGs.
+    let xmp = match spec.metadata {
+        Metadata::None => None,
+        Metadata::CopyrightOnly => xmp_segment(&row.meta, true),
+        Metadata::All => xmp_segment(&row.meta, false),
     };
     let exif = app1.as_deref().and_then(finish::exif_payload);
     let icc = finish::srgb_icc();
@@ -511,6 +528,9 @@ fn export_one(
                 .map_err(|e| encode_failed(&e))?;
             if let Some(app1) = &app1 {
                 bytes = insert_exif(&bytes, app1);
+            }
+            if let Some(xmp) = &xmp {
+                bytes = insert_xmp(&bytes, xmp);
             }
         }
         (Format::Png, Pixels::Eight(img)) => {

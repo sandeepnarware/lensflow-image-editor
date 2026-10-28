@@ -123,6 +123,17 @@ pub fn mark(root: &Path, ids: &[i64], mark: lf_catalog::cull::Mark) -> Result<us
         .map_err(text)
 }
 
+/// Saves a metadata change (title, caption, creator, copyright or keywords) on `ids`.
+pub fn change_meta(
+    root: &Path,
+    ids: &[i64],
+    change: &lf_catalog::meta::Change,
+) -> Result<usize, String> {
+    Catalog::open(root)
+        .and_then(|c| c.change_meta(ids, change))
+        .map_err(text)
+}
+
 /// Marks every photo of the folder missing, once the user confirmed the folder was emptied.
 pub fn mark_missing_confirmed(root: &Path, folder_id: i64) -> Result<usize, String> {
     Catalog::open(root)

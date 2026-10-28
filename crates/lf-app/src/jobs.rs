@@ -134,6 +134,12 @@ pub enum Msg {
         root: PathBuf,
         result: Result<usize, String>,
     },
+    /// A title, caption, creator, copyright or keyword change was saved in the catalogue at
+    /// `root` (the library already shows it); an error reloads the folder's rows.
+    MetaSaved {
+        root: PathBuf,
+        result: Result<usize, String>,
+    },
     /// A photo opened for Develop (or why it cannot be), for the request of `generation`;
     /// answers from an older request are dropped.
     Opened {
@@ -687,6 +693,7 @@ pub(crate) mod owners {
             | Msg::Photos { .. }
             | Msg::FolderRemoved { .. }
             | Msg::Marked { .. }
+            | Msg::MetaSaved { .. }
             | Msg::Opened { .. }
             | Msg::Preopened { .. }
             | Msg::SidecarWritten(..)
@@ -757,6 +764,10 @@ pub(crate) mod owners {
                 result: Err("no".into()),
             },
             Msg::Marked {
+                root: dir.join("elsewhere"),
+                result: Err("no".into()),
+            },
+            Msg::MetaSaved {
                 root: dir.join("elsewhere"),
                 result: Err("no".into()),
             },
