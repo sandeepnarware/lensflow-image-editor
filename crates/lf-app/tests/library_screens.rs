@@ -2191,3 +2191,95 @@ fn the_metadata_panel_describes_the_selection_and_search_finds_it() {
     assert!(search(&mut h, "mountains").is_empty());
     h.get_by_label("0 of 3 photos");
 }
+
+#[test]
+fn importing_from_a_card_copies_renames_backs_up_and_catalogues() {
+    use lf_app::dialogs::ingest;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let card = dir.path().join("card").join("DCIM");
+    pngs(&card, 3);
+    let photos = dir.path().join("Photos");
+    let backup = dir.path().join("Backup");
+
+    assert!(run_action(&mut h, Action::ImportFromCard));
+    h.step();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, ingest::CARD_PATH)
+        .click();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, ingest::CARD_PATH)
+        .type_text(&card.to_string_lossy());
+    h.step();
+    h.get_by_label(ingest::LOOK).click();
+    step_until(&mut h, "the card planned", |s| {
+        s.lib
+            .ingest()
+            .is_some_and(|d| d.stage == ingest::Stage::Form)
+    });
+    {
+        let d = h.state_mut().lib.ingest_mut().unwrap();
+        d.destination = photos.to_string_lossy().into_owned();
+        d.subfolder = "Sharma wedding".into();
+        d.rename = true;
+        d.pattern = "sharma_{seq}".into();
+        d.backup_on = true;
+        d.backup = backup.to_string_lossy().into_owned();
+    }
+    h.step();
+    // The dialog grew (rename and backup rows) and centres itself again on the next frame.
+    h.step();
+    h.step();
+    h.get_by_label("Import 3 photos").click();
+    step_until(&mut h, "the copy and its catalogue import", |s| {
+        s.lib
+            .ingest()
+            .is_some_and(|d| matches!(d.stage, ingest::Stage::Done(_)))
+            && !s.lib.importing()
+            && s.lib.folder_list().len() == 1
+    });
+    let shoot = photos.join("Sharma wedding");
+    for i in 1..=3 {
+        assert!(shoot.join(format!("sharma_{i}.png")).exists());
+        assert!(
+            backup
+                .join("Sharma wedding")
+                .join(format!("sharma_{i}.png"))
+                .exists()
+        );
+    }
+    assert!(card.join("p0.png").exists(), "the card is only read");
+    assert_eq!(h.state().lib.folder_list()[0].path, shoot);
+    h.get_by_label("3 photos copied.");
+    h.get_by_label(ingest::CLOSE).click();
+    h.step();
+    assert!(h.state().lib.ingest().is_none());
+    // Remembered for next time.
+    assert_eq!(
+        h.state()
+            .prefs
+            .last_ingest
+            .as_ref()
+            .unwrap()
+            .backup
+            .as_deref(),
+        Some(backup.as_path())
+    );
+
+    // Photos the catalogue has (same name and size; PNGs have no capture time) are
+    // suspected duplicates.
+    assert!(run_action(&mut h, Action::ImportFromCard));
+    h.step();
+    h.state_mut().lib.ingest_mut().unwrap().card = shoot.to_string_lossy().into_owned();
+    h.step();
+    h.step();
+    h.get_by_label(ingest::LOOK).click();
+    step_until(&mut h, "the card planned again", |s| {
+        s.lib
+            .ingest()
+            .is_some_and(|d| d.stage == ingest::Stage::Form)
+    });
+    h.get_by_label("3 already in the catalogue (same name and size).");
+}

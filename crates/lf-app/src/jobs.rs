@@ -183,6 +183,12 @@ pub enum Msg {
     GalleryProgress { done: usize, total: usize },
     /// An upload to a gallery finished (or could not start).
     GalleryDone(Result<crate::gallery_job::GalleryOutcome, String>),
+    /// A card was scanned and its photos judged (capture dates, suspected duplicates).
+    IngestPlanned(Result<Vec<lf_catalog::ingest::Planned>, String>),
+    /// Copying from a card moved on.
+    IngestProgress { done: usize, total: usize },
+    /// Copying from a card ended: the folder the copies are in, and what was done.
+    IngestDone(Result<(PathBuf, lf_catalog::ingest::IngestOutcome), String>),
 
     #[cfg(test)]
     Probe(&'static str),
@@ -704,7 +710,10 @@ pub(crate) mod owners {
             | Msg::Galleries { .. }
             | Msg::GallerySections { .. }
             | Msg::GalleryProgress { .. }
-            | Msg::GalleryDone(..) => Owner::Library,
+            | Msg::GalleryDone(..)
+            | Msg::IngestPlanned(..)
+            | Msg::IngestProgress { .. }
+            | Msg::IngestDone(..) => Owner::Library,
             Msg::DeviceReset(..) => Owner::App,
             Msg::Probe(..) => Owner::Test,
         }
@@ -807,6 +816,9 @@ pub(crate) mod owners {
             },
             Msg::GalleryProgress { done: 1, total: 2 },
             Msg::GalleryDone(Err("no".into())),
+            Msg::IngestPlanned(Err("no".into())),
+            Msg::IngestProgress { done: 1, total: 2 },
+            Msg::IngestDone(Err("no".into())),
             Msg::DeviceReset(device_reset::Choice::Quit),
             Msg::Probe("probe"),
         ]

@@ -475,3 +475,28 @@ replacing any XMP the source had; "Copyright only" writes just the creator and c
 The catalogue's creator and copyright also replace the file's EXIF Artist and Copyright when
 the EXIF is built (a JPEG's own EXIF is still copied byte for byte). PNG, WebP and TIFF carry
 no XMP yet. Gallery uploads are JPEG exports, so they carry it too.
+
+### Import from a card
+
+File → From card (`Action::ImportFromCard`) opens "Import from a card"
+(`dialogs/ingest.rs`, `library/ingest_ui.rs`). The card (or any folder) is chosen with a
+picker or a typed path, then scanned and planned on the `Long` lane
+(`lf_catalog::ingest::plan`): each file's capture time and camera are read from its headers,
+and a file is a suspected duplicate when a catalogued photo has the same size and capture
+time (so one imported before under another name is still found) or, with no capture time,
+the same name and size. The form then asks where the copies go (a folder, default the last
+one or the catalogue root, and a folder name inside it, default the shoot's first date), an
+optional rename (the export's tokens `{name}`, `{seq}`, `{date}`, `{camera}`, with an
+example), an optional backup folder (the same folder name inside it) and whether to skip
+suspected duplicates (on by default). It is remembered in `prefs.last_ingest`.
+
+The copy runs on the `Long` lane (`ingest::run`), with progress and Stop; closing the window
+leaves it running, and quitting asks first. Each file is copied under a temporary name
+(`.lfingest-<name>.<pid>.tmp`), its size checked, then renamed, so a pulled card or a full
+disk never leaves a half-copied photo under a real name. A name already taken in the
+destination gets `-2`, `-3`, …; a file there with the same name and size is the same photo
+and is skipped. A backup copy that fails is counted, not fatal. The card is only read.
+
+When the copy ends, the destination is catalogued: rescanned with the catalogue folder it
+lies in, or added as a new folder (as "Add folder…" would). If another import holds the
+catalogue then, a toast says where the copies are, to add by hand.

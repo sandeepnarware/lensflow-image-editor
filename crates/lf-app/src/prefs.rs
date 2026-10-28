@@ -55,6 +55,29 @@ pub enum DevelopQuality {
     Best,
 }
 
+/// What "Import from a card" remembers: where copies go, the rename, the backup.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IngestPrefs {
+    pub destination: Option<PathBuf>,
+    pub rename: bool,
+    pub pattern: String,
+    pub backup: Option<PathBuf>,
+    pub skip_duplicates: bool,
+}
+
+impl Default for IngestPrefs {
+    fn default() -> IngestPrefs {
+        IngestPrefs {
+            destination: None,
+            rename: false,
+            pattern: String::new(),
+            backup: None,
+            skip_duplicates: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
@@ -63,6 +86,8 @@ pub struct Prefs {
     pub studio_slug: Option<String>,
     pub frame_cache_bytes: u64,
     pub last_export: Option<serde_json::Value>,
+    /// "Import from a card" as it was last filled in.
+    pub last_ingest: Option<IngestPrefs>,
     pub develop_quality: DevelopQuality,
 }
 
@@ -74,6 +99,7 @@ impl Default for Prefs {
             studio_slug: None,
             frame_cache_bytes: 4 << 30,
             last_export: None,
+            last_ingest: None,
             develop_quality: DevelopQuality::default(),
         }
     }
@@ -133,6 +159,13 @@ mod tests {
             studio_slug: Some("sharma-studio".into()),
             frame_cache_bytes: 1 << 30,
             last_export: Some(serde_json::json!({ "format": "jpeg", "quality": 90 })),
+            last_ingest: Some(IngestPrefs {
+                destination: Some(PathBuf::from("D:/Photos")),
+                rename: true,
+                pattern: "{date}_{seq}".into(),
+                backup: None,
+                skip_duplicates: false,
+            }),
             develop_quality: DevelopQuality::Fast,
         };
         prefs.save(&config).unwrap();

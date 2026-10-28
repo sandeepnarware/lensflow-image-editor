@@ -87,6 +87,11 @@ The bar over the grid shows only some flags, ratings or labels and sorts by
 capture time, file name or rating. Marks live in the catalogue, not in the edit
 files. See [docs/app.md](docs/app.md).
 
+Import from card (File → From card): copies the photos on a memory card (or any
+folder) into a folder you name, optionally renamed (`{date}_{seq}`, ...) and copied to a
+backup folder too, skipping photos the catalogue already has, then catalogues the
+copies. The card is only read.
+
 Metadata (View → Metadata): a title, caption, creator, copyright and keywords for
 the selected photos, with the folder's keywords a click away. The search box over
 the grid finds photos by those, the file name, camera or lens. Exported JPEGs

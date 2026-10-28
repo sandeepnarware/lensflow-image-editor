@@ -14,6 +14,8 @@ use lf_catalog::cull::{Flag, Label};
 pub enum Action {
     // File
     AddFolder,
+    /// Copy photos from a memory card (or any folder) into the studio's, then catalogue them.
+    ImportFromCard,
     Export,
     /// Upload the selected photos to a LensFlow gallery (while the plan allows it).
     ExportToGallery,
@@ -78,6 +80,7 @@ impl Action {
     pub fn label(self) -> &'static str {
         match self {
             Action::AddFolder => "Add folder…",
+            Action::ImportFromCard => "Import from card…",
             Action::Export => "Export…",
             Action::ExportToGallery => "Export to gallery…",
             Action::Quit => "Quit",

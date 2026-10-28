@@ -57,6 +57,7 @@ pub const RIBBON: &[Tab] = &[
                 "Photos",
                 &[
                     Do(Action::AddFolder),
+                    Do(Action::ImportFromCard),
                     Do(Action::Export),
                     Do(Action::ExportToGallery),
                 ],
@@ -211,6 +212,7 @@ pub fn actions() -> Vec<Action> {
 pub fn icon(action: Action) -> &'static str {
     match action {
         Action::AddFolder => "📁",
+        Action::ImportFromCard => "💾",
         Action::Export => "📤",
         Action::ExportToGallery => "☁",
         Action::Quit => "🚪",
@@ -264,6 +266,7 @@ pub fn icon(action: Action) -> &'static str {
 pub fn short_label(action: Action) -> &'static str {
     match action {
         Action::AddFolder => "Add folder",
+        Action::ImportFromCard => "From card",
         Action::Export => "Export",
         Action::ExportToGallery => "To gallery",
         Action::CopySettings => "Copy settings",
@@ -620,6 +623,8 @@ mod tests {
         let all = every_action();
         for action in [
             Action::AddFolder,
+            Action::ImportFromCard,
+            Action::Metadata,
             Action::Export,
             Action::Quit,
             Action::Undo,

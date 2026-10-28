@@ -12,6 +12,7 @@ pub mod filmstrip;
 pub mod gallery_ui;
 pub mod grid;
 pub mod import_ui;
+pub mod ingest_ui;
 pub mod meta_ui;
 pub mod selection;
 
@@ -119,6 +120,8 @@ pub struct Library {
     filter: cull::Filter,
     /// The Metadata panel (shown or not, and what is being typed in it).
     meta: meta_ui::MetaPanel,
+    /// "Import from a card", while open or while its copy runs.
+    ingest: Option<crate::dialogs::ingest::IngestDialog>,
     pub selection: Selection,
     /// The box being dragged over the grid, while the mouse button is down.
     pub marquee: Option<grid::Marquee>,
@@ -224,6 +227,7 @@ impl Library {
             gallery: None,
             gallery_link: None,
             meta: meta_ui::MetaPanel::default(),
+            ingest: None,
             keep: None,
             keys: Keys::default(),
         }
@@ -236,6 +240,10 @@ impl Library {
             Some("Wait for the export to finish, then change the catalogue folder.")
         } else if self.gallery.as_ref().is_some_and(|g| g.running()) {
             Some("Wait for the upload to the gallery to finish, then change the catalogue folder.")
+        } else if self.ingest.as_ref().is_some_and(|d| d.running()) {
+            Some(
+                "Wait for the photos to be copied from the card, then change the catalogue folder.",
+            )
         } else if self.batch.as_ref().is_some_and(BatchDialog::running) {
             Some("Wait for the edits to be applied, then change the catalogue folder.")
         } else if self.matching.is_some() {
@@ -330,6 +338,11 @@ impl Library {
         }
     }
 
+    /// The catalogue's folders, by path.
+    pub fn folder_list(&self) -> &[Folder] {
+        &self.folders
+    }
+
     /// The folder shown, if any.
     pub fn current_folder(&self) -> Option<i64> {
         self.current_folder
@@ -374,6 +387,8 @@ impl Library {
             Some(crate::dialogs::quit::EXPORT_RUNNING)
         } else if self.gallery.as_ref().is_some_and(|g| g.running()) {
             Some(crate::dialogs::quit::GALLERY_RUNNING)
+        } else if self.ingest.as_ref().is_some_and(|d| d.running()) {
+            Some(crate::dialogs::quit::INGEST_RUNNING)
         } else if self.batch.as_ref().is_some_and(BatchDialog::running) {
             Some(crate::dialogs::quit::BATCH_RUNNING)
         } else {
@@ -393,6 +408,9 @@ impl Library {
         }
         if let Some(gallery) = &self.gallery {
             gallery.stop.store(true, Ordering::SeqCst);
+        }
+        if let Some(ingest) = &self.ingest {
+            ingest.stop.store(true, Ordering::SeqCst);
         }
     }
 
@@ -772,6 +790,9 @@ impl Library {
             }
             Msg::GalleryProgress { done, total } => self.gallery_progress(done, total),
             Msg::GalleryDone(result) => self.gallery_done(result, env),
+            Msg::IngestPlanned(result) => self.ingest_planned(result),
+            Msg::IngestProgress { done, total } => self.ingest_progress(done, total),
+            Msg::IngestDone(result) => self.ingest_done(result, env),
             Msg::PresetsSynced(..) => {
                 // The catalogue's presets may have changed; the session handles the rest.
                 self.develop.presets_stale();
@@ -1199,6 +1220,7 @@ impl Library {
         self.match_dialog(ui.ctx(), env);
         self.export_dialog(ui.ctx(), env);
         self.gallery_dialog(ui.ctx(), env);
+        self.ingest_dialog(ui.ctx(), env);
         self.reveal_active = false;
     }
 
@@ -1212,6 +1234,7 @@ impl Library {
             || self.matching.is_some()
             || self.export.as_ref().is_some_and(|d| d.visible)
             || self.gallery.as_ref().is_some_and(|d| d.visible)
+            || self.ingest.as_ref().is_some_and(|d| d.visible)
     }
 
     /// Whether `action` (a menu item or a key) is possible now in the library or Develop.
@@ -1223,6 +1246,7 @@ impl Library {
         let selected = !self.selection.current.is_empty();
         match action {
             Action::AddFolder => self.can_add(),
+            Action::ImportFromCard => self.can_add() || self.ingest.is_some(),
             Action::Export => selected || self.export.is_some(),
             Action::ExportToGallery => {
                 (selected && self.gallery_allowed()) || self.gallery.is_some()
@@ -1271,6 +1295,7 @@ impl Library {
         }
         match action {
             Action::AddFolder => self.add_folder(env),
+            Action::ImportFromCard => self.open_ingest(env),
             Action::Export => self.open_export(env),
             Action::ExportToGallery => self.open_gallery(env),
             Action::Undo => self.develop.undo(env.toasts),

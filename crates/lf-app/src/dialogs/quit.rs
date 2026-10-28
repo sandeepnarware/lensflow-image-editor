@@ -7,6 +7,8 @@ use eframe::egui::{self, RichText};
 pub const EXPORT_RUNNING: &str = "An export is running. Quit anyway?";
 /// The question while photos are being uploaded to a gallery.
 pub const GALLERY_RUNNING: &str = "Photos are still being uploaded to a gallery. Quit anyway?";
+/// The question while photos are being copied from a card.
+pub const INGEST_RUNNING: &str = "Photos are still being copied from a card. Quit anyway?";
 /// The question while "Apply to N photos" runs.
 pub const BATCH_RUNNING: &str = "Photos are still being updated. Quit anyway?";
 /// What quitting does to it.

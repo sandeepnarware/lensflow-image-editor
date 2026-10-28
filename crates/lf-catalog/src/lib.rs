@@ -8,6 +8,7 @@ pub mod exif_embed;
 pub mod export;
 pub mod finish;
 pub mod import;
+pub mod ingest;
 pub mod meta;
 pub mod model;
 pub mod presets;
