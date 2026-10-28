@@ -23,6 +23,18 @@ impl Selection {
         self.current.last().copied()
     }
 
+    /// Makes `id` the active photo, keeping the selection (or selecting only it when it was
+    /// not selected).
+    pub fn set_active(&mut self, id: i64) {
+        match self.current.iter().position(|c| *c == id) {
+            Some(at) => {
+                self.current.remove(at);
+                self.current.push(id);
+            }
+            None => self.click(id),
+        }
+    }
+
     /// Selects only `id`; it becomes the anchor.
     pub fn click(&mut self, id: i64) {
         self.anchor = Some(id);

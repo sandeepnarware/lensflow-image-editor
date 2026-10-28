@@ -40,6 +40,8 @@ pub enum Action {
     ToggleZoom,
     /// Show or hide the Library's Metadata panel (title, caption, keywords).
     Metadata,
+    /// Two to four selected photos side by side, zoomed together.
+    Compare,
     // Albums
     /// Make an album (with the selected photos).
     NewAlbum,
@@ -116,6 +118,7 @@ impl Action {
             Action::ActualSize => "100 %",
             Action::ToggleZoom => "Fit / 100 %",
             Action::Metadata => "Metadata panel",
+            Action::Compare => "Compare",
             Action::NewAlbum => "New album…",
             Action::NewSmartAlbum => "New smart album…",
             Action::AddToAlbum => "Add to album…",
@@ -208,6 +211,7 @@ pub const MAP: Map = Map(&[
     (Action::MergeHdr, cmd(Key::H)),
     (Action::MergePanorama, cmd(Key::M)),
     (Action::NewAlbum, cmd(Key::N)),
+    (Action::Compare, key(Key::C)),
     (Action::AddToAlbum, cmd(Key::B)),
     (Action::CropTool, key(Key::R)),
     (Action::SpotTool, key(Key::Q)),
@@ -370,6 +374,7 @@ mod tests {
             (Action::MergeHdr, cmd(Key::H)),
             (Action::MergePanorama, cmd(Key::M)),
             (Action::NewAlbum, cmd(Key::N)),
+            (Action::Compare, key(Key::C)),
             (Action::AddToAlbum, cmd(Key::B)),
             (Action::CropTool, key(Key::R)),
             (Action::SpotTool, key(Key::Q)),

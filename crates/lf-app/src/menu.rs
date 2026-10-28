@@ -124,7 +124,7 @@ pub const RIBBON: &[Tab] = &[
                     Do(Action::Label(None)),
                 ],
             ),
-            group("Export", &[Do(Action::Export), Do(Action::ExportToGallery)]),
+            group("View", &[Do(Action::Compare)]),
         ],
     },
     Tab {
@@ -243,6 +243,7 @@ pub fn icon(action: Action) -> &'static str {
         Action::ActualSize => "🔍",
         Action::ToggleZoom => "🔍",
         Action::Metadata => "📝",
+        Action::Compare => "⚖",
         Action::NewAlbum => "🗀",
         Action::NewSmartAlbum => "⚙",
         Action::AddToAlbum => "➕",
@@ -593,7 +594,7 @@ mod tests {
         h.run();
         // The widest tab fits a 1280-point window: groups are as wide as their buttons.
         {
-            let last = h.get_by_label("Export to gallery…").rect();
+            let last = h.get_by_label("Compare").rect();
             assert!(last.max.x <= 1280.0, "the Library tab overflows: {last:?}");
         }
         h.get_by_label("3 stars").click();
@@ -656,6 +657,7 @@ mod tests {
             Action::Print,
             Action::MergeHdr,
             Action::MergePanorama,
+            Action::Compare,
             Action::NewAlbum,
             Action::NewSmartAlbum,
             Action::AddToAlbum,

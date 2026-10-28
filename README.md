@@ -118,6 +118,11 @@ in the order you add them. A smart album keeps a rule instead (stars, flag, colo
 label, words, taken within the last week or month) and always holds what matches.
 Albums live in the catalogue; deleting one never touches its photos.
 
+Compare (`C`, Library → Compare): two to four selected photos side by side, large
+and with their edits, zoomed and panned together to pick the sharpest of a burst.
+Click one to make it active; flags, stars and labels go to it alone; `←`/`→` move
+between them; `Esc` goes back to the grid.
+
 The window needs a graphics adapter. With no driver it runs on a software
 adapter (WARP on Windows, lavapipe on Linux) and says "No graphics driver found:
 previews will be slow."

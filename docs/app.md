@@ -500,6 +500,19 @@ change runs on the `Io` lane (`Msg::AlbumChanged`), then the list is read again 
 (`Msg::Albums`) and the album shown reloaded (`Msg::AlbumPhotos`). Removing a folder from the
 catalogue takes its photos out of every album (`ON DELETE CASCADE`).
 
+### Compare
+
+`C` (`Action::Compare`, Library → View) with two to four photos selected shows them side by
+side in place of the grid (`library/compare.rs`; a 2×2 grid for four). Each is rendered with
+its saved edits on the `Open` lane (`compare::render`: through the frame cache with Develop's
+working edge, so opening one afterwards is quick, then `Renderer::pixels` at up to 3000 px)
+and comes back as `Msg::CompareRendered` for the comparison's generation; the pixels become
+a texture on the next frame. Zoom and pan are shared (`compare::place` keeps each photo in
+its cell): the wheel zooms, a drag pans, a double-click toggles fit and 1:1 (one rendered
+pixel per screen pixel). The active photo is outlined; marks go to it alone, `←`/`→` move
+it among the compared photos, and `Esc`, `C` or "Back to grid" closes. Showing another
+folder or album closes it; Develop and back keeps it.
+
 ### Import from a card
 
 File → From card (`Action::ImportFromCard`) opens "Import from a card"

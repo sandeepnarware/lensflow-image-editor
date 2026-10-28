@@ -6,6 +6,7 @@
 //! show. The thumbnail pool has its own connections.
 
 pub mod albums_ui;
+pub mod compare;
 pub mod cull;
 pub mod cull_ui;
 pub mod edit_in_ui;
@@ -114,6 +115,9 @@ pub struct Library {
     current_folder: Option<i64>,
     /// The album shown in place of a folder ([`albums_ui`]); never both.
     current_album: Option<i64>,
+    /// Compare, while open (it shows in place of the grid).
+    compare: Option<compare::Compare>,
+    compare_generation: u64,
     albums: Vec<lf_catalog::albums::Album>,
     /// New album, New smart album or Edit album, while open.
     album_dialog: Option<crate::dialogs::album::AlbumDialog>,
@@ -213,6 +217,8 @@ impl Library {
             folders: Vec::new(),
             current_folder: None,
             current_album: None,
+            compare: None,
+            compare_generation: 0,
             albums: Vec::new(),
             album_dialog: None,
             adding_to_album: false,
@@ -843,6 +849,11 @@ impl Library {
             Msg::MergeProgress { done, total } => self.merge_progress(done, total),
             Msg::MergeDone(result) => self.merge_done(result, env),
             Msg::Albums { root, result } => self.albums_loaded(root, result),
+            Msg::CompareRendered {
+                generation,
+                id,
+                result,
+            } => self.compare_rendered(generation, id, result),
             Msg::AlbumPhotos {
                 root,
                 album_id,
@@ -1028,6 +1039,8 @@ impl Library {
     fn mark(&mut self, asked: Mark, env: &mut Env) {
         let targets: Vec<i64> = match self.mode {
             Mode::Develop(id) => vec![id],
+            // Compare marks the active photo alone.
+            Mode::Library if self.comparing() => self.selection.active().into_iter().collect(),
             Mode::Library => self.selected_in_order(),
         };
         let rows: Vec<&PhotoRow> = targets.iter().filter_map(|id| self.photo(*id)).collect();
@@ -1072,6 +1085,7 @@ impl Library {
 
     /// Shows `folder` (or nothing) and loads its photos.
     fn show_folder(&mut self, folder: Option<i64>, env: &mut Env) {
+        self.compare = None;
         if self.current_folder != folder || self.current_album.is_some() {
             self.selection = Selection::default();
             self.photos.clear();
@@ -1277,6 +1291,9 @@ impl Library {
             self.pick_lut(env);
         }
         match self.mode {
+            Mode::Library if self.compare.is_some() => {
+                egui::CentralPanel::default_margins().show(ui, |ui| self.compare_ui(ui));
+            }
             Mode::Library => {
                 egui::CentralPanel::default_margins().show(ui, |ui| self.grid(ui, env));
             }
@@ -1355,6 +1372,11 @@ impl Library {
             }
             Action::SelectAll | Action::Previous | Action::Next => !self.order.is_empty(),
             Action::Metadata => !develop,
+            Action::Compare => {
+                !develop
+                    && (self.compare.is_some()
+                        || compare::can_compare(self.selection.current.len()))
+            }
             Action::NewAlbum | Action::NewSmartAlbum => true,
             Action::AddToAlbum => develop || selected,
             Action::RemoveFromAlbum => !develop && self.can_remove_from_album(),
@@ -1369,6 +1391,7 @@ impl Library {
             | Action::ResetAll
             | Action::AutoTone
             | Action::AutoWhiteBalance => develop && self.develop.is_ready(),
+            Action::LeaveTool if self.comparing() => true,
             Action::CropTool
             | Action::SpotTool
             | Action::WhiteBalanceTool
@@ -1424,12 +1447,17 @@ impl Library {
                 }
             }
             Action::Metadata => self.toggle_metadata(),
+            Action::Compare if self.compare.is_some() => self.close_compare(),
+            Action::Compare => self.open_compare(env),
             Action::NewAlbum => self.open_album_dialog(crate::dialogs::album::Purpose::New),
             Action::NewSmartAlbum => {
                 self.open_album_dialog(crate::dialogs::album::Purpose::NewSmart)
             }
             Action::AddToAlbum => self.adding_to_album = true,
             Action::RemoveFromAlbum => self.remove_from_album(env),
+            Action::LeaveTool if self.comparing() => self.close_compare(),
+            Action::Previous if self.comparing() => self.compare_step(false),
+            Action::Next if self.comparing() => self.compare_step(true),
             Action::Previous => self.step(Dir::Left, env),
             Action::Next => self.step(Dir::Right, env),
             Action::Up => self.step(Dir::Up, env),
@@ -1679,7 +1707,12 @@ impl Library {
         if self.photos.is_empty() {
             ui.vertical_centered(|ui| {
                 ui.add_space(ui.available_height() / 3.0);
-                ui.label(RichText::new("No photos in this folder.").color(theme::MUTED));
+                let empty = if self.current_album.is_some() {
+                    "No photos in this album."
+                } else {
+                    "No photos in this folder."
+                };
+                ui.label(RichText::new(empty).color(theme::MUTED));
             });
             return;
         }

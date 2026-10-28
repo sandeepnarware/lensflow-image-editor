@@ -201,6 +201,12 @@ pub enum Msg {
     MergeProgress { done: usize, total: usize },
     /// Merge to HDR wrote the merged photo, or why not.
     MergeDone(Result<PathBuf, String>),
+    /// A photo for Compare was rendered (or not), for the comparison `generation`.
+    CompareRendered {
+        generation: u64,
+        id: i64,
+        result: Result<Box<crate::library::compare::Pixels>, String>,
+    },
     /// The catalogue's albums (`root`: the catalogue asked).
     Albums {
         root: PathBuf,
@@ -750,6 +756,7 @@ pub(crate) mod owners {
             | Msg::MergeProgress { .. }
             | Msg::MergeDone(..)
             | Msg::Albums { .. }
+            | Msg::CompareRendered { .. }
             | Msg::AlbumPhotos { .. }
             | Msg::AlbumChanged { .. } => Owner::Library,
             Msg::DeviceReset(..) => Owner::App,
@@ -863,6 +870,11 @@ pub(crate) mod owners {
             Msg::PrintDone(Err("no".into())),
             Msg::MergeProgress { done: 1, total: 2 },
             Msg::MergeDone(Err("no".into())),
+            Msg::CompareRendered {
+                generation: 1,
+                id: 1,
+                result: Err("no".into()),
+            },
             Msg::Albums {
                 root: dir.to_path_buf(),
                 result: Ok(Vec::new()),
