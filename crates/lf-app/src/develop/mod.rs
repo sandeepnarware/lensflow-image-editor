@@ -157,6 +157,8 @@ pub struct Develop {
     extras: extras::Extras,
     /// "Import .cube…" was clicked; the library opens the file picker.
     lut_import_asked: bool,
+    /// "Apply lens profile" was clicked (the library takes the request).
+    lens_profile_asked: bool,
 }
 
 impl Develop {
@@ -188,6 +190,7 @@ impl Develop {
             tools: tools::Tools::default(),
             extras: extras::Extras::default(),
             lut_import_asked: false,
+            lens_profile_asked: false,
         }
     }
 
@@ -432,6 +435,60 @@ impl Develop {
                 self.proof_key = None;
             }
         }
+    }
+
+    /// "Apply lens profile" asked since the last call: what the library's job needs from the
+    /// open photo (its EXIF lens, maker, focal length and aperture, and its shape). A photo
+    /// whose EXIF does not say is answered with a toast here.
+    pub fn take_lens_profile_request(
+        &mut self,
+        toasts: &mut Toasts,
+    ) -> Option<crate::lens_profiles::Query> {
+        if !std::mem::take(&mut self.lens_profile_asked) {
+            return None;
+        }
+        let State::Ready(photo, id) = &self.state else {
+            return None;
+        };
+        let e = &photo.exif;
+        match (&e.lens, e.focal_length) {
+            (Some(lens), Some(focal)) if focal > 0.0 => Some(crate::lens_profiles::Query {
+                photo_id: *id,
+                lens: lens.clone(),
+                maker: e.make.clone(),
+                focal: f64::from(focal),
+                aperture: e.f_number.map(f64::from),
+                aspect: f64::from(photo.full_width) / f64::from(photo.full_height.max(1)),
+            }),
+            _ => {
+                toasts.push(Level::Info, crate::lens_profiles::NO_LENS);
+                None
+            }
+        }
+    }
+
+    /// A lens profile's sliders for photo `id`, applied (perspective kept) as one step.
+    pub fn apply_lens_profile(
+        &mut self,
+        id: i64,
+        profile: lf_settings::lens::Lens,
+        toasts: &mut Toasts,
+    ) -> bool {
+        if self.photo_id() != Some(id) {
+            return false;
+        }
+        self.commit(toasts);
+        self.edit(|s| {
+            let now = lf_settings::lens::Lens::from_settings(s);
+            lf_settings::lens::Lens {
+                vertical: now.vertical,
+                horizontal: now.horizontal,
+                ..profile
+            }
+            .write_into(s);
+        });
+        self.commit(toasts);
+        true
     }
 
     /// Whether the AI buttons may be used.
@@ -814,6 +871,7 @@ impl Develop {
             self.toggle_tool(ToolKind::WhiteBalance, toasts);
         }
         self.lut_import_asked |= out.import_lut;
+        self.lens_profile_asked |= out.lens_profile;
     }
 
     /// Develop → Auto tone (`Ctrl+U`): exposure and the tone sliders from the photo, one

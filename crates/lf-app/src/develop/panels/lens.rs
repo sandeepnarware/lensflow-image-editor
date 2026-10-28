@@ -22,6 +22,7 @@ pub const LABELS: [&str; 6] = [
 
 /// Upright's buttons and its note when it found too few lines.
 pub const UPRIGHT: &str = "Upright";
+pub const PROFILE: &str = "Apply lens profile";
 pub const UPRIGHT_VERTICAL: &str = "Vertical";
 pub const UPRIGHT_FULL: &str = "Full";
 pub const UPRIGHT_NONE: &str =
@@ -31,8 +32,18 @@ pub fn show(
     ui: &mut egui::Ui,
     s: &mut EditSettings,
     sample: Option<&crate::develop::auto::Sample>,
+    profile_asked: &mut bool,
 ) -> SliderResponse {
     let mut out = SliderResponse::default();
+    if ui
+        .button(PROFILE)
+        .on_hover_text(
+            "Distortion, lens vignetting and fringes for this lens, from the lensfun database",
+        )
+        .clicked()
+    {
+        *profile_asked = true;
+    }
     // Upright: perspective and straightening fitted to the photo's lines.
     let note_id = egui::Id::unique("upright-note");
     ui.horizontal(|ui| {

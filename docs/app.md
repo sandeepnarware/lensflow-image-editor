@@ -418,6 +418,20 @@ texture: `BrushTexture` resamples the picture into the mask's layer and the shad
 kind 2; `masks::weight` samples it on the CPU. A picture that does not decode to its size is
 dropped when read.
 
+### Lens profiles
+
+The Lens corrections section's "Apply lens profile" asks `Develop::take_lens_profile_request`
+for the open photo's EXIF lens, maker, focal length and aperture (a toast when it has none);
+`lens_profiles::run` on the `Io` lane fetches lensfun's `data/db` once (`assets::LENSFUN`, a
+pinned 2.9 MB snapshot unpacked flat into `<cache>/ai/lensfun-db`), reads it once per run
+(`roxmltree`, DTD allowed), matches the lens by its words (every number must agree; words
+missing on either side count against it) and fits the sliders by least squares over the frame:
+distortion (`ptlens`, `poly3`, `poly5`, blended between focal lengths) to the one-term radial
+shape, colour fringes (`poly3`) to each channel's mean scale, and vignetting (`pa`, the nearest
+aperture at the nearest focal length, corner at 1) to the linear gain, all clamped to the
+sliders. Perspective is kept. The calibration's crop factor is not used: a profile made on a
+different sensor size is applied as if on this one.
+
 ### Upright
 
 The Lens corrections section's Upright: Vertical and Full. `develop::upright::segments` finds

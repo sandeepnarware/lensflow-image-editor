@@ -882,6 +882,15 @@ impl Library {
             Msg::RemoveRendered { id, result } => self.remove_rendered(id, result),
             Msg::AiDone(result) => self.ai_done(result, env),
             Msg::Tile { key, result } => self.tile_arrived(key, result),
+            Msg::LensProfile { photo_id, result } => match result {
+                Ok((name, lens)) => {
+                    if self.develop.apply_lens_profile(photo_id, lens, env.toasts) {
+                        env.toasts
+                            .push(Level::Info, format!("Applied the lens profile for {name}."));
+                    }
+                }
+                Err(e) => env.toasts.push(Level::Info, e),
+            },
             Msg::PlacesRead { root, result } => self.places_read(root, result, env),
             Msg::CompareRendered {
                 generation,
@@ -1096,6 +1105,19 @@ impl Library {
         env.jobs.spawn(Lane::Io, "mark", move || {
             let result = catalog_ext::mark(&root, &targets, mark);
             Msg::Marked { root, result }
+        });
+    }
+
+    /// The lens database (downloaded once, then kept) matched to the open photo's lens.
+    pub(super) fn find_lens_profile(&mut self, q: crate::lens_profiles::Query, env: &mut Env) {
+        let dir = crate::ai_job::ai_dir(&self.frames_dir);
+        env.toasts.push(Level::Info, crate::lens_profiles::LOOKING);
+        env.jobs.spawn(Lane::Io, "lens profile", move || {
+            let result = crate::lens_profiles::run(&dir, &q);
+            Msg::LensProfile {
+                photo_id: q.photo_id,
+                result,
+            }
         });
     }
 
@@ -1321,6 +1343,9 @@ impl Library {
                 .exact_size(histogram_panel_width())
                 .frame(frame)
                 .show(ui, |ui| develop.side_ui(ui, photo, env.toasts));
+        }
+        if let Some(q) = self.develop.take_lens_profile_request(env.toasts) {
+            self.find_lens_profile(q, env);
         }
         if let Some(sky) = self.develop.take_ai_mask_request() {
             self.open_ai(crate::ai_job::AiTool::Mask { sky });

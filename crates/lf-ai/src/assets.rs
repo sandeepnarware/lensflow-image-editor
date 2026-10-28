@@ -24,6 +24,9 @@ pub enum Unpack {
     Zip(&'static str),
     /// A gzipped tar archive: keep the regular file whose name starts with this.
     Tgz(&'static str),
+    /// A gzipped tar archive: keep every regular file whose path contains this, flat, in a
+    /// folder named as the asset.
+    TgzFolder(&'static str),
 }
 
 /// One file to fetch.
@@ -140,6 +143,16 @@ pub const FACES: Asset = Asset {
     unpack: Unpack::File,
 };
 
+/// The lensfun lens database (CC-BY-SA 3.0): its `data/db` XML files from a pinned
+/// snapshot, for automatic lens profiles (not AI, but fetched and checked the same way).
+pub const LENSFUN: Asset = Asset {
+    file: "lensfun-db",
+    url: "https://codeload.github.com/lensfun/lensfun/tar.gz/bc5615d6278cb5fb75dd53e74015367453d5591d",
+    size: 2_938_798,
+    sha256: "b56bff238bd9b8f6e517785de9361a11608f0d2afbfa9e21ce4a33d69d5c2046",
+    unpack: Unpack::TgzFolder("/data/db/"),
+};
+
 /// Where `asset` lives in `dir` once fetched.
 pub fn path(dir: &Path, asset: &Asset) -> PathBuf {
     dir.join(asset.file)
@@ -149,6 +162,7 @@ pub fn path(dir: &Path, asset: &Asset) -> PathBuf {
 pub fn present(dir: &Path, asset: &Asset) -> bool {
     match fs::metadata(path(dir, asset)) {
         Ok(m) if asset.unpack == Unpack::File => m.len() == asset.size,
+        Ok(m) if matches!(asset.unpack, Unpack::TgzFolder(_)) => m.is_dir(),
         Ok(m) => m.len() > 0,
         Err(_) => false,
     }
@@ -280,6 +294,36 @@ fn unpack(asset: &Asset, part: &Path, out: &Path) -> Result<(), AiError> {
                 return Err(AiError::Mismatch(asset.file));
             }
         }
+        Unpack::TgzFolder(within) => {
+            let file = fs::File::open(part).map_err(io)?;
+            let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
+            let _ = fs::remove_dir_all(&tmp);
+            fs::create_dir_all(&tmp).map_err(io)?;
+            let mut found = 0;
+            for entry in tar.entries().map_err(io)? {
+                let mut entry = entry.map_err(io)?;
+                if !entry.header().entry_type().is_file() {
+                    continue;
+                }
+                let path = entry
+                    .path()
+                    .map_err(io)?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                // Flat, by file name only: nothing in the archive can write outside the folder.
+                let name = path.rsplit('/').next().unwrap_or_default().to_owned();
+                if path.contains(within) && !name.is_empty() && !name.starts_with('.') {
+                    let mut dest = fs::File::create(tmp.join(&name)).map_err(io)?;
+                    std::io::copy(&mut entry, &mut dest).map_err(io)?;
+                    found += 1;
+                }
+            }
+            if found == 0 {
+                let _ = fs::remove_dir_all(&tmp);
+                return Err(AiError::Mismatch(asset.file));
+            }
+            let _ = fs::remove_dir_all(out);
+        }
     }
     fs::rename(&tmp, out).map_err(io)
 }
@@ -290,9 +334,18 @@ mod tests {
 
     #[test]
     fn every_asset_is_pinned() {
-        let all = [SUBJECT, SKY, DENOISE, DENOISE_DATA, UPSCALE, INPAINT, FACES]
-            .into_iter()
-            .chain(runtime());
+        let all = [
+            SUBJECT,
+            SKY,
+            DENOISE,
+            DENOISE_DATA,
+            UPSCALE,
+            INPAINT,
+            FACES,
+            LENSFUN,
+        ]
+        .into_iter()
+        .chain(runtime());
         for a in all {
             assert_eq!(a.sha256.len(), 64, "{}", a.file);
             assert!(a.sha256.bytes().all(|b| b.is_ascii_hexdigit()));

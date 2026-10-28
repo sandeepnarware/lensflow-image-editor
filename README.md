@@ -70,6 +70,8 @@ skipped as duplicates.
 
 Lens corrections (a section after Effects): distortion, lens vignetting, red/cyan and
 blue/yellow fringes, and vertical and horizontal perspective, kept for the desktop only.
+"Apply lens profile" sets distortion, lens vignetting and fringes for the photo's lens at its
+focal length and aperture, from the lensfun database (downloaded once, a few MB).
 Upright (Vertical or Full) finds the straight lines in the photo and sets the perspective
 and straightening that make verticals upright and the horizon level.
 

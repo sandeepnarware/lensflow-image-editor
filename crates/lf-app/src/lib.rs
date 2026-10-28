@@ -17,6 +17,7 @@ pub mod gallery_job;
 pub mod gpu;
 pub mod grade_cli;
 pub mod jobs;
+pub mod lens_profiles;
 pub mod library;
 pub mod logging;
 pub mod luts;

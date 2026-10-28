@@ -142,6 +142,7 @@ cargo test --workspace                   # includes the 228-render parity suite
   Healing strokes: `lf_settings::heal` (`desktop.heal`), dabs through `spots::run_dabs`, the spot tool's Brush.
   Upright: `develop::upright` (Hough lines), `lf_settings::upright::fit`, the Lens section's buttons.
   Map: `library/map.rs` (OSM tiles), `lf_catalog::places` (schema v9 GPS), `ExifSummary::gps`.
+  Lens profiles: `lens_profiles.rs` (lensfun, `assets::LENSFUN`), the Lens section's button.
   Export presets (`dialogs/export_presets.rs`, `prefs.export_presets`) and the `{title}` file-name token.
   Mask ranges: `lf_settings::masks::Range` (brightness or colour), `range_weight` in `develop.wgsl`.
   AI tools: `lf-ai`, `ai_job.rs`, `dialogs/ai.rs`, `library/ai_ui.rs` (AI tab: Denoise, Upscale, Remove objects with `dialogs/remove.rs`, Retouch, Remove background).

@@ -201,6 +201,11 @@ pub enum Msg {
     MergeProgress { done: usize, total: usize },
     /// Merge to HDR wrote the merged photo, or why not.
     MergeDone(Result<PathBuf, String>),
+    /// A lens profile for the open photo (its lensfun name and sliders), or why not.
+    LensProfile {
+        photo_id: i64,
+        result: Result<(String, lf_settings::lens::Lens), String>,
+    },
     /// A map tile arrived (or could not be had).
     Tile {
         key: crate::library::map::TileKey,
@@ -779,6 +784,7 @@ pub(crate) mod owners {
             | Msg::AiProgress(..)
             | Msg::RemoveRendered { .. }
             | Msg::Tile { .. }
+            | Msg::LensProfile { .. }
             | Msg::PlacesRead { .. }
             | Msg::AiDone(..)
             | Msg::AlbumPhotos { .. }
@@ -896,6 +902,10 @@ pub(crate) mod owners {
             Msg::MergeDone(Err("no".into())),
             Msg::AiProgress(crate::ai_job::Step::Download { done: 1, total: 2 }),
             Msg::AiDone(Err("no".into())),
+            Msg::LensProfile {
+                photo_id: 1,
+                result: Err("no".into()),
+            },
             Msg::Tile {
                 key: (3, 1, 2),
                 result: Err("no".into()),

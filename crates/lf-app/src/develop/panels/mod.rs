@@ -106,6 +106,8 @@ pub struct PanelOutput {
     pub pick_wb: bool,
     /// "Import .cube…" was clicked.
     pub import_lut: bool,
+    /// "Apply lens profile" was clicked.
+    pub lens_profile: bool,
 }
 
 impl PanelOutput {
@@ -226,8 +228,9 @@ pub fn show(
     }
     // Desktop only, after the web's sections: its Reset is its own, as the RAW section's.
     let mut r = SliderResponse::default();
+    let mut profile = false;
     if section(ui, "lens", lens::TITLE, false, |ui| {
-        r = lens::show(ui, s, ctx.sample)
+        r = lens::show(ui, s, ctx.sample, &mut profile)
     }) {
         let before = s.clone();
         lens::reset(s);
@@ -239,6 +242,7 @@ pub fn show(
         }
     }
     out.absorb(r);
+    out.lens_profile |= profile;
     let mut r = SliderResponse::default();
     if section(ui, "lut", lut::TITLE, false, |ui| {
         let (lr, import) = lut::show(ui, s, ctx.luts);
