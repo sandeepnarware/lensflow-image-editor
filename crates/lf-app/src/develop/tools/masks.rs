@@ -29,6 +29,9 @@ pub const BRUSH_HINT: &str = "Paint on the photo. Hold Alt to erase.";
 pub const ERASE: &str = "Erase";
 pub const REMOVE: &str = "Remove mask";
 pub const INVERT: &str = "Invert";
+pub const SELECT_SUBJECT: &str = "Select subject";
+pub const SELECT_SKY: &str = "Select sky";
+pub const AI_OFF: &str = "The AI tools need the studio in good standing.";
 pub const RANGE: &str = "Range";
 pub const RANGE_PICK: &str = "Alt-click the photo to pick the colour.";
 pub const NO_HUE: &str = "That spot has no colour to pick (it is grey); try a more colourful part.";
@@ -77,6 +80,10 @@ pub struct MaskTool {
     pub brush: BrushTip,
     /// The brush mask a stroke is being laid on (its last stroke).
     pub painting: Option<usize>,
+    /// The AI buttons may be used (the studio in good standing).
+    pub ai_allowed: bool,
+    /// "Select subject" (false) or "Select sky" (true) was pressed.
+    pub ai_request: Option<bool>,
 }
 
 /// A point in the square space (x × aspect), where distances mean the same both ways.
@@ -222,7 +229,7 @@ impl MaskTool {
                     .min_by(|a, b| dist(a.1, p).total_cmp(&dist(b.1, p)))
                     .map(|(g, _)| g)
                 }
-                Shape::Brush { .. } => None,
+                Shape::Brush { .. } | Shape::Image { .. } => None,
             };
             if let Some(grab) = grab {
                 self.selected = Some(i);

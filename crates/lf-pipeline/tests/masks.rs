@@ -290,3 +290,28 @@ fn a_range_narrows_the_mask_to_tones_or_colours() {
     assert_eq!(Range::colour().weight(rgb(patches[3])), 0.0);
     assert_eq!(Range::luminance().weight(rgb(patches[0])), 0.0);
 }
+
+#[test]
+fn an_ai_mask_picture_lifts_only_what_it_covers() {
+    use lf_settings::masks::{Range, encode_coverage};
+    // 8 × 4: the left half covered.
+    let values: Vec<u8> = (0..32).map(|i| if i % 8 < 4 { 255 } else { 0 }).collect();
+    let mask = Mask {
+        shape: Shape::Image {
+            what: "subject".into(),
+            width: 8,
+            height: 4,
+            data: encode_coverage(&values),
+        },
+        invert: false,
+        range: Range::All,
+        local: Local {
+            exposure: 1.0,
+            ..Local::default()
+        },
+    };
+    let plain = render(&EditSettings::default_settings());
+    let lit = render(&with(vec![mask]));
+    assert!(lit.get_pixel(W / 8, H / 2).0[0] > plain.get_pixel(W / 8, H / 2).0[0] + 30);
+    assert_eq!(lit.get_pixel(W - 10, H / 2), plain.get_pixel(W - 10, H / 2));
+}

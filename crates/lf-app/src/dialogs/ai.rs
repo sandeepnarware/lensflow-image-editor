@@ -21,6 +21,9 @@ pub const ABOUT_DENOISE: &str = "Removes noise while keeping detail. Each photo 
 pub const ABOUT_UPSCALE: &str = "Enlarges each photo with detail filled in, saved beside it as a new 16-bit TIFF. Very large results are capped at 120 megapixels.";
 pub const ABOUT_RETOUCH: &str = "Finds the faces and smooths their skin, leaving eyes, lips and hair sharp. Saved beside each photo as a new 16-bit TIFF.";
 pub const ABOUT_CUTOUT: &str = "Keeps the main subject and makes the background transparent, saved beside each photo as a PNG.";
+pub const ABOUT_SUBJECT: &str =
+    "Finds the main subject and adds it as a mask, ready for its own adjustments.";
+pub const ABOUT_SKY: &str = "Finds the sky and adds it as a mask, ready for its own adjustments.";
 
 /// "AI Denoise: 3 photos".
 pub fn title(tool: AiTool, n: usize) -> String {
@@ -117,6 +120,8 @@ impl AiDialog {
             AiTool::Upscale { .. } => ABOUT_UPSCALE,
             AiTool::Retouch { .. } => ABOUT_RETOUCH,
             AiTool::Cutout => ABOUT_CUTOUT,
+            AiTool::Mask { sky: false } => ABOUT_SUBJECT,
+            AiTool::Mask { sky: true } => ABOUT_SKY,
         };
         ui.label(RichText::new(about).color(theme::MUTED));
         ui.add_space(8.0);
@@ -141,7 +146,7 @@ impl AiDialog {
                     .labelled_by(label.id);
                 *amount = pct / 100.0;
             }
-            AiTool::Cutout => {}
+            AiTool::Cutout | AiTool::Mask { .. } => {}
         }
         ui.add_space(8.0);
         if let Some(text) = download_text(self.download) {

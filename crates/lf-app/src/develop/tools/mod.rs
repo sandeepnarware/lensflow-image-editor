@@ -718,6 +718,7 @@ impl Develop {
     /// The tool buttons and the open tool's panel (above the adjust panels).
     pub(super) fn tool_ui(&mut self, ui: &mut egui::Ui, toasts: &mut Toasts) {
         let open = self.tool();
+        let local_ai = self.local_ai;
         let mut toggle = None;
         // Wrapped: four tools are close to the side panel's width.
         ui.horizontal_wrapped(|ui| {
@@ -785,6 +786,7 @@ impl Develop {
             }
             Active::Masks(tool) => {
                 let mut refused = None;
+                tool.ai_allowed = local_ai;
                 edit.set(|s| {
                     let mut masks = Masks::from_settings(s);
                     let (o, problem) = masks_panel(ui, tool, &mut masks);
@@ -847,6 +849,15 @@ fn masks_panel(
                     Ok(()) => out = step,
                     Err(e) => problem = Some(e),
                 }
+            }
+        }
+    });
+    // AI: the subject or the sky, found in the photo (on this computer).
+    ui.horizontal_wrapped(|ui| {
+        for (label, sky) in [(masks::SELECT_SUBJECT, false), (masks::SELECT_SKY, true)] {
+            let button = ui.add_enabled(tool.ai_allowed, egui::Button::new(label));
+            if button.on_disabled_hover_text(masks::AI_OFF).clicked() {
+                tool.ai_request = Some(sky);
             }
         }
     });
@@ -1023,6 +1034,8 @@ fn paint_mask(painter: &egui::Painter, map: &SpotMap, m: &Mask, selected: bool) 
                 paint_coverage(painter, map, strokes);
             }
         }
+        // An AI mask has no handles: it follows the photo.
+        Shape::Image { .. } => {}
         Shape::Radial { .. } => {
             let ring: Vec<Pos2> = masks::radial_outline(&m.shape, map.aspect, 96)
                 .into_iter()

@@ -118,6 +118,8 @@ pub struct Library {
     current_album: Option<i64>,
     /// An AI tool's dialog, while open or running; and whether the gate allows the tools.
     ai: Option<crate::dialogs::ai::AiDialog>,
+    /// A mask with nothing to download starts on the next frame.
+    start_ai_now: bool,
     local_ai: bool,
     /// Compare, while open (it shows in place of the grid).
     compare: Option<compare::Compare>,
@@ -222,6 +224,7 @@ impl Library {
             current_folder: None,
             current_album: None,
             ai: None,
+            start_ai_now: false,
             local_ai: false,
             compare: None,
             compare_generation: 0,
@@ -1307,6 +1310,9 @@ impl Library {
                 .exact_size(histogram_panel_width())
                 .frame(frame)
                 .show(ui, |ui| develop.side_ui(ui, photo, env.toasts));
+        }
+        if let Some(sky) = self.develop.take_ai_mask_request() {
+            self.open_ai(crate::ai_job::AiTool::Mask { sky });
         }
         if self.develop.take_lut_import() {
             self.pick_lut(env);

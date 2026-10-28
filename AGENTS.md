@@ -139,6 +139,7 @@ cargo test --workspace                   # includes the 228-render parity suite
   Export presets (`dialogs/export_presets.rs`, `prefs.export_presets`) and the `{title}` file-name token.
   Mask ranges: `lf_settings::masks::Range` (brightness or colour), `range_weight` in `develop.wgsl`.
   AI tools: `lf-ai`, `ai_job.rs`, `dialogs/ai.rs`, `library/ai_ui.rs` (AI tab: Denoise, Upscale, Retouch, Remove background).
+  AI masks: `Shape::Image` (RLE + base64 coverage) in `lf_settings::masks`, drawn into the brush layers; `ai_job::mask`.
   LUT looks: `lf_settings::lut` (`.cube` parser, `desktop.lut`), `lf_pipeline::lut` (process-wide
   registry, 3D texture at bindings 15–16, `lut_amount` uniform), `luts.rs` (`.lensflow/luts/`).
   Merge to HDR: `lf-merge` (align + fuse), `merge_job.rs` (16-bit TIFF beside the first frame),

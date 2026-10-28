@@ -42,6 +42,112 @@ pub enum Shape {
     /// Painted by hand: the strokes, in the order they were made (an erasing stroke takes
     /// away what the ones before it painted).
     Brush { strokes: Vec<Stroke> },
+    /// Found by AI ("subject", "sky"): coverage as a picture of the photo (lens-corrected,
+    /// before crop and turn), `width` × `height` 8-bit values, run-length coded then base64
+    /// ([`encode_coverage`]).
+    Image {
+        what: String,
+        width: u32,
+        height: u32,
+        data: String,
+    },
+}
+
+/// The longest edge an AI mask's picture keeps (the brush layers' size).
+pub const MAX_IMAGE_EDGE: u32 = 512;
+
+/// `values` (`width` × `height`, row by row) as an AI mask's `data`: runs of (count, value)
+/// pairs, counts 1..=255, in base64. A mask is mostly long runs of 0 and 255, so it stays
+/// small in the sidecar.
+pub fn encode_coverage(values: &[u8]) -> String {
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < values.len() {
+        let v = values[i];
+        let mut n = 1;
+        while n < 255 && i + n < values.len() && values[i + n] == v {
+            n += 1;
+        }
+        runs.push(n as u8);
+        runs.push(v);
+        i += n;
+    }
+    base64_encode(&runs)
+}
+
+/// The coverage an AI mask's `data` holds, if it reads as exactly `len` values.
+pub fn decode_coverage(data: &str, len: usize) -> Option<Vec<u8>> {
+    let runs = base64_decode(data)?;
+    if runs.len() % 2 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(len);
+    for pair in runs.chunks(2) {
+        if pair[0] == 0 || out.len() + pair[0] as usize > len {
+            return None;
+        }
+        out.extend(std::iter::repeat_n(pair[1], pair[0] as usize));
+    }
+    (out.len() == len).then_some(out)
+}
+
+const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn base64_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for k in 0..4 {
+            if k <= chunk.len() {
+                out.push(B64[((n >> (18 - 6 * k)) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let text = text.trim_end_matches('=');
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let mut acc = 0u32;
+    let mut bits = 0;
+    for c in text.bytes() {
+        let v = B64.iter().position(|&b| b == c)? as u32;
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// An AI mask's coverage at photo fraction `(u, v)`, bilinear, 0..1.
+pub fn image_weight(width: u32, height: u32, values: &[u8], (u, v): (f64, f64)) -> f64 {
+    if width == 0 || height == 0 || values.len() != (width * height) as usize {
+        return 0.0;
+    }
+    let (w, h) = (f64::from(width), f64::from(height));
+    let x = (u * w - 0.5).clamp(0.0, w - 1.0);
+    let y = (v * h - 0.5).clamp(0.0, h - 1.0);
+    let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+    let (x1, y1) = (
+        (x0 + 1).min(width as usize - 1),
+        (y0 + 1).min(height as usize - 1),
+    );
+    let (fx, fy) = (x - x0 as f64, y - y0 as f64);
+    let at = |xx: usize, yy: usize| f64::from(values[yy * width as usize + xx]) / 255.0;
+    let top = at(x0, y0) * (1.0 - fx) + at(x1, y0) * fx;
+    let bottom = at(x0, y1) * (1.0 - fx) + at(x1, y1) * fx;
+    top * (1.0 - fy) + bottom * fy
 }
 
 /// The most strokes a brush mask keeps, and the most points one stroke keeps: a sidecar
@@ -448,10 +554,12 @@ impl Mask {
 
     /// What the mask is called in the panel.
     pub fn kind_name(&self) -> &'static str {
-        match self.shape {
+        match &self.shape {
             Shape::Linear { .. } => "Linear gradient",
             Shape::Radial { .. } => "Radial gradient",
             Shape::Brush { .. } => "Brush",
+            Shape::Image { what, .. } if what == "sky" => "Sky",
+            Shape::Image { .. } => "Subject",
         }
     }
 
@@ -513,6 +621,27 @@ impl Mask {
                     .take(MAX_STROKES)
                     .collect(),
             },
+            Shape::Image {
+                what,
+                width,
+                height,
+                data,
+            } => {
+                // A picture that does not read as its size is no mask at all.
+                if width == 0
+                    || height == 0
+                    || width.max(height) > MAX_IMAGE_EDGE
+                    || decode_coverage(&data, (width * height) as usize).is_none()
+                {
+                    return None;
+                }
+                Shape::Image {
+                    what,
+                    width,
+                    height,
+                    data,
+                }
+            }
         };
         self.local = self.local.clamped();
         self.range = self.range.clamped();
@@ -565,6 +694,13 @@ pub fn weight(mask: &Mask, (u, v): (f64, f64), aspect: f64) -> f64 {
     let p = (u * aspect, v);
     let w = match &mask.shape {
         Shape::Brush { strokes } => brush_weight(strokes, (u, v), aspect),
+        Shape::Image {
+            width,
+            height,
+            data,
+            ..
+        } => decode_coverage(data, (*width * *height) as usize)
+            .map_or(0.0, |values| image_weight(*width, *height, &values, (u, v))),
         &Shape::Linear { x0, y0, x1, y1 } => {
             let a = (x0 * aspect, y0);
             let d = (x1 * aspect - a.0, y1 - a.1);
@@ -598,6 +734,45 @@ fn smoothstep(e0: f64, e1: f64, x: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ai_mask_round_trips_and_samples_between_pixels() {
+        let values: Vec<u8> = (0..6u8).map(|i| if i % 3 == 0 { 0 } else { 255 }).collect();
+        let data = encode_coverage(&values);
+        assert_eq!(decode_coverage(&data, 6), Some(values.clone()));
+        assert_eq!(decode_coverage(&data, 7), None);
+        assert_eq!(decode_coverage("!!", 6), None);
+        let long = vec![7u8; 600];
+        assert_eq!(decode_coverage(&encode_coverage(&long), 600), Some(long));
+        // 3 × 2: left column clear, the rest covered.
+        assert_eq!(image_weight(3, 2, &values, (0.1, 0.25)), 0.0);
+        assert_eq!(image_weight(3, 2, &values, (0.9, 0.75)), 1.0);
+        let half = image_weight(3, 2, &values, (1.0 / 3.0, 0.25));
+        assert!((half - 0.5).abs() < 1e-9, "{half}");
+        let m = Mask {
+            shape: Shape::Image {
+                what: "sky".into(),
+                width: 3,
+                height: 2,
+                data,
+            },
+            invert: false,
+            range: Range::All,
+            local: Local::default(),
+        };
+        assert_eq!(m.kind_name(), "Sky");
+        assert!(m.clone().clamped().is_some());
+        let broken = Mask {
+            shape: Shape::Image {
+                what: "subject".into(),
+                width: 4,
+                height: 2,
+                data: encode_coverage(&values),
+            },
+            ..m
+        };
+        assert!(broken.clamped().is_none());
+    }
 
     #[test]
     fn a_range_reads_back_safe_and_old_masks_take_the_whole_shape() {

@@ -14,6 +14,7 @@ impl Library {
     /// The app passes the gate's answer each frame.
     pub fn set_local_ai(&mut self, allowed: bool) {
         self.local_ai = allowed;
+        self.develop.set_local_ai(allowed);
     }
 
     pub fn ai(&self) -> Option<&AiDialog> {
@@ -49,9 +50,18 @@ impl Library {
         }
         let download = self.ai_engine().to_download(&tool.models());
         self.ai = Some(AiDialog::new(ids, tool, download));
+        // A mask with nothing to download starts at once.
+        if matches!(tool, AiTool::Mask { .. }) && download == 0 {
+            self.start_ai_now = true;
+        }
     }
 
     pub(super) fn ai_dialog(&mut self, ctx: &egui::Context, env: &mut Env) {
+        if std::mem::take(&mut self.start_ai_now)
+            && let Some(tool) = self.ai.as_ref().map(|d| d.tool)
+        {
+            self.start_ai(tool, env);
+        }
         let Some(dialog) = &mut self.ai else {
             return;
         };
@@ -121,7 +131,25 @@ impl Library {
                 self.rescan(&folder, env);
             }
         }
-        if let Some(dialog) = &mut self.ai {
+        // AI masks go to the open photo; the dialog closes when that was all it did.
+        let mut only_masks = false;
+        if let Ok(report) = &result {
+            for (id, shape) in &report.masks {
+                if self.mode == Mode::Develop(*id) {
+                    self.develop.add_ai_mask(shape.clone(), env.toasts);
+                } else {
+                    env.toasts.push(
+                        crate::toast::Level::Info,
+                        "The mask was not added: its photo is no longer open.",
+                    );
+                }
+            }
+            only_masks =
+                !report.masks.is_empty() && report.written.is_empty() && report.failed.is_empty();
+        }
+        if only_masks {
+            self.ai = None;
+        } else if let Some(dialog) = &mut self.ai {
             dialog.stage = Stage::Done(result);
         }
     }

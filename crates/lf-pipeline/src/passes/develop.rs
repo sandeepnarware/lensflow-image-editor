@@ -107,7 +107,7 @@ impl MaskUniform {
         let g = wb_gains(l.temperature, l.tint);
         let y = 0.2126 * g[0] + 0.7152 * g[1] + 0.0722 * g[2];
         let (kind, shape, turn, inner) = match m.shape {
-            Shape::Brush { .. } => (
+            Shape::Brush { .. } | Shape::Image { .. } => (
                 2.0,
                 [layer as f32, 0.0, 0.0, 0.0],
                 [1.0, 0.0, 0.0, 0.0],

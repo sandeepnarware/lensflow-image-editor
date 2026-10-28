@@ -11,7 +11,7 @@ use crate::error::PipelineError;
 use crate::gpu::Gpu;
 use crate::texture::Target;
 use lf_settings::EditSettings;
-use lf_settings::masks::{MAX_MASKS, Masks, Shape, rasterize};
+use lf_settings::masks::{MAX_MASKS, Masks, Shape, decode_coverage, image_weight, rasterize};
 
 /// The long edge of one mask's layer, in pixels.
 pub const LAYER_EDGE: u32 = 512;
@@ -58,23 +58,25 @@ impl BrushTexture {
         if !masks
             .0
             .iter()
-            .any(|m| matches!(m.shape, Shape::Brush { .. }))
+            .any(|m| matches!(m.shape, Shape::Brush { .. } | Shape::Image { .. }))
         {
             return Ok(());
         }
         let (lw, lh) = BrushTexture::layer_size(gpu, width, height);
-        let layers: Vec<Option<&Vec<_>>> = masks
+        // Each layer's source: brush strokes, or an AI mask's picture.
+        let layers: Vec<Option<&Shape>> = masks
             .0
             .iter()
             .map(|m| match &m.shape {
-                Shape::Brush { strokes } => Some(strokes),
+                s @ (Shape::Brush { .. } | Shape::Image { .. }) => Some(s),
                 _ => None,
             })
             .collect();
         let key = format!(
             "{lw}x{lh}:{}",
-            serde_json::to_string(&layers).expect("strokes serialise")
+            serde_json::to_string(&layers).expect("shapes serialise")
         );
+
         if key == self.key {
             return Ok(());
         }
@@ -88,15 +90,26 @@ impl BrushTexture {
         }
         let layer = (lw * lh) as usize;
         let mut data = vec![0u8; layer * MAX_MASKS];
-        for (i, strokes) in layers.iter().enumerate().take(MAX_MASKS) {
-            if let Some(strokes) = strokes {
-                data[i * layer..(i + 1) * layer].copy_from_slice(&rasterize(
-                    strokes,
-                    lw as usize,
-                    lh as usize,
-                ));
+        for (i, shape) in layers.iter().enumerate().take(MAX_MASKS) {
+            let out = &mut data[i * layer..(i + 1) * layer];
+            match shape {
+                Some(Shape::Brush { strokes }) => {
+                    out.copy_from_slice(&rasterize(strokes, lw as usize, lh as usize));
+                }
+                Some(Shape::Image {
+                    width,
+                    height,
+                    data: coded,
+                    ..
+                }) => {
+                    if let Some(values) = decode_coverage(coded, (*width * *height) as usize) {
+                        resample(*width, *height, &values, lw, lh, out);
+                    }
+                }
+                _ => {}
             }
         }
+
         gpu.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.target.texture,
@@ -118,5 +131,19 @@ impl BrushTexture {
         );
         self.key = key;
         Ok(())
+    }
+}
+
+/// An AI mask's `width` × `height` coverage drawn into a `lw` × `lh` layer (bilinear).
+fn resample(width: u32, height: u32, values: &[u8], lw: u32, lh: u32, out: &mut [u8]) {
+    for y in 0..lh {
+        for x in 0..lw {
+            let p = (
+                (f64::from(x) + 0.5) / f64::from(lw),
+                (f64::from(y) + 0.5) / f64::from(lh),
+            );
+            let w = image_weight(width, height, values, p);
+            out[(y * lw + x) as usize] = (w * 255.0).round() as u8;
+        }
     }
 }

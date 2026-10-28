@@ -29,6 +29,8 @@ pub enum AiTool {
     Retouch { amount: f32 },
     /// The main subject on a transparent background.
     Cutout,
+    /// A mask of the subject (or the sky) for the open photo, added in Develop.
+    Mask { sky: bool },
 }
 
 impl AiTool {
@@ -39,6 +41,8 @@ impl AiTool {
             AiTool::Upscale { .. } => lf_ai::restore::UPSCALE_MODELS.to_vec(),
             AiTool::Retouch { .. } => lf_ai::faces::FACE_MODELS.to_vec(),
             AiTool::Cutout => lf_ai::segment::SUBJECT_MODELS.to_vec(),
+            AiTool::Mask { sky: false } => lf_ai::segment::SUBJECT_MODELS.to_vec(),
+            AiTool::Mask { sky: true } => lf_ai::segment::SKY_MODELS.to_vec(),
         }
     }
 
@@ -49,6 +53,8 @@ impl AiTool {
             AiTool::Upscale { .. } => "AI Upscale",
             AiTool::Retouch { .. } => "Retouch portrait",
             AiTool::Cutout => "Remove background",
+            AiTool::Mask { sky: false } => "Select subject",
+            AiTool::Mask { sky: true } => "Select sky",
         }
     }
 
@@ -59,6 +65,7 @@ impl AiTool {
             AiTool::Upscale { factor } => (format!("Upscaled-{factor}x"), "tif"),
             AiTool::Retouch { .. } => ("Retouched".into(), "tif"),
             AiTool::Cutout => ("Cutout".into(), "png"),
+            AiTool::Mask { .. } => (String::new(), ""),
         }
     }
 }
@@ -83,6 +90,8 @@ pub struct Report {
     pub written: Vec<PathBuf>,
     /// The photo's file name and why.
     pub failed: Vec<(String, String)>,
+    /// AI masks found: the photo and the mask's shape.
+    pub masks: Vec<(i64, lf_settings::masks::Shape)>,
 }
 
 /// The AI folder beside the frame cache (`<cache>/ai`).
@@ -150,11 +159,18 @@ pub fn run(
                 total,
             });
         };
-        match one(&gpu, engine, &catalog, id, &row.path, tool, &mut tick, stop) {
-            Ok(path) => {
+        let result = if let AiTool::Mask { sky } = tool {
+            mask(&gpu, engine, &catalog, id, &row.path, sky).map(|shape| {
+                report.masks.push((id, shape));
+            })
+        } else {
+            one(&gpu, engine, &catalog, id, &row.path, tool, &mut tick, stop).map(|path| {
                 log::info!("{} wrote {}", tool.name(), path.display());
                 report.written.push(path);
-            }
+            })
+        };
+        match result {
+            Ok(()) => {}
             Err(e) if stop.load(Ordering::SeqCst) => return Err(e),
             Err(e) => {
                 log::warn!("{} failed on {name}: {e}", tool.name());
@@ -218,6 +234,7 @@ fn one(
             let done = lf_ai::faces::smooth_skin(&img, &faces, amount);
             write_tiff16(&out, &done)?;
         }
+        AiTool::Mask { .. } => return Err("Not a file.".to_owned()),
         AiTool::Cutout => {
             let long = img.w.max(img.h).max(1);
             let k = (1024.0 / long as f64).min(1.0);
@@ -239,6 +256,59 @@ fn one(
     }
     progress(1, 1);
     Ok(out)
+}
+
+/// An AI mask of the subject (or the sky) of photo `id`: found on the photo as edited but
+/// before its crop and turn (lens corrections kept: masks live in that space), at most
+/// [`lf_settings::masks::MAX_IMAGE_EDGE`] on its long side.
+fn mask(
+    gpu: &Arc<Gpu>,
+    engine: &Engine,
+    catalog: &Catalog,
+    id: i64,
+    path: &Path,
+    sky: bool,
+) -> Result<lf_settings::masks::Shape, String> {
+    let mut settings = edits::get_settings(catalog, id)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(EditSettings::default_settings);
+    settings.rotate = lf_settings::Rotate::R0;
+    settings.flip_h = false;
+    settings.flip_v = false;
+    settings.angle = 0.0;
+    settings.crop = lf_settings::Crop {
+        x: 0.0,
+        y: 0.0,
+        w: 1.0,
+        h: 1.0,
+    };
+    let img = render(gpu, path, &settings, 1024)?;
+    let edge = f64::from(lf_settings::masks::MAX_IMAGE_EDGE);
+    let k = (edge / img.w.max(img.h) as f64).min(1.0);
+    let (w, h) = (
+        ((img.w as f64 * k).round() as usize).max(1),
+        ((img.h as f64 * k).round() as usize).max(1),
+    );
+    let target = if sky {
+        lf_ai::segment::Target::Sky
+    } else {
+        lf_ai::segment::Target::Subject
+    };
+    let found = lf_ai::segment::mask(engine, target, &img, w, h).map_err(|e| e.to_string())?;
+    let values: Vec<u8> = found.to_luma8().into_raw();
+    if values.iter().all(|&v| v < 13) {
+        return Err(if sky {
+            "No sky was found.".to_owned()
+        } else {
+            "No subject was found.".to_owned()
+        });
+    }
+    Ok(lf_settings::masks::Shape::Image {
+        what: if sky { "sky" } else { "subject" }.to_owned(),
+        width: w as u32,
+        height: h as u32,
+        data: lf_settings::masks::encode_coverage(&values),
+    })
 }
 
 /// The photo at `path` with `settings`, at full size (`max_edge` at most), as f32 RGB.

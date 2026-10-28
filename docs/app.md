@@ -392,6 +392,17 @@ Whole shape / Brightness range / Colour range with their sliders, and Alt-click 
 with a colour range picks the hue there (`Develop::pick_range_colour`, from the frame's
 sample).
 
+AI masks: the panel's Select subject and Select sky (enabled with `Decision::local_ai_allowed`)
+set `MaskTool::ai_request`; the library opens the AI dialog with `AiTool::Mask` (started at once
+when nothing needs downloading). `ai_job::mask` renders the photo with its edits but no crop,
+turn or flip (lens corrections kept: masks live in that space) at 1024 px, runs IS-Net or
+SkySeg, and returns `Shape::Image { what, width, height, data }` at most 512 px long:
+8-bit coverage run-length coded and base64 (`masks::encode_coverage`), so the sidecar stays
+small. `Develop::add_ai_mask` adds it as one history step. On the GPU it shares the brush
+texture: `BrushTexture` resamples the picture into the mask's layer and the shader reads it as
+kind 2; `masks::weight` samples it on the CPU. A picture that does not decode to its size is
+dropped when read.
+
 ### White balance and Auto tone
 
 Colour has a white-balance list (As shot, Auto) and a "Pick neutral" eyedropper (`W`, also

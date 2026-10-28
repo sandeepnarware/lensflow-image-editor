@@ -125,6 +125,8 @@ pub struct Develop {
     before_toggled: bool,
     /// View → Clipping (`J`): clipped highlights red, blocked shadows blue, in the preview.
     clipping: bool,
+    /// The AI tools may be used (the library passes the gate's answer).
+    local_ai: bool,
     before_held: bool,
     /// View → Fit, 100 % or `Space`, applied when the preview is next laid out.
     zoom_asked: Option<Action>,
@@ -161,6 +163,7 @@ impl Develop {
             viewport: Viewport::default(),
             before_toggled: false,
             clipping: false,
+            local_ai: false,
             before_held: false,
             zoom_asked: None,
             preview: None,
@@ -376,6 +379,52 @@ impl Develop {
     /// Before/after is showing the photo as it was.
     pub fn before(&self) -> bool {
         self.before_toggled || self.before_held
+    }
+
+    /// Whether the AI buttons may be used.
+    pub fn set_local_ai(&mut self, allowed: bool) {
+        self.local_ai = allowed;
+    }
+
+    /// "Select subject" (false) or "Select sky" (true) pressed since the last call.
+    pub fn take_ai_mask_request(&mut self) -> Option<bool> {
+        match &mut self.tools.active {
+            Some(tools::Active::Masks(tool)) => tool.ai_request.take(),
+            _ => None,
+        }
+    }
+
+    /// Adds an AI mask (found for the open photo) as a new mask, one history step, picked in
+    /// the Masks tool when it is open.
+    pub fn add_ai_mask(&mut self, shape: lf_settings::masks::Shape, toasts: &mut Toasts) {
+        use lf_settings::masks::{Local, Mask, Masks, Range};
+        let mask = Mask {
+            shape,
+            invert: false,
+            range: Range::All,
+            local: Local::default(),
+        };
+        self.commit(toasts);
+        let mut refused = None;
+        let mut picked = None;
+        self.edit(|s| {
+            let mut list = Masks::from_settings(s);
+            if list.0.len() >= lf_settings::masks::MAX_MASKS {
+                refused = Some(tools::masks::FULL);
+                return;
+            }
+            list.0.push(mask);
+            picked = Some(list.0.len() - 1);
+            list.write_into(s);
+        });
+        if let Some(problem) = refused {
+            toasts.push(Level::Warning, problem);
+            return;
+        }
+        if let (Some(tools::Active::Masks(tool)), Some(i)) = (&mut self.tools.active, picked) {
+            tool.selected = Some(i);
+        }
+        self.commit(toasts);
     }
 
     /// Whether the preview shows clipping.
