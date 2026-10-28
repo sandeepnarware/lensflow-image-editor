@@ -200,6 +200,83 @@ fn refine(a: &Grey, b: &Grey, dx: i32, dy: i32) -> (i32, i32) {
     (best.1, best.2)
 }
 
+/// A panorama of `rows` rows: the frames come row by row (top row first, each row in order,
+/// either direction), as many in each row (the last may have fewer). Each row is stitched as
+/// [`stitch`] does; the rows, cut to a common size, are then stitched to each other by
+/// turning them a quarter so they lie side by side, and turning the result back.
+pub fn stitch_rows(
+    frames: &[Rgb],
+    rows: usize,
+    mut progress: impl FnMut(usize, usize),
+) -> Result<Rgb, MergeError> {
+    if rows <= 1 {
+        return stitch(frames, progress);
+    }
+    if frames.len() < 2 {
+        return Err(MergeError::TooFew);
+    }
+    let per = frames.len().div_ceil(rows);
+    let chunks: Vec<&[Rgb]> = frames.chunks(per).collect();
+    let total = chunks.len() + 1;
+    progress(0, total);
+    let mut strips = Vec::with_capacity(chunks.len());
+    for (i, chunk) in chunks.iter().enumerate() {
+        strips.push(if chunk.len() == 1 {
+            chunk[0].clone()
+        } else {
+            stitch(chunk, |_, _| {})?
+        });
+        progress(i + 1, total);
+    }
+    if strips.len() == 1 {
+        return Ok(strips.remove(0));
+    }
+    // A common size: the smallest width and height, each strip cut about its middle.
+    let w = strips.iter().map(|s| s.w).min().unwrap_or(0);
+    let h = strips.iter().map(|s| s.h).min().unwrap_or(0);
+    let turned: Vec<Rgb> = strips.iter().map(|s| turn_cw(&middle(s, w, h))).collect();
+    let tall = stitch(&turned, |_, _| {})?;
+    progress(total, total);
+    Ok(turn_ccw(&tall))
+}
+
+/// The `w` × `h` middle of `img`.
+fn middle(img: &Rgb, w: usize, h: usize) -> Rgb {
+    let (x0, y0) = ((img.w - w) / 2, (img.h - h) / 2);
+    let mut out = Rgb::new(w, h);
+    for y in 0..h {
+        let from = ((y0 + y) * img.w + x0) * 3;
+        out.data[y * w * 3..(y + 1) * w * 3].copy_from_slice(&img.data[from..from + w * 3]);
+    }
+    out
+}
+
+/// `img` turned a quarter clockwise.
+fn turn_cw(img: &Rgb) -> Rgb {
+    let mut out = Rgb::new(img.h, img.w);
+    for y in 0..img.h {
+        for x in 0..img.w {
+            let (nx, ny) = (img.h - 1 - y, x);
+            let (s, d) = ((y * img.w + x) * 3, (ny * out.w + nx) * 3);
+            out.data[d..d + 3].copy_from_slice(&img.data[s..s + 3]);
+        }
+    }
+    out
+}
+
+/// `img` turned a quarter anticlockwise.
+fn turn_ccw(img: &Rgb) -> Rgb {
+    let mut out = Rgb::new(img.h, img.w);
+    for y in 0..img.h {
+        for x in 0..img.w {
+            let (nx, ny) = (y, img.w - 1 - x);
+            let (s, d) = ((y * img.w + x) * 3, (ny * out.w + nx) * 3);
+            out.data[d..d + 3].copy_from_slice(&img.data[s..s + 3]);
+        }
+    }
+    out
+}
+
 /// Lines up and blends `frames` (neighbours in order, all one size) into one panorama.
 /// `progress(done, total)` as it goes.
 pub fn stitch(frames: &[Rgb], mut progress: impl FnMut(usize, usize)) -> Result<Rgb, MergeError> {
@@ -511,6 +588,29 @@ mod tests {
             }
         }
         assert!(best < 0.05, "{best}");
+    }
+
+    #[test]
+    fn two_rows_of_two_stitch_back_into_the_scene() {
+        let world = scene(700, 520);
+        // 400 × 300 frames, 300 apart across and 220 apart down.
+        let frames = vec![
+            crop(&world, 0, 0, 400, 300, 1.0),
+            crop(&world, 300, 0, 400, 300, 1.0),
+            crop(&world, 0, 220, 400, 300, 1.0),
+            crop(&world, 300, 220, 400, 300, 1.0),
+        ];
+        let pano = stitch_rows(&frames, 2, |_, _| {}).unwrap();
+        assert!((pano.w as i32 - 700).abs() <= 12, "{}x{}", pano.w, pano.h);
+        assert!((pano.h as i32 - 520).abs() <= 12, "{}x{}", pano.w, pano.h);
+    }
+
+    #[test]
+    fn a_quarter_turn_and_back_is_the_same_picture() {
+        let img = scene(30, 20);
+        let back = turn_ccw(&turn_cw(&img));
+        assert_eq!(back, img);
+        assert_eq!((turn_cw(&img).w, turn_cw(&img).h), (20, 30));
     }
 
     #[test]

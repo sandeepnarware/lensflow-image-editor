@@ -34,7 +34,7 @@ impl MergeKind {
     pub fn max_frames(self) -> usize {
         match self {
             MergeKind::Hdr => 7,
-            MergeKind::Panorama => 12,
+            MergeKind::Panorama => 24,
             MergeKind::Focus => 30,
         }
     }
@@ -54,6 +54,24 @@ impl MergeKind {
             MergeKind::Hdr => "HDR",
             MergeKind::Panorama => "Pano",
             MergeKind::Focus => "Focus",
+        }
+    }
+}
+
+/// How a merge is made, past its kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MergeOptions {
+    /// HDR: leave out what moved between the frames.
+    pub deghost: bool,
+    /// Panorama: how many rows the photos make (they come row by row).
+    pub rows: usize,
+}
+
+impl Default for MergeOptions {
+    fn default() -> MergeOptions {
+        MergeOptions {
+            deghost: true,
+            rows: 1,
         }
     }
 }
@@ -101,7 +119,7 @@ pub fn run(
     root: &Path,
     ids: &[i64],
     kind: MergeKind,
-    deghost: bool,
+    options: MergeOptions,
     mut progress: impl FnMut(usize, usize),
     stop: &AtomicBool,
 ) -> Result<PathBuf, String> {
@@ -118,7 +136,13 @@ pub fn run(
     // Steps: each frame, lining up, blending, writing.
     let total = ids.len() + 3;
     progress(0, total);
-    let edge = kind.edge().min(gpu.max_edge());
+    // A large panorama holds every frame at once: more than twelve are worked smaller.
+    let edge = if kind == MergeKind::Panorama && ids.len() > 12 {
+        2000
+    } else {
+        kind.edge()
+    }
+    .min(gpu.max_edge());
     let settings = EditSettings::default_settings();
     let mut frames: Vec<Held> = Vec::with_capacity(ids.len());
     let mut first: Option<PathBuf> = None;
@@ -169,12 +193,13 @@ pub fn run(
         return Err("The merge was stopped.".to_owned());
     }
     let merged = match kind {
-        MergeKind::Hdr => fuse_bracket(frames, deghost)?,
+        MergeKind::Hdr => fuse_bracket(frames, options.deghost)?,
         MergeKind::Focus => stack(frames)?,
         MergeKind::Panorama => {
             let rgb: Vec<Rgb> = frames.iter().map(Held::rgb).collect();
             drop(frames);
-            lf_merge::panorama::stitch(&rgb, |_, _| {}).map_err(|e| e.to_string())?
+            lf_merge::panorama::stitch_rows(&rgb, options.rows.max(1), |_, _| {})
+                .map_err(|e| e.to_string())?
         }
     };
     progress(ids.len() + 2, total);
@@ -303,7 +328,7 @@ mod tests {
             dir.path(),
             &ids,
             MergeKind::Hdr,
-            true,
+            MergeOptions::default(),
             |d, t| steps.push((d, t)),
             &AtomicBool::new(false),
         )
@@ -332,7 +357,7 @@ mod tests {
                 dir.path(),
                 &[1],
                 MergeKind::Hdr,
-                true,
+                MergeOptions::default(),
                 |_, _| {},
                 &stop
             )
@@ -344,7 +369,7 @@ mod tests {
                 dir.path(),
                 &[1; 8],
                 MergeKind::Hdr,
-                true,
+                MergeOptions::default(),
                 |_, _| {},
                 &stop
             )

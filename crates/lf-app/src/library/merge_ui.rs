@@ -46,7 +46,10 @@ impl Library {
         dialog.started();
         let ids = dialog.ids.clone();
         let kind = dialog.kind;
-        let deghost = dialog.deghost;
+        let options = crate::merge_job::MergeOptions {
+            deghost: dialog.deghost,
+            rows: dialog.rows,
+        };
         let stop = dialog.stop.clone();
         let gpu = self.gpu.clone();
         let reporter = env.jobs.reporter();
@@ -57,7 +60,7 @@ impl Library {
                 &root,
                 &ids,
                 kind,
-                deghost,
+                options,
                 |done, total| reporter.send(Msg::MergeProgress { done, total }),
                 &stop,
             );

@@ -14,8 +14,9 @@ pub const CANCEL: &str = "Cancel";
 pub const CLOSE: &str = "Close";
 pub const STOP: &str = "Stop";
 pub const DEGHOST: &str = "Remove ghosts (people or branches that moved)";
+pub const ROWS: &str = "Rows";
 pub const ABOUT_HDR: &str = "The photos are lined up and blended, each part taken from the frames where it is best exposed. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
-pub const ABOUT_PANORAMA: &str = "The photos are stitched in their order in the grid, left to right or right to left, one row. Neighbours should overlap by a third or so. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
+pub const ABOUT_PANORAMA: &str = "The photos are stitched in their order in the grid, left to right or right to left. For several rows, select them row by row, top row first. Neighbours should overlap by a third or so. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
 pub const ABOUT_FOCUS: &str = "The photos (one subject, focused at different depths) are lined up and each part is taken from the photo where it is sharp. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
 
 /// "Merge 3 photos to HDR", "Merge 5 photos to a panorama".
@@ -48,6 +49,8 @@ pub struct MergeDialog {
     pub stop: Arc<AtomicBool>,
     /// HDR: leave out what moved between the frames (on unless turned off).
     pub deghost: bool,
+    /// Panorama: how many rows the photos make.
+    pub rows: usize,
 }
 
 impl MergeDialog {
@@ -58,6 +61,7 @@ impl MergeDialog {
             stage: Stage::Confirm,
             stop: Arc::new(AtomicBool::new(false)),
             deghost: true,
+            rows: 1,
         }
     }
 
@@ -93,6 +97,15 @@ impl MergeDialog {
                         MergeKind::Focus => ABOUT_FOCUS,
                     };
                     ui.label(RichText::new(about).color(theme::MUTED));
+                    if self.kind == MergeKind::Panorama {
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            let label = ui.label(ROWS);
+                            ui.add(egui::Slider::new(&mut self.rows, 1..=4))
+                                .labelled_by(label.id)
+                                .on_hover_text("More than one: the photos come row by row, top row first");
+                        });
+                    }
                     if self.kind == MergeKind::Hdr {
                         ui.add_space(6.0);
                         ui.checkbox(&mut self.deghost, DEGHOST)
@@ -158,7 +171,7 @@ mod tests {
         assert!(!can_merge(MergeKind::Hdr, 1));
         assert!(can_merge(MergeKind::Hdr, 2) && can_merge(MergeKind::Hdr, 7));
         assert!(!can_merge(MergeKind::Hdr, 8));
-        assert!(can_merge(MergeKind::Panorama, 12));
+        assert!(can_merge(MergeKind::Panorama, 24));
         let mut d = MergeDialog::new(vec![1, 2, 3], MergeKind::Hdr);
         d.started();
         assert_eq!(d.stage, Stage::Running { done: 0, total: 6 });

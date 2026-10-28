@@ -102,8 +102,8 @@ Merge to HDR (`Ctrl+H`, File → Merge): two to seven bracketed photos lined up 
 blended into one natural-looking 16-bit TIFF beside the first, catalogued and ready to edit.
 "Remove ghosts" (on by default) shows something that moved between the shots once, as in
 the middle photo, instead of as a faint double.
-Merge to panorama (`Ctrl+M`): a row of up to twelve overlapping photos stitched into one
-wide photo (single row, left to right or right to left).
+Merge to panorama (`Ctrl+M`): up to 24 overlapping photos stitched into one wide photo,
+in one row or up to four (choose Rows, and select them row by row, top row first).
 Focus stack (File → Merge): up to thirty photos of one subject focused at different depths,
 lined up and blended so each part comes from the photo where it is sharp.
 

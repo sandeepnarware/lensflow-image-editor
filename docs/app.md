@@ -734,6 +734,15 @@ differs by more than about 40 % (|ln| > 0.35, clipped pixels not judged) its wei
 away through a grown and softened ghost map (`ghost_map`), so a moving subject comes from the
 reference alone. The reference keeps a small weight everywhere, so no pixel is left with none.
 
+### Panorama rows
+
+The panorama dialog's Rows (1 to 4, `MergeOptions::rows`) takes the selection row by row, top row
+first, as many in each row (the last may have fewer). `lf_merge::panorama::stitch_rows`
+stitches each row as before, cuts the strips to their common size about their middles, turns
+them a quarter clockwise so they lie side by side, stitches those, and turns the result back.
+A panorama takes up to 24 photos; past 12 each is worked at 2000 px rather than 3000, since
+every frame is held at once.
+
 ### Focus stack
 
 File → Merge → Focus stack (`Action::MergeFocus`, `MergeKind::Focus`: 2 to 30 frames, worked at
