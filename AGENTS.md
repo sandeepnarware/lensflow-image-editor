@@ -20,6 +20,7 @@ and 2d tasks 1–2 are built; packaging tasks 3–5 are in flight.
 | `lf-raw` | Magic-byte kind sniffing, rawler decode, demosaic (bilinear/AHD/X-Trans/preview bin), WB + colour + highlight handling, f16 headroom, EXIF, frame cache, `lf-render` example. | `src/open.rs`, `src/develop.rs` |
 | `lf-grade` | CPU maths for "Match a reference": measure, correct, calibrate (injected renderer), strength/exposure, contact sheet. | `src/lib.rs` |
 | `lf-merge` | CPU merging: exposure fusion (Mertens) through Laplacian pyramids, median-threshold-bitmap alignment; panoramas (`panorama.rs`: cylinder fit, NCC registration, gain and feather blending). No GPU, no catalogue. | `src/lib.rs` |
+| `lf-ai` | Local AI through ONNX Runtime (loaded at run time, never linked): pinned downloads (`assets.rs`), tiles, denoise and upscale (`restore.rs`), subject and sky masks (`segment.rs`), removal (`inpaint.rs`), faces and skin retouch (`faces.rs`). | `src/lib.rs`, `src/assets.rs` |
 | `lf-account` | Blocking reqwest/rustls LensFlow client: sign-in + 2FA, token store, entitlement gate/offline grace, desktop grade, presets sync, download link. | `src/client.rs`, `src/entitlement.rs` |
 | `lf-catalog` | SQLite catalogue (bundled, WAL, schema v8), sidecars, edit history (cap 50), versions, import, thumbnails, export, presets. Never touches pixels directly. | `src/db.rs`, `src/edits.rs`, `src/export.rs` |
 | `lf-fixtures` | Loads `tests/fixtures` goldens and applies the parity thresholds. | `src/lib.rs` |
@@ -137,6 +138,7 @@ cargo test --workspace                   # includes the 228-render parity suite
   Show clipping (`J`): `DrawOptions::clipping` → `clip_warn` in `develop.wgsl` (preview only).
   Export presets (`dialogs/export_presets.rs`, `prefs.export_presets`) and the `{title}` file-name token.
   Mask ranges: `lf_settings::masks::Range` (brightness or colour), `range_weight` in `develop.wgsl`.
+  AI tools: `lf-ai`, `ai_job.rs`, `dialogs/ai.rs`, `library/ai_ui.rs` (AI tab: Denoise, Upscale, Retouch, Remove background).
   LUT looks: `lf_settings::lut` (`.cube` parser, `desktop.lut`), `lf_pipeline::lut` (process-wide
   registry, 3D texture at bindings 15–16, `lut_amount` uniform), `luts.rs` (`.lensflow/luts/`).
   Merge to HDR: `lf-merge` (align + fuse), `merge_job.rs` (16-bit TIFF beside the first frame),

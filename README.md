@@ -129,6 +129,14 @@ Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white 
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.
 
+AI tools (the AI tab), run on this computer, nothing uploaded: AI Denoise, AI Upscale
+(2× or 4×), Retouch portrait (smooths the skin of the faces found) and Remove background
+(a PNG with transparency). Each photo is rendered with its edits and the result saved
+beside it as a new file, catalogued next to the original, which is never changed. The
+first use of a tool downloads the AI engine (ONNX Runtime) and that tool's model once
+(the dialog says how much); each file is checked against a pinned SHA-256. They need the
+studio in good standing, and use none of the plan's server AI allowance.
+
 The window needs a graphics adapter. With no driver it runs on a software
 adapter (WARP on Windows, lavapipe on Linux) and says "No graphics driver found:
 previews will be slow."

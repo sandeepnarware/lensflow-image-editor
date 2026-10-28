@@ -201,6 +201,10 @@ pub enum Msg {
     MergeProgress { done: usize, total: usize },
     /// Merge to HDR wrote the merged photo, or why not.
     MergeDone(Result<PathBuf, String>),
+    /// An AI tool moved on.
+    AiProgress(crate::ai_job::Step),
+    /// An AI tool finished: what it made, or why it stopped.
+    AiDone(Result<crate::ai_job::Report, String>),
     /// A photo for Compare was rendered (or not), for the comparison `generation`.
     CompareRendered {
         generation: u64,
@@ -757,6 +761,8 @@ pub(crate) mod owners {
             | Msg::MergeDone(..)
             | Msg::Albums { .. }
             | Msg::CompareRendered { .. }
+            | Msg::AiProgress(..)
+            | Msg::AiDone(..)
             | Msg::AlbumPhotos { .. }
             | Msg::AlbumChanged { .. } => Owner::Library,
             Msg::DeviceReset(..) => Owner::App,
@@ -870,6 +876,8 @@ pub(crate) mod owners {
             Msg::PrintDone(Err("no".into())),
             Msg::MergeProgress { done: 1, total: 2 },
             Msg::MergeDone(Err("no".into())),
+            Msg::AiProgress(crate::ai_job::Step::Download { done: 1, total: 2 }),
+            Msg::AiDone(Err("no".into())),
             Msg::CompareRendered {
                 generation: 1,
                 id: 1,

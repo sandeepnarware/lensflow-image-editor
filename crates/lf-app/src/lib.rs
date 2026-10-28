@@ -2,6 +2,7 @@
 //! else lives here so the unit tests and later screens share one crate.
 
 pub mod account;
+pub mod ai_job;
 pub mod app;
 pub mod catalog_ext;
 pub mod cli;

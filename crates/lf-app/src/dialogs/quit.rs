@@ -11,6 +11,8 @@ pub const GALLERY_RUNNING: &str = "Photos are still being uploaded to a gallery.
 pub const INGEST_RUNNING: &str = "Photos are still being copied from a card. Quit anyway?";
 /// The question while "Apply to N photos" runs.
 pub const BATCH_RUNNING: &str = "Photos are still being updated. Quit anyway?";
+pub const AI_RUNNING: &str =
+    "An AI tool is still working. Quit anyway? It stops, and makes nothing more.";
 /// What quitting does to it.
 pub const STOPS: &str = "It stops after the current photo.";
 pub const QUIT: &str = "Quit";

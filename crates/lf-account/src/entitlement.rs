@@ -202,6 +202,13 @@ impl Decision {
         self.active().is_some_and(|e| e.ai.available)
     }
 
+    /// The AI tools that run on this computer (denoise, upscale, masks, removal): the studio
+    /// must be in good standing (false in `read_only` and unknown standings), as for any AI;
+    /// they use none of the plan's server AI allowance.
+    pub fn local_ai_allowed(&self) -> bool {
+        self.active().is_some()
+    }
+
     /// Export to a LensFlow gallery (false in `read_only` and unknown standings). Export to
     /// disk is always allowed while the app is unlocked and needs no check.
     pub fn gallery_export_allowed(&self) -> bool {

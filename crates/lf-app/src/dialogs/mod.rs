@@ -3,6 +3,7 @@
 //! shortcuts).
 
 pub mod about;
+pub mod ai;
 pub mod album;
 pub mod batch;
 pub mod export;

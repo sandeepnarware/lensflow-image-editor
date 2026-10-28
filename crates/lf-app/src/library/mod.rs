@@ -5,6 +5,7 @@
 //! and rescans on the `Long` lane, each job with its own `Catalog`, answering with a [`Msg`]. So a folder never waits behind an import to
 //! show. The thumbnail pool has its own connections.
 
+pub mod ai_ui;
 pub mod albums_ui;
 pub mod compare;
 pub mod cull;
@@ -115,6 +116,9 @@ pub struct Library {
     current_folder: Option<i64>,
     /// The album shown in place of a folder ([`albums_ui`]); never both.
     current_album: Option<i64>,
+    /// An AI tool's dialog, while open or running; and whether the gate allows the tools.
+    ai: Option<crate::dialogs::ai::AiDialog>,
+    local_ai: bool,
     /// Compare, while open (it shows in place of the grid).
     compare: Option<compare::Compare>,
     compare_generation: u64,
@@ -217,6 +221,8 @@ impl Library {
             folders: Vec::new(),
             current_folder: None,
             current_album: None,
+            ai: None,
+            local_ai: false,
             compare: None,
             compare_generation: 0,
             albums: Vec::new(),
@@ -279,6 +285,12 @@ impl Library {
             )
         } else if self.batch.as_ref().is_some_and(BatchDialog::running) {
             Some("Wait for the edits to be applied, then change the catalogue folder.")
+        } else if self
+            .ai
+            .as_ref()
+            .is_some_and(crate::dialogs::ai::AiDialog::running)
+        {
+            Some("Wait for the AI tool to finish, then change the catalogue folder.")
         } else if self.matching.is_some() {
             Some("Close “Match a reference” first, then change the catalogue folder.")
         } else if self.busy.is_some() {
@@ -424,6 +436,12 @@ impl Library {
             Some(crate::dialogs::quit::INGEST_RUNNING)
         } else if self.batch.as_ref().is_some_and(BatchDialog::running) {
             Some(crate::dialogs::quit::BATCH_RUNNING)
+        } else if self
+            .ai
+            .as_ref()
+            .is_some_and(crate::dialogs::ai::AiDialog::running)
+        {
+            Some(crate::dialogs::quit::AI_RUNNING)
         } else {
             None
         }
@@ -451,6 +469,7 @@ impl Library {
         if let Some(merge) = &self.merge {
             merge.stop.store(true, Ordering::SeqCst);
         }
+        self.stop_ai();
     }
 
     /// The folder a running export writes to (its unfinished files are removed on quit).
@@ -849,6 +868,8 @@ impl Library {
             Msg::MergeProgress { done, total } => self.merge_progress(done, total),
             Msg::MergeDone(result) => self.merge_done(result, env),
             Msg::Albums { root, result } => self.albums_loaded(root, result),
+            Msg::AiProgress(step) => self.ai_progress(step),
+            Msg::AiDone(result) => self.ai_done(result, env),
             Msg::CompareRendered {
                 generation,
                 id,
@@ -1321,6 +1342,7 @@ impl Library {
         self.print_dialog(ui.ctx(), env);
         self.merge_dialog(ui.ctx(), env);
         self.album_dialogs(ui.ctx(), env);
+        self.ai_dialog(ui.ctx(), env);
         self.reveal_active = false;
     }
 
@@ -1338,6 +1360,7 @@ impl Library {
             || self.print.is_some()
             || self.merge.is_some()
             || self.album_dialog_open()
+            || self.ai.is_some()
     }
 
     /// Whether `action` (a menu item or a key) is possible now in the library or Develop.
@@ -1376,6 +1399,9 @@ impl Library {
                 !develop
                     && (self.compare.is_some()
                         || compare::can_compare(self.selection.current.len()))
+            }
+            Action::AiDenoise | Action::AiUpscale | Action::AiRetouch | Action::AiCutout => {
+                self.ai_ready()
             }
             Action::NewAlbum | Action::NewSmartAlbum => true,
             Action::AddToAlbum => develop || selected,
@@ -1450,6 +1476,10 @@ impl Library {
             Action::Metadata => self.toggle_metadata(),
             Action::Compare if self.compare.is_some() => self.close_compare(),
             Action::Compare => self.open_compare(env),
+            Action::AiDenoise => self.open_ai(crate::ai_job::AiTool::Denoise { strength: 0.8 }),
+            Action::AiUpscale => self.open_ai(crate::ai_job::AiTool::Upscale { factor: 2 }),
+            Action::AiRetouch => self.open_ai(crate::ai_job::AiTool::Retouch { amount: 0.6 }),
+            Action::AiCutout => self.open_ai(crate::ai_job::AiTool::Cutout),
             Action::NewAlbum => self.open_album_dialog(crate::dialogs::album::Purpose::New),
             Action::NewSmartAlbum => {
                 self.open_album_dialog(crate::dialogs::album::Purpose::NewSmart)

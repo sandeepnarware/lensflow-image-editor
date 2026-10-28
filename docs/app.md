@@ -543,6 +543,35 @@ paints a pixel red when any channel reaches white (≥ 0.998 before the final cl
 when every channel is at black (≤ 0.002). It is part of `DrawKey`, so toggling redraws. The
 ribbon button shows it switched on (`MenuState::clipping`).
 
+### AI tools (on this computer)
+
+`lf-ai` runs the models through ONNX Runtime, loaded at run time (`ort` with `load-dynamic`)
+from Microsoft's official release. Nothing is bundled: `lf_ai::assets` pins each download
+(URL, size, SHA-256) and `Engine::prepare` fetches what is missing into `<cache>/ai`
+(`ai_job::ai_dir`, beside `frames/`) through a `.part` file, checks it, and takes the runtime
+library out of its zip or tgz; a mismatch is deleted, never loaded. The environment is made
+once per process. Models: SCUNet (denoise, tiles of 256 overlapping 32), Real-ESRGAN general
+x4v3 (upscale, tiles of 192), IS-Net general use (subject, 1024²), SkySeg (sky, 320²), LaMa
+(removal, 512²) and YuNet (faces, 640²). `lf_ai::tiles::run` blends overlapping tiles with
+ramps, so no seams show and memory stays bounded.
+
+The AI tab: AI Denoise, AI Upscale, Retouch portrait, Remove background
+(`Action::{AiDenoise, AiUpscale, AiRetouch, AiCutout}`) open `dialogs/ai.rs` for the selection
+(the open photo in Develop): the tool's setting, what the first use downloads, then
+`ai_job::run` on the `Long` lane (`Msg::AiProgress` with the download's bytes, then photo
+by photo; `Msg::AiDone` with a `Report`). Each photo is rendered at full size with its edits
+(`ai_job::render`), worked on, and written beside the original through a temporary name:
+`-Denoised.tif`, `-Upscaled-2x.tif`, `-Retouched.tif` (16-bit, sRGB profile) or `-Cutout.png`.
+A photo that fails is listed and the rest go on. Upscaling renders smaller first when the
+result would pass 120 MP. Retouching finds faces, builds a skin mask from each face's own
+chroma inside an ellipse (eyes and mouth left out) and blends an edge-guarded blur with a
+little of the fine texture back. The library rescans the catalogue folders written to. The
+tools need `Decision::local_ai_allowed` (good standing); quitting or changing the catalogue
+while one runs asks first (`quit::AI_RUNNING`).
+
+`crates/lf-ai/tests/models.rs` runs the real models when `LF_AI_DIR` names a folder holding
+them (`LF_AI_DOWNLOAD=1` fetches them there); otherwise those tests return at once.
+
 ### Import from a card
 
 File → From card (`Action::ImportFromCard`) opens "Import from a card"

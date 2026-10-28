@@ -44,6 +44,15 @@ pub enum Action {
     Metadata,
     /// Two to four selected photos side by side, zoomed together.
     Compare,
+    // AI (on this computer)
+    /// Remove noise; a new photo beside each.
+    AiDenoise,
+    /// Enlarge 2× or 4×; a new photo beside each.
+    AiUpscale,
+    /// Smooth the skin of the faces found; a new photo beside each.
+    AiRetouch,
+    /// The subject on a transparent background; a PNG beside each.
+    AiCutout,
     // Albums
     /// Make an album (with the selected photos).
     NewAlbum,
@@ -122,6 +131,10 @@ impl Action {
             Action::ToggleZoom => "Fit / 100 %",
             Action::Metadata => "Metadata panel",
             Action::Compare => "Compare",
+            Action::AiDenoise => "AI Denoise…",
+            Action::AiUpscale => "AI Upscale…",
+            Action::AiRetouch => "Retouch portrait…",
+            Action::AiCutout => "Remove background…",
             Action::NewAlbum => "New album…",
             Action::NewSmartAlbum => "New smart album…",
             Action::AddToAlbum => "Add to album…",

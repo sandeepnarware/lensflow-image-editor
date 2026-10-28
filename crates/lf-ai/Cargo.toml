@@ -1,0 +1,23 @@
+[package]
+name = "lf-ai"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# ONNX Runtime, loaded at run time from the official build `assets` downloads (never linked).
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-31"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+flate2 = "1"
+tar = "0.4"
+sha2.workspace = true
+hex.workspace = true
+image.workspace = true
+rayon.workspace = true
+log.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
