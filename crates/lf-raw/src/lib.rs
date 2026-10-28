@@ -19,6 +19,7 @@ pub mod demosaic;
 pub mod develop;
 mod error;
 pub mod exif;
+pub mod heif;
 pub mod open;
 pub mod render;
 

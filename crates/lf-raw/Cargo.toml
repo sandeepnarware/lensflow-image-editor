@@ -25,3 +25,7 @@ lf-pipeline = { path = "../lf-pipeline", features = ["test-support"] }
 serde_json.workspace = true
 tempfile = "3"
 filetime = "0.2"
+
+# HEIC through Windows Imaging Component (the system's HEIF and HEVC extensions).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Imaging", "Win32_System_Com", "Win32_System_Com_StructuredStorage"] }

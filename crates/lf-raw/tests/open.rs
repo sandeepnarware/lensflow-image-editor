@@ -164,9 +164,8 @@ fn heic_is_refused_with_a_clear_message() {
     std::fs::write(&path, b"\0\0\0\x18ftypheic\0\0\0\0mif1heic").unwrap();
     assert_eq!(sniff(&path).unwrap(), Kind::Heic);
     match open_default(&path) {
-        Err(RawError::Unsupported { reason, .. }) => {
-            assert_eq!(reason, "HEIC files aren’t supported yet.")
-        }
+        // A broken HEIC: the system decoder's own reason (or what to install).
+        Err(RawError::Unsupported { reason, .. }) => assert!(!reason.is_empty()),
         other => panic!("{other:?}"),
     }
     let _ = std::fs::remove_file(path);
@@ -468,9 +467,10 @@ fn avif_and_heif_brands_get_their_own_messages() {
     for (brand, msg) in [
         (b"avif", "AVIF files aren’t supported yet."),
         (b"avis", "AVIF files aren’t supported yet."),
-        (b"heif", "HEIC files aren’t supported yet."),
-        (b"hevm", "HEIC files aren’t supported yet."),
-        (b"hevs", "HEIC files aren’t supported yet."),
+        // HEIF brands go to the system decoder, which refuses these empty files.
+        (b"heif", ""),
+        (b"hevm", ""),
+        (b"hevs", ""),
     ] {
         let path = tmp(&format!("x-{}.bin", String::from_utf8_lossy(brand)));
         let mut b = b"\0\0\0\x18ftyp".to_vec();
@@ -478,6 +478,9 @@ fn avif_and_heif_brands_get_their_own_messages() {
         b.extend_from_slice(&[0; 8]);
         std::fs::write(&path, b).unwrap();
         match open_default(&path) {
+            Err(RawError::Unsupported { reason, .. }) if msg.is_empty() => {
+                assert!(!reason.is_empty() && !reason.contains("AVIF"));
+            }
             Err(RawError::Unsupported { reason, .. }) => assert_eq!(reason, msg),
             other => panic!("{other:?}"),
         }

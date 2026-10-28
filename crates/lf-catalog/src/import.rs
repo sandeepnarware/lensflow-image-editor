@@ -22,7 +22,8 @@ const EXTENSIONS: &[&str] = &[
     // RAW (the formats in tests/raw-samples/manifest.json, and the other common ones)
     "dng", "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "raf", "orf", "rw2", "pef",
     "srw", "3fr", "iiq", "x3f", "dcr", "kdc", "mrw", "erf", "mef", "mos", // pictures
-    "jpg", "jpeg", "png", "tif", "tiff", "webp",
+    "jpg", "jpeg", "png", "tif", "tiff", "webp", // HEIC and HEIF, through the system decoder
+    "heic", "heif", "hif",
 ];
 
 /// `progress` is called at least this often (in files) while a batch is read.

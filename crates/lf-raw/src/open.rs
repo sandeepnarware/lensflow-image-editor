@@ -146,10 +146,19 @@ pub fn summary(path: &Path) -> Result<Summary, RawError> {
             });
             Ok((kind, exif, size))
         }
-        Kind::Heic => Err(RawError::Unsupported {
-            path: path.to_path_buf(),
-            reason: "HEIC files aren’t supported yet.".to_string(),
-        }),
+        Kind::Heic => {
+            let img = crate::heif::decode(path).map_err(|reason| RawError::Unsupported {
+                path: path.to_path_buf(),
+                reason,
+            })?;
+            let bytes = std::fs::read(path).map_err(|source| RawError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            let mut exif = read_summary(&bytes);
+            exif.orientation = 1;
+            Ok((kind, exif, Some(img.dimensions())))
+        }
         Kind::Unknown => Err(RawError::NotAnImage {
             path: path.to_path_buf(),
         }),
@@ -211,15 +220,35 @@ pub fn open(
         }
         Kind::Heic => {
             let head = read_head(path)?;
-            let avif = matches!(head.get(8..12), Some(b"avif" | b"avis"));
-            Err(RawError::Unsupported {
+            if matches!(head.get(8..12), Some(b"avif" | b"avis")) {
+                return Err(RawError::Unsupported {
+                    path: path.to_path_buf(),
+                    reason: "AVIF files aren’t supported yet.".to_string(),
+                });
+            }
+            let img = crate::heif::decode(path).map_err(|reason| RawError::Unsupported {
                 path: path.to_path_buf(),
-                reason: if avif {
-                    "AVIF files aren’t supported yet."
-                } else {
-                    "HEIC files aren’t supported yet."
-                }
-                .to_string(),
+                reason,
+            })?;
+            let bytes = std::fs::read(path).map_err(|source| RawError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            // The system decoder applies the HEIF's own rotation; its EXIF is read for the
+            // facts (the orientation there would turn it twice).
+            let mut exif = read_summary(&bytes);
+            exif.orientation = 1;
+            let (full_width, full_height) = img.dimensions();
+            let small = box_downscale_rgba8(&img, max_edge);
+            let reduced = small.is_some();
+            Ok(Opened {
+                picture: Picture::EightBit(small.unwrap_or(img)),
+                kind,
+                exif,
+                full_width,
+                full_height,
+                reduced,
+                jpeg_exif_bytes: None,
             })
         }
         Kind::Unknown => Err(RawError::NotAnImage {

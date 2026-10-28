@@ -457,7 +457,10 @@ resolution through the GPU pipeline.
   as pictures even when they carry the camera's `Make` (Canon, Hasselblad...):
   a TIFF is treated as RAW only on RAW evidence (a `DNGVersion` tag, the CR2
   signature, or CFA / LinearRaw sensor data in an IFD or SubIFD).
-- HEIC and AVIF are not supported yet: opening one gives a plain error.
+- HEIC (iPhone photos) opens through the computer's own decoder: on Windows, Microsoft's
+  "HEIF Image Extensions" and "HEVC Video Extensions" (Microsoft Store); on macOS, built in
+  (`sips`); on Linux, libheif's tools (`heif-dec`). Without one, the error says what to
+  install. AVIF input is not supported yet.
   (Their embedded previews are HEVC too, so they cannot be shown without an
   HEVC decoder.)
 - Known decoder gaps (rawler 0.8), reported as "not supported" rather than
