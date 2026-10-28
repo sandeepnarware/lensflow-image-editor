@@ -1,5 +1,5 @@
 //! Local AI for the desktop editor: subject and sky masks, denoising, upscaling, object
-//! removal and face finding, on this computer's CPU through ONNX Runtime. Nothing is sent
+//! removal, face finding and culling scores, on this computer's CPU through ONNX Runtime. Nothing is sent
 //! anywhere: the runtime and the models are downloaded once into the AI folder
 //! ([`assets`], each pinned by SHA-256) and run from there.
 //!
@@ -8,6 +8,7 @@
 //! ([`tiles`]) so memory stays bounded.
 
 pub mod assets;
+pub mod cull;
 pub mod faces;
 pub mod inpaint;
 pub mod restore;

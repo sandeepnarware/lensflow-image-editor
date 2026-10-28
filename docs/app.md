@@ -662,6 +662,22 @@ render and `lf_ai::inpaint::remove` fills each painted region: cut out with room
 shrunk to LaMa's 512², filled, grown back and blended in through a feathered mask, so only what
 was painted changes. The result is `-Removed.tif`.
 
+AI → Cull (`Action::AssistedCulling`, `AiTool::Cull`) scores the selection when several
+photos are selected, else every photo the grid shows. `ai_job::cull` skips photos with fresh
+scores (`Catalog::unscored`), renders the rest as shot at 2048 px with the preview demosaic
+(`ai_job::render_at`) and scores them with `lf_ai::cull::Scorer` (YuNet and Intel's
+open-closed-eye-0001, made once per run). Sharpness needs no model: the ratio of the finest
+detail band to the next one, tile by tile, the 90th-percentile tile counting, so a sharp
+subject on a soft background is sharp and contrast does not matter. Each face with eyes at
+least 14 px apart has both eyes cut out (0.6 of the eye distance) and classified; the largest
+face's eye region gives the eye sharpness. Scores go to the `scores` table (schema v10, keyed
+to the file's size and mtime, so a changed file reads as unscored) and come back in
+`PhotoRow::scores`; `lf_catalog::scores::Scores` holds the verdicts (blurry below 0.35, or
+eyes below 0.3; any face with both eyes closed). The dialog says what it found and offers
+"Show them" (`ReviewFilter::Issues`) and "Reject them" (`Library::set_mark` with
+`Flag::Rejected`). The grid paints `cull_ui::paint_issue`; `Sort::Sharpness` puts the
+sharpest first.
+
 `crates/lf-ai/tests/models.rs` runs the real models when `LF_AI_DIR` names a folder holding
 them (`LF_AI_DOWNLOAD=1` fetches them there); otherwise those tests return at once.
 

@@ -61,6 +61,8 @@ pub enum Action {
     AiCutout,
     /// Paint over things and have them filled from their surroundings; a new photo beside it.
     AiRemoveObjects,
+    /// Score photos for blur and closed eyes, and offer to reject the ones that look wrong.
+    AssistedCulling,
     // Albums
     /// Make an album (with the selected photos).
     NewAlbum,
@@ -149,6 +151,7 @@ impl Action {
             Action::AiRetouch => "Retouch portrait…",
             Action::AiCutout => "Remove background…",
             Action::AiRemoveObjects => "Remove objects…",
+            Action::AssistedCulling => "Assisted culling…",
             Action::NewAlbum => "New album…",
             Action::NewSmartAlbum => "New smart album…",
             Action::AddToAlbum => "Add to album…",

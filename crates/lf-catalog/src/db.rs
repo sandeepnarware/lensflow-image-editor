@@ -6,6 +6,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 use crate::cull::{Flag, Label, MAX_RATING};
 use crate::meta::Meta;
 use crate::model::{NewPhoto, now, ts};
+use crate::scores::Scores;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
@@ -227,6 +228,18 @@ CREATE INDEX album_photos_photo ON album_photos(photo_id);
 ALTER TABLE photos ADD COLUMN lat REAL;
 ALTER TABLE photos ADD COLUMN lon REAL;
 ALTER TABLE photos ADD COLUMN gps_read INTEGER NOT NULL DEFAULT 0;
+"#,
+    // Assisted-culling scores (`crate::scores`), for the file as it was scored.
+    r#"
+CREATE TABLE scores (
+    photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+    file_size INTEGER NOT NULL,
+    mtime INTEGER NOT NULL,
+    sharpness REAL NOT NULL,
+    faces INTEGER NOT NULL,
+    eyes_closed INTEGER NOT NULL,
+    eye_sharpness REAL
+);
 "#,
 ];
 
@@ -471,6 +484,8 @@ pub struct PhotoRow {
     pub meta: Meta,
     /// Where it was taken (latitude, longitude in degrees), when its EXIF says.
     pub gps: Option<(f64, f64)>,
+    /// Assisted-culling scores for the file as it is now ([`crate::scores`]).
+    pub scores: Option<Scores>,
 }
 
 pub(crate) const PHOTO_COLUMNS: &str =
@@ -480,7 +495,12 @@ pub(crate) const PHOTO_COLUMNS: &str =
      p.flag, p.rating, p.label, p.title, p.caption, p.creator, p.copyright,
      (SELECT group_concat(keyword, char(31)) FROM
          (SELECT keyword FROM keywords k WHERE k.photo_id = p.id ORDER BY keyword)),
-     p.lat, p.lon";
+     p.lat, p.lon,
+     (SELECT s.sharpness FROM scores s WHERE s.photo_id = p.id AND s.file_size = p.file_size
+         AND s.mtime = p.mtime),
+     (SELECT s.faces FROM scores s WHERE s.photo_id = p.id),
+     (SELECT s.eyes_closed FROM scores s WHERE s.photo_id = p.id),
+     (SELECT s.eye_sharpness FROM scores s WHERE s.photo_id = p.id)";
 
 pub(crate) fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
     Ok(PhotoRow {
@@ -518,6 +538,19 @@ pub(crate) fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
         gps: r
             .get::<_, Option<f64>>(22)?
             .zip(r.get::<_, Option<f64>>(23)?),
+        // The sharpness is read only for the file as scored, so it alone says whether the
+        // scores are fresh.
+        scores: r
+            .get::<_, Option<f64>>(24)?
+            .map(|sharpness| -> rusqlite::Result<Scores> {
+                Ok(Scores {
+                    sharpness: sharpness as f32,
+                    faces: r.get::<_, Option<u32>>(25)?.unwrap_or(0),
+                    eyes_closed: r.get::<_, Option<u32>>(26)?.unwrap_or(0),
+                    eye_sharpness: r.get::<_, Option<f64>>(27)?.map(|v| v as f32),
+                })
+            })
+            .transpose()?,
     })
 }
 

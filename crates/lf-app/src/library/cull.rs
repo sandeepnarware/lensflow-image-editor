@@ -8,6 +8,7 @@
 
 use lf_catalog::PhotoRow;
 use lf_catalog::cull::{Flag, Label, Mark};
+use lf_catalog::scores::Scores;
 
 /// Which flags the grid shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -86,6 +87,55 @@ impl LabelFilter {
     }
 }
 
+/// What assisted culling's scores must say ([`lf_catalog::scores`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReviewFilter {
+    #[default]
+    Any,
+    /// Blurry or eyes closed.
+    Issues,
+    Blurry,
+    EyesClosed,
+    /// Scored, and nothing wrong.
+    Clean,
+    /// Not scored yet (or the file changed since).
+    Unscored,
+}
+
+impl ReviewFilter {
+    pub const ALL: [ReviewFilter; 6] = [
+        ReviewFilter::Any,
+        ReviewFilter::Issues,
+        ReviewFilter::Blurry,
+        ReviewFilter::EyesClosed,
+        ReviewFilter::Clean,
+        ReviewFilter::Unscored,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ReviewFilter::Any => "Any score",
+            ReviewFilter::Issues => "Possible rejects",
+            ReviewFilter::Blurry => "Blurry",
+            ReviewFilter::EyesClosed => "Eyes closed",
+            ReviewFilter::Clean => "Sharp, eyes open",
+            ReviewFilter::Unscored => "Not scored",
+        }
+    }
+
+    fn keeps(self, scores: Option<&Scores>) -> bool {
+        match (self, scores) {
+            (ReviewFilter::Any, _) => true,
+            (ReviewFilter::Unscored, s) => s.is_none(),
+            (_, None) => false,
+            (ReviewFilter::Issues, Some(s)) => s.issue(),
+            (ReviewFilter::Blurry, Some(s)) => s.blurry(),
+            (ReviewFilter::EyesClosed, Some(s)) => s.eyes_closed(),
+            (ReviewFilter::Clean, Some(s)) => !s.issue(),
+        }
+    }
+}
+
 /// The grid's order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Sort {
@@ -95,16 +145,24 @@ pub enum Sort {
     FileName,
     /// Most stars first; equal ratings keep capture order.
     Rating,
+    /// Sharpest first (assisted culling's score); unscored photos last, in capture order.
+    Sharpness,
 }
 
 impl Sort {
-    pub const ALL: [Sort; 3] = [Sort::CaptureTime, Sort::FileName, Sort::Rating];
+    pub const ALL: [Sort; 4] = [
+        Sort::CaptureTime,
+        Sort::FileName,
+        Sort::Rating,
+        Sort::Sharpness,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             Sort::CaptureTime => "Capture time",
             Sort::FileName => "File name",
             Sort::Rating => "Rating",
+            Sort::Sharpness => "Sharpness",
         }
     }
 }
@@ -116,6 +174,8 @@ pub struct Filter {
     /// At least this many stars (0: any).
     pub min_rating: u8,
     pub label: LabelFilter,
+    /// Assisted culling's verdicts.
+    pub review: ReviewFilter,
     pub sort: Sort,
     /// Words that must each appear in the file name, the camera or lens, or the title,
     /// caption, creator or a keyword (case ignored).
@@ -128,6 +188,7 @@ impl Filter {
         self.flag != FlagFilter::All
             || self.min_rating > 0
             || self.label != LabelFilter::Any
+            || self.review != ReviewFilter::Any
             || !self.text.trim().is_empty()
     }
 
@@ -135,6 +196,7 @@ impl Filter {
         self.flag.keeps(row.flag)
             && row.rating >= self.min_rating
             && self.label.keeps(row.label)
+            && self.review.keeps(row.scores.as_ref())
             && matches_text(row, &self.text)
     }
 
@@ -151,6 +213,16 @@ impl Filter {
             }),
             // Stable: equal ratings stay in capture order.
             Sort::Rating => kept.sort_by_key(|r| std::cmp::Reverse(r.rating)),
+            // Stable, scored first: equal (and unscored) photos stay in capture order.
+            Sort::Sharpness => kept.sort_by(|a, b| {
+                let key = |r: &PhotoRow| r.scores.map(|s| s.sharpness);
+                match (key(a), key(b)) {
+                    (Some(x), Some(y)) => y.total_cmp(&x),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            }),
         }
         kept.into_iter().map(|r| r.id).collect()
     }
@@ -262,6 +334,48 @@ mod tests {
             ..Filter::default()
         };
         assert_eq!(f.arrange(&rows()), [3]);
+    }
+
+    #[test]
+    fn culling_scores_filter_and_sort() {
+        let mut rows = rows();
+        let scored = |sharpness, eyes_closed| {
+            Some(Scores {
+                sharpness,
+                faces: 1,
+                eyes_closed,
+                eye_sharpness: None,
+            })
+        };
+        rows[0].scores = scored(0.9, 0);
+        rows[1].scores = scored(0.1, 0);
+        rows[2].scores = scored(0.7, 1);
+        let by = |review| {
+            Filter {
+                review,
+                ..Filter::default()
+            }
+            .arrange(&rows)
+        };
+        assert_eq!(by(ReviewFilter::Issues), [2, 3]);
+        assert_eq!(by(ReviewFilter::Blurry), [2]);
+        assert_eq!(by(ReviewFilter::EyesClosed), [3]);
+        assert_eq!(by(ReviewFilter::Clean), [1]);
+        assert_eq!(by(ReviewFilter::Unscored), [4]);
+        assert!(
+            Filter {
+                review: ReviewFilter::Issues,
+                ..Filter::default()
+            }
+            .narrows()
+        );
+        // Sharpest first, the unscored photo last.
+        let sorted = Filter {
+            sort: Sort::Sharpness,
+            ..Filter::default()
+        }
+        .arrange(&rows);
+        assert_eq!(sorted, [1, 3, 2, 4]);
     }
 
     #[test]

@@ -146,3 +146,15 @@ fn no_face_is_found_in_a_landscape() {
             .is_empty()
     );
 }
+
+#[test]
+fn a_landscape_is_scored_sharp_with_no_faces() {
+    let Some(engine) = engine(&lf_ai::cull::CULL_MODELS) else {
+        return;
+    };
+    let mut scorer = lf_ai::cull::Scorer::new(&engine).expect("scorer");
+    let score = scorer.score(&noisy(&scene(640, 480))).expect("score");
+    assert_eq!(score.faces, 0);
+    assert_eq!(score.eyes_closed, 0);
+    assert_eq!(score.eye_sharpness, None);
+}

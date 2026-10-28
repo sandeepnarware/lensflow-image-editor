@@ -5,7 +5,8 @@
 //! a stopped or failed download leaves nothing half-written.
 //!
 //! The licences: ONNX Runtime MIT; IS-Net (subject) Apache-2.0; SkySeg MIT; SCUNet
-//! Apache-2.0; Real-ESRGAN BSD-3-Clause; LaMa Apache-2.0; YuNet MIT. See `NOTICE`.
+//! Apache-2.0; Real-ESRGAN BSD-3-Clause; LaMa Apache-2.0; YuNet MIT;
+//! open-closed-eye-0001 Apache-2.0. See `NOTICE`.
 
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -140,6 +141,16 @@ pub const FACES: Asset = Asset {
     url: "https://huggingface.co/opencv/face_detection_yunet/resolve/main/face_detection_yunet_2023mar.onnx",
     size: 232_589,
     sha256: "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+    unpack: Unpack::File,
+};
+
+/// Intel's open-closed-eye-0001 (Open Model Zoo, Apache-2.0): whether an eye is closed,
+/// 32 × 32.
+pub const EYES: Asset = Asset {
+    file: "open_closed_eye.onnx",
+    url: "https://storage.openvinotoolkit.org/repositories/open_model_zoo/public/2022.1/open-closed-eye-0001/open_closed_eye.onnx",
+    size: 46_164,
+    sha256: "4daa100034482525a26c9afb9297c16580a531189e66e3d2b2ac7d32becfd593",
     unpack: Unpack::File,
 };
 

@@ -364,6 +364,12 @@ pub(super) fn paint_cell(
             photo,
             mark,
         );
+        cull_ui::paint_issue(
+            &painter,
+            egui::pos2(rect.left() + pad, rect.top() + pad),
+            photo,
+            mark + 2.0,
+        );
         if with_name {
             cull_ui::paint_stars(
                 &painter,

@@ -2,7 +2,7 @@
 //! the thumbnail, a flag and a colour dot in its top-right corner, rejects dimmed). The marks
 //! are painted shapes rather than glyphs, so they never depend on a font having a star.
 
-use super::cull::{Filter, FlagFilter, LabelFilter, Sort};
+use super::cull::{Filter, FlagFilter, LabelFilter, ReviewFilter, Sort};
 use crate::theme;
 use eframe::egui::{self, Color32, Pos2, Rect, Shape, Stroke};
 use lf_catalog::PhotoRow;
@@ -36,6 +36,7 @@ fn rating_name(min: u8) -> String {
 pub const FLAG_LIST: &str = "Filter by flag";
 pub const RATING_LIST: &str = "Filter by rating";
 pub const LABEL_LIST: &str = "Filter by label";
+pub const REVIEW_LIST: &str = "Filter by culling score";
 pub const SORT_LIST: &str = "Sort order";
 /// The search box (titles, captions, keywords, file names, camera and lens).
 pub const SEARCH: &str = "Search photos";
@@ -75,6 +76,14 @@ pub fn filter_bar(ui: &mut egui::Ui, current: &Filter) -> Option<Filter> {
                 }
             });
         named(&label.response, LABEL_LIST);
+        let review = egui::ComboBox::from_id_salt("filter-review")
+            .selected_text(next.review.name())
+            .show_ui(ui, |ui| {
+                for r in ReviewFilter::ALL {
+                    ui.selectable_value(&mut next.review, r, r.name());
+                }
+            });
+        named(&review.response, REVIEW_LIST);
         let search = ui.add(
             egui::TextEdit::singleline(&mut next.text)
                 .hint_text(SEARCH_HINT)
@@ -119,6 +128,9 @@ pub fn describe(row: &PhotoRow) -> Option<String> {
     if let Some(label) = row.label {
         parts.push(format!("{} label", label.name()));
     }
+    if let Some(issue) = row.scores.and_then(|s| s.describe()) {
+        parts.push(issue);
+    }
     (!parts.is_empty()).then(|| parts.join(", "))
 }
 
@@ -160,6 +172,34 @@ fn star(centre: Pos2, r: f32, fill: Color32) -> Shape {
         ));
     }
     Shape::Vec(shapes)
+}
+
+/// Assisted culling's warning in a cell's top-left corner: an amber triangle with a "!",
+/// when the scores say the photo looks wrong (the hover text says what).
+pub fn paint_issue(painter: &egui::Painter, left_top: Pos2, row: &PhotoRow, size: f32) {
+    if !row.scores.is_some_and(|s| s.issue()) {
+        return;
+    }
+    let a = Rect::from_min_size(left_top, egui::Vec2::splat(size));
+    painter.add(Shape::convex_polygon(
+        vec![
+            Pos2::new(a.center().x, a.top()),
+            a.right_bottom(),
+            a.left_bottom(),
+        ],
+        theme::WARNING,
+        Stroke::new(1.0, theme::BG),
+    ));
+    let s = Stroke::new(1.5, theme::BG);
+    let x = a.center().x;
+    painter.line_segment(
+        [
+            Pos2::new(x, a.top() + size * 0.35),
+            Pos2::new(x, a.top() + size * 0.68),
+        ],
+        s,
+    );
+    painter.circle_filled(Pos2::new(x, a.top() + size * 0.84), 1.0, theme::BG);
 }
 
 /// The flag and label in a cell's top-right corner, right to left from `right_top`.
@@ -223,6 +263,11 @@ mod tests {
         row.rating = 1;
         row.label = None;
         assert_eq!(describe(&row).as_deref(), Some("Rejected, 1 star"));
+        row.scores = Some(lf_catalog::scores::Scores {
+            sharpness: 0.1,
+            ..Default::default()
+        });
+        assert_eq!(describe(&row).as_deref(), Some("Rejected, 1 star, Blurry"));
     }
 
     #[test]

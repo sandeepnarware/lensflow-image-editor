@@ -92,6 +92,11 @@ fn iou(a: &Face, b: &Face) -> f32 {
 
 /// The faces in `img` (any size: it is fitted into the model's square, then mapped back).
 pub fn detect(engine: &Engine, img: &Rgb) -> Result<Vec<Face>, AiError> {
+    detect_with(&mut engine.session(&assets::FACES)?, img)
+}
+
+/// [`detect`] with a YuNet session already made (scoring many photos makes it once).
+pub fn detect_with(session: &mut ort::session::Session, img: &Rgb) -> Result<Vec<Face>, AiError> {
     let scale = EDGE as f32 / img.w.max(img.h) as f32;
     let (fw, fh) = (
         ((img.w as f32 * scale).round() as usize).clamp(1, EDGE),
@@ -110,7 +115,6 @@ pub fn detect(engine: &Engine, img: &Rgb) -> Result<Vec<Face>, AiError> {
             input[2 * n + i] = r * 255.0;
         }
     }
-    let mut session = engine.session(&assets::FACES)?;
     let model = |e: ort::Error| AiError::Model(e.to_string());
     let tensor = ort::value::Tensor::from_array(([1usize, 3, EDGE, EDGE], input)).map_err(model)?;
     let outputs = session

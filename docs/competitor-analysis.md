@@ -24,7 +24,7 @@ close or competitors ship new features.
 
 | Gap | Who has it | Why it matters |
 |---|---|---|
-| AI-assisted culling: eyes-open and eye-focus scores, blur detection, best of a burst | Lightroom 15.2/15.4, Capture One 16.8 | Studios cull thousands of shots per event; the main reason people pay for culling tools. Our face detector (`lf_ai::faces`) is part of the groundwork. |
+| ~~AI-assisted culling: eyes-open and eye-focus scores, blur detection~~ (done: AI → Cull); best of a burst still open (needs stacks) | Lightroom 15.2/15.4, Capture One 16.8 | Studios cull thousands of shots per event; the main reason people pay for culling tools. Our face detector (`lf_ai::faces`) is part of the groundwork. |
 | Duplicate and similar photos grouped into stacks | Lightroom 15.5 | We have no stacks at all, which also hurts burst shooting. |
 | People masks: face skin, eyes, lips, hair, clothes, teeth | Lightroom, PhotoLab 9 | Portrait edits are aimed at these; we only have subject and sky. |
 | Object and background AI masks (click or box an object) | Lightroom | Masks any object, not just subject or sky. |

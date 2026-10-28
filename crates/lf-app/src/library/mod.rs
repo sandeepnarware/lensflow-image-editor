@@ -1091,6 +1091,14 @@ impl Library {
             return;
         }
         let mark = cull::resolve(asked, &rows);
+        self.set_mark(targets, mark, env);
+    }
+
+    /// Sets `mark` (as it is, not toggled) on `targets`, on screen and in the catalogue.
+    fn set_mark(&mut self, targets: Vec<i64>, mark: Mark, env: &mut Env) {
+        if targets.is_empty() {
+            return;
+        }
         for id in &targets {
             if let Some(&i) = self.rows.get(id) {
                 cull::apply(&mut self.photos[i], mark);
@@ -1454,6 +1462,13 @@ impl Library {
             Action::AiRemoveObjects => {
                 self.ai_ready() && self.remove.is_none() && self.ai_targets().len() == 1
             }
+            Action::AssistedCulling => {
+                !develop
+                    && self.local_ai
+                    && self.ai.is_none()
+                    && !self.order.is_empty()
+                    && self.can_add()
+            }
             Action::NewAlbum | Action::NewSmartAlbum => true,
             Action::AddToAlbum => develop || selected,
             Action::RemoveFromAlbum => !develop && self.can_remove_from_album(),
@@ -1538,6 +1553,7 @@ impl Library {
             Action::AiRetouch => self.open_ai(crate::ai_job::AiTool::Retouch { amount: 0.6 }),
             Action::AiCutout => self.open_ai(crate::ai_job::AiTool::Cutout),
             Action::AiRemoveObjects => self.open_remove(env),
+            Action::AssistedCulling => self.open_cull(),
             Action::NewAlbum => self.open_album_dialog(crate::dialogs::album::Purpose::New),
             Action::NewSmartAlbum => {
                 self.open_album_dialog(crate::dialogs::album::Purpose::NewSmart)

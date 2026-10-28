@@ -74,6 +74,31 @@ impl Library {
                 }
             }
             AiAction::Start(tool) => self.start_ai(tool, env),
+            AiAction::ShowIssues => {
+                self.ai = None;
+                self.set_filter(super::cull::Filter {
+                    review: super::cull::ReviewFilter::Issues,
+                    ..self.filter()
+                });
+            }
+            AiAction::RejectIssues => {
+                let issues = self.cull_issues();
+                self.ai = None;
+                let n = issues.len();
+                self.set_mark(
+                    issues,
+                    lf_catalog::cull::Mark::Flag(lf_catalog::cull::Flag::Rejected),
+                    env,
+                );
+                env.toasts.push(
+                    crate::toast::Level::Info,
+                    if n == 1 {
+                        "Rejected 1 photo.".to_owned()
+                    } else {
+                        format!("Rejected {} photos.", crate::catalog_ext::count(n))
+                    },
+                );
+            }
         }
     }
 
@@ -116,8 +141,44 @@ impl Library {
         }
     }
 
+    /// AI → Assisted culling: the selection when several photos are selected, else every
+    /// photo the grid shows.
+    pub(super) fn open_cull(&mut self) {
+        let ids = if self.selection.current.len() > 1 {
+            self.selected_in_order()
+        } else {
+            self.order.clone()
+        };
+        if ids.is_empty() || self.ai.is_some() {
+            return;
+        }
+        let tool = AiTool::Cull;
+        let download = self.ai_engine().to_download(&tool.models());
+        self.ai = Some(AiDialog::new(ids, tool, download));
+    }
+
+    /// The photos the finished culling run says look wrong.
+    fn cull_issues(&self) -> Vec<i64> {
+        match self.ai.as_ref().map(|d| &d.stage) {
+            Some(Stage::Done(Ok(Report {
+                culled: Some(c), ..
+            }))) => c.issues.clone(),
+            _ => Vec::new(),
+        }
+    }
+
     /// The run ended: said in the dialog, and the new photos catalogued.
     pub(super) fn ai_done(&mut self, result: Result<Report, String>, env: &mut Env) {
+        // New scores: the rows are read again so the grid shows them.
+        if matches!(
+            &result,
+            Ok(Report {
+                culled: Some(_),
+                ..
+            })
+        ) {
+            self.reload_photos(env);
+        }
         if let Ok(report) = &result {
             let mut folders: Vec<_> = report
                 .written

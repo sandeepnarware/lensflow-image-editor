@@ -617,7 +617,8 @@ The AI tools (lf-ai) load ONNX Runtime (MIT, Microsoft) at run time from its off
 release, downloaded on first use and checked by SHA-256; it is not linked or shipped. The
 models are downloaded the same way and run on this computer: IS-Net general use (Apache-2.0),
 SkySeg (MIT), SCUNet (Apache-2.0), Real-ESRGAN general x4v3 (BSD-3-Clause), LaMa
-(Apache-2.0) and YuNet (MIT).
+(Apache-2.0), YuNet (MIT) and Intel's open-closed-eye-0001 from the Open Model Zoo
+(Apache-2.0).
 libwebp-sys builds Google's libwebp (BSD-3-Clause) from source into the program for lossy
 WebP export; AVIF export uses rav1e and ravif (BSD-2-Clause / BSD-3-Clause), pure Rust.
 lcms2-sys builds Little CMS (MIT) from source into the program for colour-space exports

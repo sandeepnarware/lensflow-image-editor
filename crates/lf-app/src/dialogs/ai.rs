@@ -24,6 +24,9 @@ pub const ABOUT_CUTOUT: &str = "Keeps the main subject and makes the background 
 pub const ABOUT_SUBJECT: &str =
     "Finds the main subject and adds it as a mask, ready for its own adjustments.";
 pub const ABOUT_SKY: &str = "Finds the sky and adds it as a mask, ready for its own adjustments.";
+pub const ABOUT_CULL: &str = "Checks each photo for blur, missed focus on the eyes and closed eyes, so the likely rejects can be found at once. Nothing is flagged until you say so.";
+pub const REJECT_THEM: &str = "Reject them";
+pub const SHOW_THEM: &str = "Show them";
 pub const ABOUT_REMOVE: &str = "Fills what was painted from its surroundings and saves the photo beside the original as a new 16-bit TIFF.";
 
 /// "AI Denoise: 3 photos".
@@ -57,6 +60,10 @@ pub enum AiAction {
     None,
     Start(AiTool),
     Close,
+    /// Assisted culling: flag the photos that look wrong as rejected.
+    RejectIssues,
+    /// Assisted culling: filter the grid to the photos that look wrong.
+    ShowIssues,
 }
 
 pub struct AiDialog {
@@ -109,9 +116,25 @@ impl AiDialog {
                 Stage::Done(result) => {
                     done_ui(ui, &result);
                     ui.add_space(12.0);
-                    if ui.button(CLOSE).clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
-                        action = AiAction::Close;
-                    }
+                    let issues = match &result {
+                        Ok(Report {
+                            culled: Some(c), ..
+                        }) => c.issues.len(),
+                        _ => 0,
+                    };
+                    ui.horizontal(|ui| {
+                        if issues > 0 {
+                            if ui.button(SHOW_THEM).clicked() {
+                                action = AiAction::ShowIssues;
+                            }
+                            if ui.button(REJECT_THEM).clicked() {
+                                action = AiAction::RejectIssues;
+                            }
+                        }
+                        if ui.button(CLOSE).clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
+                            action = AiAction::Close;
+                        }
+                    });
                 }
             }
         });
@@ -127,6 +150,7 @@ impl AiDialog {
             AiTool::Remove => ABOUT_REMOVE,
             AiTool::Mask { sky: false } => ABOUT_SUBJECT,
             AiTool::Mask { sky: true } => ABOUT_SKY,
+            AiTool::Cull => ABOUT_CULL,
         };
         ui.label(RichText::new(about).color(theme::MUTED));
         ui.add_space(8.0);
@@ -151,7 +175,7 @@ impl AiDialog {
                     .labelled_by(label.id);
                 *amount = pct / 100.0;
             }
-            AiTool::Cutout | AiTool::Mask { .. } | AiTool::Remove => {}
+            AiTool::Cutout | AiTool::Mask { .. } | AiTool::Remove | AiTool::Cull => {}
         }
         ui.add_space(8.0);
         if let Some(text) = download_text(self.download) {
@@ -206,6 +230,16 @@ impl AiDialog {
 
 fn done_ui(ui: &mut egui::Ui, result: &Result<Report, String>) {
     match result {
+        Ok(Report {
+            culled: Some(c),
+            failed,
+            ..
+        }) => {
+            ui.label(culled_text(c));
+            for (name, why) in failed {
+                ui.label(RichText::new(format!("{name}: {why}")).color(theme::WARNING));
+            }
+        }
         Ok(report) => {
             let n = report.written.len();
             ui.label(match n {
@@ -229,9 +263,71 @@ fn done_ui(ui: &mut egui::Ui, result: &Result<Report, String>) {
     }
 }
 
+/// What assisted culling found, in a sentence or two.
+pub fn culled_text(c: &crate::ai_job::Culled) -> String {
+    let issues = c.issues.len();
+    let found = match issues {
+        0 => "No photo looks blurry or has closed eyes.".to_owned(),
+        _ => {
+            let mut parts = Vec::new();
+            match c.blurry {
+                0 => {}
+                1 => parts.push("1 looks blurry".to_owned()),
+                n => parts.push(format!("{} look blurry", count(n))),
+            }
+            match c.eyes_closed {
+                0 => {}
+                1 => parts.push("1 has closed eyes".to_owned()),
+                n => parts.push(format!("{} have closed eyes", count(n))),
+            }
+            let them = if issues == 1 {
+                "1 photo to check".to_owned()
+            } else {
+                format!("{} photos to check", count(issues))
+            };
+            format!("{}: {them}.", capitalised(&parts.join(" and ")))
+        }
+    };
+    match c.scored {
+        0 => found,
+        1 => format!("Scored 1 photo. {found}"),
+        n => format!("Scored {} photos. {found}", count(n)),
+    }
+}
+
+fn capitalised(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn culling_says_what_it_found() {
+        use crate::ai_job::Culled;
+        let none = Culled {
+            scored: 3,
+            ..Culled::default()
+        };
+        assert_eq!(
+            culled_text(&none),
+            "Scored 3 photos. No photo looks blurry or has closed eyes."
+        );
+        let some = Culled {
+            scored: 0,
+            blurry: 2,
+            eyes_closed: 1,
+            issues: vec![1, 2, 3],
+        };
+        assert_eq!(
+            culled_text(&some),
+            "2 look blurry and 1 has closed eyes: 3 photos to check."
+        );
+    }
 
     #[test]
     fn the_title_and_download_note_read_well() {

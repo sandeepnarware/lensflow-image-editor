@@ -17,6 +17,7 @@ pub mod model;
 pub mod places;
 pub mod presets;
 pub mod print;
+pub mod scores;
 pub mod sidecar;
 pub mod thumbs;
 pub mod versions;

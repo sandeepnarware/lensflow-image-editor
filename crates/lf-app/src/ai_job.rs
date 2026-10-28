@@ -33,6 +33,8 @@ pub enum AiTool {
     Remove,
     /// A mask of the subject (or the sky) for the open photo, added in Develop.
     Mask { sky: bool },
+    /// Sharpness, faces and closed eyes scored into the catalogue ([`lf_ai::cull`]).
+    Cull,
 }
 
 impl AiTool {
@@ -46,6 +48,7 @@ impl AiTool {
             AiTool::Remove => lf_ai::inpaint::INPAINT_MODELS.to_vec(),
             AiTool::Mask { sky: false } => lf_ai::segment::SUBJECT_MODELS.to_vec(),
             AiTool::Mask { sky: true } => lf_ai::segment::SKY_MODELS.to_vec(),
+            AiTool::Cull => lf_ai::cull::CULL_MODELS.to_vec(),
         }
     }
 
@@ -59,6 +62,7 @@ impl AiTool {
             AiTool::Remove => "Remove objects",
             AiTool::Mask { sky: false } => "Select subject",
             AiTool::Mask { sky: true } => "Select sky",
+            AiTool::Cull => "Assisted culling",
         }
     }
 
@@ -70,7 +74,7 @@ impl AiTool {
             AiTool::Retouch { .. } => ("Retouched".into(), "tif"),
             AiTool::Cutout => ("Cutout".into(), "png"),
             AiTool::Remove => ("Removed".into(), "tif"),
-            AiTool::Mask { .. } => (String::new(), ""),
+            AiTool::Mask { .. } | AiTool::Cull => (String::new(), ""),
         }
     }
 }
@@ -97,6 +101,19 @@ pub struct Report {
     pub failed: Vec<(String, String)>,
     /// AI masks found: the photo and the mask's shape.
     pub masks: Vec<(i64, lf_settings::masks::Shape)>,
+    /// Assisted culling: what the photos' scores say.
+    pub culled: Option<Culled>,
+}
+
+/// What assisted culling found over the photos it was run on (scored now or before).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Culled {
+    /// Photos scored by this run (the rest already had fresh scores).
+    pub scored: usize,
+    pub blurry: usize,
+    pub eyes_closed: usize,
+    /// Every photo that looks like a reject (blurry or eyes closed), in the order asked.
+    pub issues: Vec<i64>,
 }
 
 /// The AI folder beside the frame cache (`<cache>/ai`).
@@ -142,6 +159,9 @@ pub fn run(
         )
         .map_err(|e| e.to_string())?;
     let catalog = Catalog::open(root).map_err(|e| e.to_string())?;
+    if tool == AiTool::Cull {
+        return cull(&gpu, engine, &catalog, ids, &mut progress, stop);
+    }
     let mut report = Report::default();
     let count = ids.len();
     for (index, &id) in ids.iter().enumerate() {
@@ -245,7 +265,7 @@ fn one(
             let done = lf_ai::faces::smooth_skin(&img, &faces, amount);
             write_tiff16(&out, &done)?;
         }
-        AiTool::Mask { .. } => return Err("Not a file.".to_owned()),
+        AiTool::Mask { .. } | AiTool::Cull => return Err("Not a file.".to_owned()),
         AiTool::Remove => {
             let painted = painted.ok_or_else(|| "Nothing was painted.".to_owned())?;
             let mask = painted.resized(img.w, img.h);
@@ -328,6 +348,77 @@ fn mask(
     })
 }
 
+/// Assisted culling: scores the photos of `ids` that have no fresh scores (as shot, at
+/// [`lf_ai::cull::SCORE_EDGE`]), then says what every photo's scores show. A photo that
+/// cannot be read is reported and the others go on.
+fn cull(
+    gpu: &Arc<Gpu>,
+    engine: &Engine,
+    catalog: &Catalog,
+    ids: &[i64],
+    progress: &mut impl FnMut(Step),
+    stop: &AtomicBool,
+) -> Result<Report, String> {
+    let mut scorer = lf_ai::cull::Scorer::new(engine).map_err(|e| e.to_string())?;
+    let todo = catalog.unscored(ids).map_err(|e| e.to_string())?;
+    let mut report = Report::default();
+    let mut culled = Culled::default();
+    let count = todo.len();
+    let as_shot = EditSettings::default_settings();
+    for (index, (id, path)) in todo.iter().enumerate() {
+        if stop.load(Ordering::SeqCst) {
+            return Err(lf_ai::AiError::Stopped.to_string());
+        }
+        progress(Step::Photo {
+            index,
+            count,
+            done: 0,
+            total: 1,
+        });
+        let scored = render_at(
+            gpu,
+            path,
+            &as_shot,
+            lf_ai::cull::SCORE_EDGE,
+            Quality::Preview,
+        )
+        .and_then(|img| scorer.score(&img).map_err(|e| e.to_string()))
+        .and_then(|s| {
+            let scores = lf_catalog::scores::Scores {
+                sharpness: s.sharpness,
+                faces: s.faces,
+                eyes_closed: s.eyes_closed,
+                eye_sharpness: s.eye_sharpness,
+            };
+            catalog.set_scores(*id, &scores).map_err(|e| e.to_string())
+        });
+        match scored {
+            Ok(()) => culled.scored += 1,
+            Err(e) => {
+                let name = crate::develop::open::file_name(path);
+                log::warn!("assisted culling failed on {name}: {e}");
+                report.failed.push((name, e));
+            }
+        }
+    }
+    for &id in ids {
+        let Some(scores) = catalog
+            .photo(id)
+            .map_err(|e| e.to_string())?
+            .and_then(|r| r.scores)
+        else {
+            continue;
+        };
+        culled.blurry += usize::from(scores.blurry());
+        culled.eyes_closed += usize::from(scores.eyes_closed());
+        if scores.issue() {
+            culled.issues.push(id);
+        }
+    }
+    report.culled = Some(culled);
+    Ok(report)
+}
+
 /// The photo at `path` with `settings`, at full size (`max_edge` at most), as f32 RGB.
 pub fn render(
     gpu: &Arc<Gpu>,
@@ -335,9 +426,20 @@ pub fn render(
     settings: &EditSettings,
     max_edge: u32,
 ) -> Result<Rgb, String> {
+    render_at(gpu, path, settings, max_edge, Quality::Best)
+}
+
+/// [`render`] with the RAW demosaiced at `quality`.
+pub fn render_at(
+    gpu: &Arc<Gpu>,
+    path: &Path,
+    settings: &EditSettings,
+    max_edge: u32,
+    quality: Quality,
+) -> Result<Rgb, String> {
     let name = crate::develop::open::file_name(path);
     let develop = DevelopSettings::from_settings(settings);
-    let opened = lf_raw::open::open(path, Quality::Best, &develop, max_edge)
+    let opened = lf_raw::open::open(path, quality, &develop, max_edge)
         .map_err(|e| format!("{name}: {e}"))?;
     let mut renderer =
         lf_raw::render::renderer_for(gpu, &opened).map_err(|e| format!("{name}: {e}"))?;

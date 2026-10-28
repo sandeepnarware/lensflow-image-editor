@@ -157,6 +157,13 @@ first use of a tool downloads the AI engine (ONNX Runtime) and that tool's model
 (the dialog says how much); each file is checked against a pinned SHA-256. They need the
 studio in good standing, and use none of the plan's server AI allowance.
 
+Assisted culling (AI → Cull): scores the selected photos (or every photo shown) for blur,
+missed focus on the eyes and closed eyes, then offers to show or reject the ones that look
+wrong. Nothing is flagged until you say so. The grid marks a likely reject with an amber
+triangle (hover says why); the filter bar's "Possible rejects", "Blurry", "Eyes closed" and
+"Sharp, eyes open" choices and the Sharpness sort use the scores. A photo is scored once,
+until its file changes.
+
 The window needs a graphics adapter. With no driver it runs on a software
 adapter (WARP on Windows, lavapipe on Linux) and says "No graphics driver found:
 previews will be slow."
