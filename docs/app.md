@@ -418,6 +418,18 @@ texture: `BrushTexture` resamples the picture into the mask's layer and the shad
 kind 2; `masks::weight` samples it on the CPU. A picture that does not decode to its size is
 dropped when read.
 
+### Upright
+
+The Lens corrections section's Upright: Vertical and Full. `develop::upright::segments` finds
+straight edges in the photo's sample (Sobel, then a Hough transform voting only near each
+pixel's gradient angle and only for lines within 30° of vertical or level; peaks strongest
+first, each pixel claimed by one line, each line cut to its longest unbroken run).
+`lf_settings::upright::fit` then searches the vertical (and in Full the horizontal) perspective
+and the straightening angle, coarse to fine, minimising each line's leftover lean after
+`Lens::to_corrected` and the turn (capped, so a slanted roof cannot pull it). The result is
+written to `desktop.lens` and `angle` (the crop kept inside, as the Straighten slider does).
+A quarter-turned or flipped photo is refused.
+
 ### Healing strokes
 
 The spot tool's Brush paints healing (or cloning) strokes, desktop-only in `desktop.heal`

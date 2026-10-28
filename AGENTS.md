@@ -140,6 +140,7 @@ cargo test --workspace                   # includes the 228-render parity suite
   Colour spaces + soft proof (`S`): `lf_catalog::colour` (lcms2), `ExportSpec::space`, `lut::SOFT_PROOF`, `DrawOptions::proof`.
   WB presets: `shader_values::{WB_PRESETS, kelvin_wb}`, `lf_raw::open::as_shot_kelvin`.
   Healing strokes: `lf_settings::heal` (`desktop.heal`), dabs through `spots::run_dabs`, the spot tool's Brush.
+  Upright: `develop::upright` (Hough lines), `lf_settings::upright::fit`, the Lens section's buttons.
   Export presets (`dialogs/export_presets.rs`, `prefs.export_presets`) and the `{title}` file-name token.
   Mask ranges: `lf_settings::masks::Range` (brightness or colour), `range_weight` in `develop.wgsl`.
   AI tools: `lf-ai`, `ai_job.rs`, `dialogs/ai.rs`, `library/ai_ui.rs` (AI tab: Denoise, Upscale, Remove objects with `dialogs/remove.rs`, Retouch, Remove background).

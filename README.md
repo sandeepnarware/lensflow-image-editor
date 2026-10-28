@@ -70,6 +70,8 @@ skipped as duplicates.
 
 Lens corrections (a section after Effects): distortion, lens vignetting, red/cyan and
 blue/yellow fringes, and vertical and horizontal perspective, kept for the desktop only.
+Upright (Vertical or Full) finds the straight lines in the photo and sets the perspective
+and straightening that make verticals upright and the horizon level.
 
 Masks (`M`): linear and radial gradients and a brush, each with its own exposure, tone,
 white balance, saturation and clarity. Gradients are moved by their handles on the photo; a

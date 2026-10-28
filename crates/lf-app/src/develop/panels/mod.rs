@@ -226,7 +226,9 @@ pub fn show(
     }
     // Desktop only, after the web's sections: its Reset is its own, as the RAW section's.
     let mut r = SliderResponse::default();
-    if section(ui, "lens", lens::TITLE, false, |ui| r = lens::show(ui, s)) {
+    if section(ui, "lens", lens::TITLE, false, |ui| {
+        r = lens::show(ui, s, ctx.sample)
+    }) {
         let before = s.clone();
         lens::reset(s);
         if *s != before {
