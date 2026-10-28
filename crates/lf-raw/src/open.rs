@@ -275,6 +275,50 @@ pub fn open(
 
 /// `(width, height, exif orientation)` of a RAW's usable area from rawler's dummy decode,
 /// which parses headers and allocates no pixel data. Panics inside rawler are caught.
+/// The colour temperature (kelvin) of a RAW file's as-shot white balance, from its headers:
+/// the camera's neutral (one over each white-balance multiplier) taken to XYZ through the
+/// colour matrix, and McCamy's estimate from its chromaticity. `None` for other files, or a
+/// file without the metadata.
+pub fn as_shot_kelvin(path: &Path) -> Option<f64> {
+    use rawler::decoders::RawDecodeParams;
+    if sniff(path).ok()? != Kind::Raw {
+        return None;
+    }
+    let src = rawler::rawsource::RawSource::new(path).ok()?;
+    let img = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rawler::get_decoder(&src)?.raw_image(&src, &RawDecodeParams::default(), true)
+    }))
+    .ok()?
+    .ok()?;
+    let wb = img.wb_coeffs;
+    if wb[..3].iter().any(|v| !v.is_finite() || *v <= 0.0) {
+        return None;
+    }
+    let m = img
+        .color_matrix
+        .iter()
+        .filter(|(_, m)| m.len() >= 9)
+        .min_by_key(|(ill, _)| (**ill != rawler::imgop::xyz::Illuminant::D65, **ill))
+        .map(|(_, m)| m.clone())?;
+    let neutral = [f64::from(wb[1] / wb[0]), 1.0, f64::from(wb[1] / wb[2])];
+    let xyz = crate::color::solve3(
+        [
+            [f64::from(m[0]), f64::from(m[1]), f64::from(m[2])],
+            [f64::from(m[3]), f64::from(m[4]), f64::from(m[5])],
+            [f64::from(m[6]), f64::from(m[7]), f64::from(m[8])],
+        ],
+        neutral,
+    )?;
+    let sum = xyz[0] + xyz[1] + xyz[2];
+    if sum.abs() < 1e-9 {
+        return None;
+    }
+    Some(lf_settings::shader_values::kelvin_of_xy(
+        xyz[0] / sum,
+        xyz[1] / sum,
+    ))
+}
+
 fn raw_dimensions(path: &Path) -> Option<(u32, u32, u8)> {
     use rawler::decoders::{Orientation as O, RawDecodeParams};
     let src = rawler::rawsource::RawSource::new(path).ok()?;

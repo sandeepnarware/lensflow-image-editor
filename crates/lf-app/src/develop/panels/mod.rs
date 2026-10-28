@@ -127,6 +127,8 @@ pub struct PanelContext<'a> {
     pub picking_wb: bool,
     /// The LUT looks loaded (`lf_pipeline::lut::names`).
     pub luts: &'a [String],
+    /// The RAW's as-shot colour temperature (kelvin), when its headers say.
+    pub as_shot_kelvin: Option<f64>,
 }
 
 /// A folding section with a "Reset" link; true when the link was clicked.
@@ -199,7 +201,8 @@ pub fn show(
             r = match sec.key {
                 "light" => light::show(ui, s, ctx.sample),
                 "color" => {
-                    let (r, pick) = color::show(ui, s, ctx.sample, ctx.picking_wb);
+                    let (r, pick) =
+                        color::show(ui, s, ctx.sample, ctx.picking_wb, ctx.as_shot_kelvin);
                     out.pick_wb |= pick;
                     r
                 }

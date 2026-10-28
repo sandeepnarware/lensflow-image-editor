@@ -63,6 +63,28 @@ pub fn white_of_exif_illuminant(code: u16) -> [f32; 3] {
 }
 
 /// The matrix that takes white-balanced camera RGB to linear sRGB (see the module docs).
+/// `x` with `m x = b`, by Cramer's rule; `None` for a singular `m`.
+pub fn solve3(m: [[f64; 3]; 3], b: [f64; 3]) -> Option<[f64; 3]> {
+    let det = |m: [[f64; 3]; 3]| {
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    };
+    let d = det(m);
+    if d.abs() < 1e-12 {
+        return None;
+    }
+    let mut out = [0.0; 3];
+    for (i, o) in out.iter_mut().enumerate() {
+        let mut mi = m;
+        for row in 0..3 {
+            mi[row][i] = b[row];
+        }
+        *o = det(mi) / d;
+    }
+    Some(out)
+}
+
 pub fn cam_to_srgb(xyz_to_cam: Option<Mat3>, illuminant_white: [f32; 3]) -> Mat3 {
     let Some(m) = xyz_to_cam else {
         log::warn!("no colour matrix: camera RGB is used as sRGB unchanged");

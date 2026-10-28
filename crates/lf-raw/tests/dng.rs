@@ -90,3 +90,32 @@ fn a_missing_file_is_an_io_error_naming_the_path() {
     assert!(matches!(e, RawError::Io { .. }));
     assert!(e.to_string().contains("no-such-photo.dng"), "{e}");
 }
+
+#[test]
+fn the_as_shot_colour_temperature_reads_from_the_headers() {
+    // A "camera" whose RGB is linear sRGB: XYZ to camera is XYZ to sRGB.
+    const XYZ_TO_SRGB: [[f32; 3]; 3] = [
+        [3.2406, -1.5372, -0.4986],
+        [-0.9689, 1.8758, 0.0415],
+        [0.0557, -0.2040, 1.0570],
+    ];
+    let img = gradient_rgb(32, 24);
+    let shoot = |name: &str, wb: [f32; 3]| {
+        let path = std::env::temp_dir().join(format!("lf-raw-{}-{name}.dng", std::process::id()));
+        synthetic_dng::write(&path, &img, synthetic_dng::RGGB, 64, 4095, wb, XYZ_TO_SRGB);
+        let k = lf_raw::open::as_shot_kelvin(&path);
+        let _ = std::fs::remove_file(&path);
+        k.expect("a temperature")
+    };
+    // Balanced for D65 (sRGB white): about 6500 K.
+    let daylight = shoot("d65", [1.0, 1.0, 1.0]);
+    assert!((6000.0..7000.0).contains(&daylight), "{daylight}");
+    // Balanced for warm light (red strong in the neutral, so a small red multiplier).
+    let warm = shoot("warm", [0.55, 1.0, 2.4]);
+    assert!(warm < 4000.0, "{warm}");
+    // Not a RAW: none.
+    let png = std::env::temp_dir().join(format!("lf-raw-{}-k.png", std::process::id()));
+    image::RgbImage::new(2, 2).save(&png).unwrap();
+    assert_eq!(lf_raw::open::as_shot_kelvin(&png), None);
+    let _ = std::fs::remove_file(&png);
+}

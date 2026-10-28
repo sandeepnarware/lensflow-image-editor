@@ -420,6 +420,15 @@ dropped when read.
 
 ### White balance and Auto tone
 
+Presets (`shader_values::WB_PRESETS`, kelvin) become temperature and tint values, so they need
+nothing new in the sidecar or the web editor: `kelvin_wb(shot, target)` takes both lights to
+linear sRGB (daylight locus from 4000 K, Planckian below) and returns the sliders that make
+the target light neutral in the photo as balanced (`neutral_wb`), within the sliders' range.
+The as-shot temperature comes from the RAW's headers (`lf_raw::open::as_shot_kelvin`: one
+over the white-balance multipliers through the D65 colour matrix, McCamy's CCT), read when the
+photo opens (`OpenedPhoto::as_shot_kelvin`); other files are taken as 5500 K. The list names a
+preset when the sliders hold its values.
+
 Colour has a white-balance list (As shot, Auto) and a "Pick neutral" eyedropper (`W`, also
 the tool row's "White balance"). A click on something that should be grey or white sets
 temperature and tint so its colour (a 5×5 average) comes out neutral, as one history step,

@@ -16,13 +16,25 @@ pub const CUSTOM_WB: &str = "Custom";
 /// The eyedropper's button.
 pub const PICK_WB: &str = "Eyedropper";
 
-/// What the white-balance list shows for the current sliders.
-pub fn wb_name(s: &EditSettings) -> &'static str {
+/// The light a photo without a known white balance (a JPEG, say) is taken to be balanced for.
+pub const ASSUMED_KELVIN: f64 = 5500.0;
+
+/// The sliders for preset `kelvin` on a photo shot for `as_shot` kelvin, rounded as the
+/// sliders keep them.
+pub fn preset_wb(as_shot: f64, kelvin: f64) -> Option<(f64, f64)> {
+    lf_settings::shader_values::kelvin_wb(as_shot, kelvin).map(|(t, i)| (t.round(), i.round()))
+}
+
+/// What the white-balance list shows for the current sliders: As shot, a preset whose values
+/// they hold, or Custom.
+pub fn wb_name(s: &EditSettings, as_shot: f64) -> &'static str {
     if s.temperature == 0.0 && s.tint == 0.0 {
-        AS_SHOT
-    } else {
-        CUSTOM_WB
+        return AS_SHOT;
     }
+    lf_settings::shader_values::WB_PRESETS
+        .iter()
+        .find(|(_, k)| preset_wb(as_shot, *k) == Some((s.temperature, s.tint)))
+        .map_or(CUSTOM_WB, |(name, _)| name)
 }
 
 /// Draws the section. Returns what the sliders did, and whether the eyedropper was clicked
@@ -32,7 +44,9 @@ pub fn show(
     s: &mut EditSettings,
     sample: Option<&Sample>,
     picking: bool,
+    as_shot: Option<f64>,
 ) -> (SliderResponse, bool) {
+    let shot = as_shot.unwrap_or(ASSUMED_KELVIN);
     let mut out = SliderResponse::default();
     let mut pick = false;
     if ui.checkbox(&mut s.bw, BW).clicked() {
@@ -44,11 +58,11 @@ pub fn show(
         // Short, so the row fits the side panel (the list itself is named in full).
         ui.label("WB").on_hover_text(WHITE_BALANCE);
         let list = egui::ComboBox::from_id_salt("white-balance")
-            .width(80.0)
-            .selected_text(wb_name(s))
+            .width(96.0)
+            .selected_text(wb_name(s, shot))
             .show_ui(ui, |ui| {
                 if ui
-                    .selectable_label(wb_name(s) == AS_SHOT, AS_SHOT)
+                    .selectable_label(wb_name(s, shot) == AS_SHOT, AS_SHOT)
                     .clicked()
                 {
                     chosen = Some(Some((0.0, 0.0)));
@@ -58,6 +72,17 @@ pub fn show(
                     .on_hover_text("Ctrl+Shift+U");
                 if auto_button.clicked() {
                     chosen = Some(sample.and_then(auto::auto_wb));
+                }
+                ui.separator();
+                for (name, kelvin) in lf_settings::shader_values::WB_PRESETS {
+                    let values = preset_wb(shot, kelvin);
+                    if ui
+                        .selectable_label(wb_name(s, shot) == name, name)
+                        .on_hover_text(format!("{kelvin:.0} K"))
+                        .clicked()
+                    {
+                        chosen = Some(values);
+                    }
                 }
             });
         list.response
@@ -76,6 +101,13 @@ pub fn show(
         s.tint = tint;
         out.changed = true;
         out.released = true;
+    }
+    if let Some(k) = as_shot {
+        ui.label(
+            egui::RichText::new(format!("As shot: about {:.0} K", (k / 50.0).round() * 50.0))
+                .small()
+                .color(crate::theme::MUTED),
+        );
     }
     out = out.or(slider::edit(
         ui,

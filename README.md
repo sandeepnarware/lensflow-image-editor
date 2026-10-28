@@ -79,7 +79,9 @@ Alt-click the photo to pick it). Select subject and Select sky (AI, on this comp
 add a mask of the main subject or the sky, found in the photo. They are kept for
 the desktop only (the web editor keeps them but does not draw them).
 
-White balance: the Colour panel's list (As shot, Auto) and its eyedropper (`W`: click
+White balance: the Colour panel's list (As shot, Auto, and presets: Daylight, Cloudy, Shade,
+Tungsten, Fluorescent, Flash, worked out from the RAW's as-shot colour temperature, shown
+under the list) and its eyedropper (`W`: click
 something grey or white). Auto tone is a button in Light (`Ctrl+U`); Auto white balance is
 `Ctrl+Shift+U`.
 

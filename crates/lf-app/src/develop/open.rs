@@ -86,6 +86,8 @@ pub struct OpenedPhoto {
     pub reduced: bool,
     /// The photo, small, for the eyedropper and the auto buttons ([`super::auto`]).
     pub sample: super::auto::Sample,
+    /// The RAW's as-shot colour temperature (kelvin), when its headers say.
+    pub as_shot_kelvin: Option<f64>,
     /// The develop settings the RAW was decoded with.
     pub develop: DevelopSettings,
     /// The photo's edits from the catalogue (after the sidecar was reconciled).
@@ -187,6 +189,7 @@ fn open_photo(req: &Request) -> Result<OpenedPhoto, String> {
         full_height,
         reduced,
         sample,
+        as_shot_kelvin: lf_raw::open::as_shot_kelvin(&req.path),
         develop,
         settings,
         sidecar_error,

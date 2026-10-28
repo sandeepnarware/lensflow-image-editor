@@ -22,6 +22,7 @@ fn harness(raw: bool) -> Harness<'static, State> {
         .build_ui_state(
             |ui, s: &mut State| {
                 let ctx = PanelContext {
+                    as_shot_kelvin: None,
                     raw: s.raw,
                     histogram: None,
                     sample: None,
@@ -172,6 +173,7 @@ fn recorded() -> Harness<'static, Recorded> {
         .build_ui_state(
             |ui, s: &mut Recorded| {
                 let ctx = PanelContext {
+                    as_shot_kelvin: None,
                     raw: false,
                     histogram: None,
                     sample: None,
@@ -315,6 +317,7 @@ fn auto_tone_auto_white_balance_and_the_eyedropper_button() {
         .build_ui_state(
             |ui, s: &mut S| {
                 let ctx = PanelContext {
+                    as_shot_kelvin: None,
                     raw: false,
                     histogram: None,
                     sample: Some(&s.sample),
@@ -364,6 +367,19 @@ fn auto_tone_auto_white_balance_and_the_eyedropper_button() {
         (0.0, 0.0)
     );
     assert_eq!(h.state().commits, 3);
+
+    // A preset: Shade warms a photo shot in daylight, and the list then says "Shade".
+    h.get_by_role_and_label(Role::ComboBox, color::WHITE_BALANCE)
+        .click();
+    h.run();
+    h.get_by_label("Shade").click();
+    h.run();
+    assert!(h.state().settings.temperature > 0.0, "shade warms");
+    assert_eq!(
+        color::wb_name(&h.state().settings, color::ASSUMED_KELVIN),
+        "Shade"
+    );
+    assert_eq!(h.state().commits, 4);
 
     // The eyedropper's button asks the Develop view to open its tool.
     h.get_by_label(color::PICK_WB).click();

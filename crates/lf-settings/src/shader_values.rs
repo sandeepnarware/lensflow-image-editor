@@ -95,6 +95,68 @@ pub fn wb_gains(temperature: f64, tint: f64) -> [f64; 3] {
     ]
 }
 
+/// White balance presets, as Lightroom names them, and the colour temperature (kelvin) of
+/// the light each is for.
+pub const WB_PRESETS: [(&str, f64); 6] = [
+    ("Daylight", 5500.0),
+    ("Cloudy", 6500.0),
+    ("Shade", 7500.0),
+    ("Tungsten", 2850.0),
+    ("Fluorescent", 3800.0),
+    ("Flash", 5500.0),
+];
+
+/// The chromaticity of light at `kelvin`: the CIE daylight locus from 4000 K, the Planckian
+/// locus (Kim et al.'s cubic fit) below.
+pub fn kelvin_xy(kelvin: f64) -> (f64, f64) {
+    let t = kelvin.clamp(1667.0, 25000.0);
+    if t >= 4000.0 {
+        let x = if t <= 7000.0 {
+            -4.6070e9 / t.powi(3) + 2.9678e6 / t.powi(2) + 0.09911e3 / t + 0.244063
+        } else {
+            -2.0064e9 / t.powi(3) + 1.9018e6 / t.powi(2) + 0.24748e3 / t + 0.237040
+        };
+        (x, -3.0 * x * x + 2.87 * x - 0.275)
+    } else {
+        let x = -0.2661239e9 / t.powi(3) - 0.2343589e6 / t.powi(2) + 0.8776956e3 / t + 0.179910;
+        let y = if t >= 2222.0 {
+            -1.1063814 * x.powi(3) - 1.34811020 * x * x + 2.18555832 * x - 0.20219683
+        } else {
+            -0.9549476 * x.powi(3) - 1.37418593 * x * x + 2.09137015 * x - 0.16748867
+        };
+        (x, y)
+    }
+}
+
+/// The correlated colour temperature of chromaticity `(x, y)` (McCamy), in kelvin.
+pub fn kelvin_of_xy(x: f64, y: f64) -> f64 {
+    let n = (x - 0.3320) / (0.1858 - y);
+    (449.0 * n.powi(3) + 3525.0 * n * n + 6823.3 * n + 5520.33).clamp(1667.0, 25000.0)
+}
+
+/// Light at `kelvin` as linear sRGB, green 1.
+fn light_rgb(kelvin: f64) -> [f64; 3] {
+    let (x, y) = kelvin_xy(kelvin);
+    let xyz = [x / y, 1.0, (1.0 - x - y) / y];
+    let m = [
+        [3.2406, -1.5372, -0.4986],
+        [-0.9689, 1.8758, 0.0415],
+        [0.0557, -0.2040, 1.0570],
+    ];
+    let rgb = m.map(|row| row[0] * xyz[0] + row[1] * xyz[1] + row[2] * xyz[2]);
+    rgb.map(|v| v.max(1e-6) / rgb[1].max(1e-6))
+}
+
+/// The `(temperature, tint)` that balance a photo shot (and balanced) for `shot_kelvin` as
+/// if for `target_kelvin`: light at the target shows neutral. Within the sliders' range, so a
+/// far preset (tungsten on a daylight photo) goes as far as the sliders do.
+pub fn kelvin_wb(shot_kelvin: f64, target_kelvin: f64) -> Option<(f64, f64)> {
+    let shot = light_rgb(shot_kelvin);
+    let target = light_rgb(target_kelvin);
+    // How the target light looks in the photo as it is balanced now.
+    neutral_wb([0, 1, 2].map(|i| target[i] / shot[i]))
+}
+
 /// The `(temperature, tint)` that make the linear colour `rgb` neutral grey: the inverse of
 /// [`wb_gains`] (two linear equations: red and blue each equal to green after the gains).
 /// Clamped to the sliders' -100..100, so a colour too far off is only made nearer neutral.
@@ -121,6 +183,26 @@ pub fn neutral_wb(rgb: [f64; 3]) -> Option<(f64, f64)> {
 #[cfg(test)]
 mod wb_tests {
     use super::*;
+
+    #[test]
+    fn kelvin_presets_warm_and_cool_the_right_way() {
+        assert_eq!(
+            kelvin_wb(5500.0, 5500.0).map(|(t, i)| (t.round(), i.round())),
+            Some((0.0, 0.0))
+        );
+        let (shade, _) = kelvin_wb(5500.0, 7500.0).unwrap();
+        let (tungsten, _) = kelvin_wb(5500.0, 2850.0).unwrap();
+        assert!(shade > 5.0, "shade warms: {shade}");
+        assert!(tungsten < -20.0, "tungsten cools: {tungsten}");
+        // A photo shot under tungsten, set to tungsten: nothing to do.
+        let (same, _) = kelvin_wb(2850.0, 2850.0).unwrap();
+        assert!(same.abs() < 0.5);
+        // The loci and McCamy agree to within a few percent.
+        for k in [3000.0, 5000.0, 6500.0, 9000.0] {
+            let (x, y) = kelvin_xy(k);
+            assert!((kelvin_of_xy(x, y) - k).abs() / k < 0.04, "{k}");
+        }
+    }
 
     fn balanced(rgb: [f64; 3], (t, tint): (f64, f64)) -> [f64; 3] {
         let g = wb_gains(t, tint);

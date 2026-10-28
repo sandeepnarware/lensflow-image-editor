@@ -788,6 +788,10 @@ impl Develop {
         };
         let luts = lf_pipeline::lut::names();
         let ctx = PanelContext {
+            as_shot_kelvin: match &self.state {
+                State::Ready(photo, _) => photo.as_shot_kelvin,
+                _ => None,
+            },
             luts: &luts,
             raw: opened.kind == Kind::Raw,
             histogram: self.histogram.as_ref(),
