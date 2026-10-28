@@ -164,6 +164,7 @@ pub const RIBBON: &[Tab] = &[
                 "Preview",
                 &[
                     Do(Action::BeforeAfter),
+                    Do(Action::Clipping),
                     Do(Action::Fit),
                     Do(Action::ActualSize),
                 ],
@@ -239,6 +240,7 @@ pub fn icon(action: Action) -> &'static str {
         Action::Library => "📚",
         Action::Develop => "🎨",
         Action::BeforeAfter => "◑",
+        Action::Clipping => "⚠",
         Action::Fit => "⛶",
         Action::ActualSize => "🔍",
         Action::ToggleZoom => "🔍",
@@ -318,6 +320,7 @@ pub fn short_label(action: Action) -> &'static str {
         Action::ShowLogFolder => "Log folder",
         Action::KeyboardShortcuts => "Shortcuts",
         Action::Metadata => "Metadata",
+        Action::Clipping => "Clipping",
         Action::NewAlbum => "New album",
         Action::NewSmartAlbum => "Smart album",
         Action::AddToAlbum => "Add to album",
@@ -344,6 +347,7 @@ pub struct MenuState {
     pub enabled: HashSet<Action>,
     pub studio: Option<String>,
     pub before: bool,
+    pub clipping: bool,
     pub context: Option<&'static str>,
 }
 
@@ -469,7 +473,8 @@ fn group_ui(ui: &mut egui::Ui, g: &Group, state: &MenuState, clicked: &mut Optio
                     }
                     Do(action) => {
                         let enabled = state.enabled.contains(action);
-                        let on = *action == Action::BeforeAfter && state.before;
+                        let on = (*action == Action::BeforeAfter && state.before)
+                            || (*action == Action::Clipping && state.clipping);
                         if button(ui, *action, enabled, on).clicked() {
                             *clicked = Some(*action);
                         }
@@ -674,6 +679,7 @@ mod tests {
             Action::Library,
             Action::Develop,
             Action::BeforeAfter,
+            Action::Clipping,
             Action::Fit,
             Action::ActualSize,
             Action::MatchReference,

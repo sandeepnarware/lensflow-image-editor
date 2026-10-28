@@ -34,6 +34,8 @@ pub enum Action {
     Library,
     Develop,
     BeforeAfter,
+    /// Show clipped highlights red and blocked shadows blue in the preview.
+    Clipping,
     Fit,
     ActualSize,
     /// `Space`: fit ⇄ 100 %.
@@ -114,6 +116,7 @@ impl Action {
             Action::Library => "Go to Library",
             Action::Develop => "Go to Develop",
             Action::BeforeAfter => "Before/After",
+            Action::Clipping => "Show clipping",
             Action::Fit => "Fit",
             Action::ActualSize => "100 %",
             Action::ToggleZoom => "Fit / 100 %",
@@ -220,6 +223,7 @@ pub const MAP: Map = Map(&[
     (Action::AutoTone, cmd(Key::U)),
     (Action::AutoWhiteBalance, cmd_shift(Key::U)),
     (Action::BeforeAfter, key(Key::Backslash)),
+    (Action::Clipping, key(Key::J)),
     (Action::Undo, cmd(Key::Z)),
     (Action::Redo, cmd_shift(Key::Z)),
     (Action::Redo, cmd(Key::Y)),
@@ -383,6 +387,7 @@ mod tests {
             (Action::AutoTone, cmd(Key::U)),
             (Action::AutoWhiteBalance, cmd_shift(Key::U)),
             (Action::BeforeAfter, key(Key::Backslash)),
+            (Action::Clipping, key(Key::J)),
             (Action::Undo, cmd(Key::Z)),
             (Action::Redo, cmd_shift(Key::Z)),
             (Action::Redo, cmd(Key::Y)),

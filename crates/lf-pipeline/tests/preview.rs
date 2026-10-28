@@ -30,6 +30,7 @@ fn full_view_draw_equals_render() {
             w: 1.0,
             h: 1.0,
         },
+        clipping: false,
     };
     r.draw(&s, &opts, &canvas).unwrap();
     let got = read_back(&gpu, &canvas).unwrap();
@@ -51,6 +52,42 @@ fn before_ignores_settings_and_geometry() {
     r.draw(&s, &opts, &canvas).unwrap();
     let got = read_back(&gpu, &canvas).unwrap();
     assert!(got.as_raw() == src.as_raw(), "before is not the source");
+}
+
+#[test]
+fn clipping_shows_white_red_and_black_blue_only_when_asked() {
+    let gpu = shared_gpu();
+    // Left half black, right half white, a grey stripe in the middle.
+    let src = RgbaImage::from_fn(32, 8, |x, _| match x {
+        0..=13 => Rgba([0, 0, 0, 255]),
+        14..=17 => Rgba([128, 128, 128, 255]),
+        _ => Rgba([255, 255, 255, 255]),
+    });
+    let s = normalise(&json!({}));
+    let mut r = Renderer::new(gpu.clone(), &src, 32, 8).unwrap();
+    let canvas = Target::new(&gpu, 32, 8, false).unwrap();
+    let opts = DrawOptions {
+        clipping: true,
+        ..DrawOptions::default()
+    };
+    r.draw(&s, &opts, &canvas).unwrap();
+    let got = read_back(&gpu, &canvas).unwrap();
+    let px = |x| got.get_pixel(x, 4).0;
+    assert!(
+        px(2)[2] > 200 && px(2)[0] < 100,
+        "black is not blue: {:?}",
+        px(2)
+    );
+    assert!(
+        px(29)[0] > 200 && px(29)[1] < 100,
+        "white is not red: {:?}",
+        px(29)
+    );
+    assert_eq!(px(16)[0], px(16)[2], "grey changed");
+    // Off: the draw is the render.
+    r.draw(&s, &DrawOptions::default(), &canvas).unwrap();
+    let plain = read_back(&gpu, &canvas).unwrap();
+    assert_eq!(plain.get_pixel(29, 4).0, [255, 255, 255, 255]);
 }
 
 #[test]

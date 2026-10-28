@@ -1384,6 +1384,7 @@ impl Library {
             Action::Develop => !develop && self.selection.active().is_some(),
             Action::Up | Action::Down => !develop && !self.order.is_empty(),
             Action::BeforeAfter
+            | Action::Clipping
             | Action::Fit
             | Action::ActualSize
             | Action::ToggleZoom
@@ -1463,6 +1464,7 @@ impl Library {
             Action::Up => self.step(Dir::Up, env),
             Action::Down => self.step(Dir::Down, env),
             Action::BeforeAfter => self.develop.toggle_before(),
+            Action::Clipping => self.develop.toggle_clipping(),
             Action::Fit | Action::ActualSize | Action::ToggleZoom => self.develop.zoom(action),
             Action::AddVersion => self.develop.ask_add_version(),
             Action::ResetAll => self.develop.reset_all(env.toasts),

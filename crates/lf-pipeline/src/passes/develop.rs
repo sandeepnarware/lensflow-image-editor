@@ -49,7 +49,8 @@ pub struct Uniforms {
     pub bw: u32,
     pub sharp_on: u32,
     pub tex_on: u32,
-    pub _pad: u32,
+    /// Desktop only: 1 paints clipped highlights red and blocked shadows blue (the preview).
+    pub clip_warn: u32,
     /// One output pixel in canvas UV (`1 / target size`): the derivatives `texture()` would
     /// take implicitly (WGSL only; see `develop.wgsl`).
     pub pixel: [f32; 2],
@@ -242,7 +243,7 @@ impl Uniforms {
             bw: s.bw as u32,
             sharp_on: (s.sharpen > 0.0 && sharp_ready) as u32,
             tex_on: (s.texture != 0.0 && texture_ready) as u32,
-            _pad: 0,
+            clip_warn: 0,
             pixel: [1.0 / f.target[0] as f32, 1.0 / f.target[1] as f32],
             hsl,
             band_hue,

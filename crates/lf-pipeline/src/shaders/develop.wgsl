@@ -62,7 +62,7 @@ struct Uniforms {
     bw: u32,
     sharp_on: u32,
     tex_on: u32,
-    _pad0: u32,
+    clip_warn: u32,         // desktop only: show clipping (the preview)
     pixel: vec2<f32>,       // one output pixel in canvas UV (1 / target size); WGSL only
     hsl: array<vec4<f32>, 8>,        // uHsl (xyz)
     band_hue: array<vec4<f32>, 8>,   // uBandHue (x)
@@ -416,5 +416,11 @@ fn fs_develop(in: VsOut) -> @location(0) vec4<f32> {
         c += n * u.grain * 0.22 * (0.4 + 0.6 * (1.0 - abs(2.0 * y - 1.0)));
     }
 
+    if (u.clip_warn != 0u) {
+        // Desktop only: a channel at white is clipped (red); every channel at black, blocked (blue).
+        let top = max(max(c.r, c.g), c.b);
+        if (top >= 0.998) { return vec4<f32>(1.0, 0.15, 0.15, 1.0); }
+        if (top <= 0.002) { return vec4<f32>(0.2, 0.45, 1.0, 1.0); }
+    }
     return vec4<f32>(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }

@@ -513,6 +513,15 @@ pixel per screen pixel). The active photo is outlined; marks go to it alone, `�
 it among the compared photos, and `Esc`, `C` or "Back to grid" closes. Showing another
 folder or album closes it; Develop and back keeps it.
 
+### Show clipping
+
+`J` (`Action::Clipping`, View → Preview) toggles `Develop::clipping`, passed to the renderer as
+`DrawOptions::clipping` (never in Before, never in `render`/`pixels`/exports). In
+`develop.wgsl` the `clip_warn` uniform (the old padding word, so the layout is unchanged)
+paints a pixel red when any channel reaches white (≥ 0.998 before the final clamp) and blue
+when every channel is at black (≤ 0.002). It is part of `DrawKey`, so toggling redraws. The
+ribbon button shows it switched on (`MenuState::clipping`).
+
 ### Import from a card
 
 File → From card (`Action::ImportFromCard`) opens "Import from a card"

@@ -100,6 +100,7 @@ struct DrawKey {
     size: (u32, u32),
     view: View,
     before: bool,
+    clipping: bool,
 }
 
 /// What became of an open answer, for the library (badges, neighbours).
@@ -122,6 +123,8 @@ pub struct Develop {
     viewport: Viewport,
     /// "Before" clicked on (the `\` key shows it only while held).
     before_toggled: bool,
+    /// View → Clipping (`J`): clipped highlights red, blocked shadows blue, in the preview.
+    clipping: bool,
     before_held: bool,
     /// View → Fit, 100 % or `Space`, applied when the preview is next laid out.
     zoom_asked: Option<Action>,
@@ -157,6 +160,7 @@ impl Develop {
             state: State::Empty,
             viewport: Viewport::default(),
             before_toggled: false,
+            clipping: false,
             before_held: false,
             zoom_asked: None,
             preview: None,
@@ -372,6 +376,16 @@ impl Develop {
     /// Before/after is showing the photo as it was.
     pub fn before(&self) -> bool {
         self.before_toggled || self.before_held
+    }
+
+    /// Whether the preview shows clipping.
+    pub fn clipping(&self) -> bool {
+        self.clipping
+    }
+
+    /// View → Clipping (`J`).
+    pub fn toggle_clipping(&mut self) {
+        self.clipping = !self.clipping;
     }
 
     /// View → Before/After (or the side panel's "Before").
@@ -799,6 +813,7 @@ impl Develop {
             size,
             view: placement.view,
             before,
+            clipping: self.clipping,
         };
         let preview = self
             .preview
@@ -818,6 +833,8 @@ impl Develop {
                     before,
                     crop: draw_crop,
                     view: placement.view,
+                    // Never over the photo as it was.
+                    clipping: self.clipping && !before,
                 };
                 let settings = self.session.edit().map_or(&photo.settings, |e| &e.settings);
                 if let Err(e) = photo.renderer.draw(settings, &opts, canvas) {

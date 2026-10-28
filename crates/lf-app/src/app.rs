@@ -237,6 +237,9 @@ impl App {
             before: self
                 .active_library()
                 .is_some_and(|lib| lib.develop().before()),
+            clipping: self
+                .active_library()
+                .is_some_and(|lib| lib.develop().clipping()),
             // The ribbon brings the view's own tab forward when the view changes.
             context: self
                 .active_library()

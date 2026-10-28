@@ -73,6 +73,7 @@ fn main() -> Result<(), String> {
                         before,
                         crop: None,
                         view: p.view,
+                        clipping: false,
                     };
                     renderer
                         .draw(&settings, &opts, &canvas)

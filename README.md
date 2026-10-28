@@ -123,6 +123,10 @@ and with their edits, zoomed and panned together to pick the sharpest of a burst
 Click one to make it active; flags, stars and labels go to it alone; `←`/`→` move
 between them; `Esc` goes back to the grid.
 
+Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
+red and shadows crushed to black show blue, while you edit. The preview only:
+exports never carry it.
+
 The window needs a graphics adapter. With no driver it runs on a software
 adapter (WARP on Windows, lavapipe on Linux) and says "No graphics driver found:
 previews will be slow."

@@ -134,6 +134,7 @@ cargo test --workspace                   # includes the 228-render parity suite
   Albums and smart albums: `lf_catalog::albums` (schema v8, `Rule` as JSON), `library/albums_ui.rs`,
   `dialogs/album.rs`, `Action::{NewAlbum, NewSmartAlbum, AddToAlbum, RemoveFromAlbum}`.
   Compare (`C`): `library/compare.rs` (render on `Open`, `Msg::CompareRendered`, shared zoom).
+  Show clipping (`J`): `DrawOptions::clipping` → `clip_warn` in `develop.wgsl` (preview only).
   LUT looks: `lf_settings::lut` (`.cube` parser, `desktop.lut`), `lf_pipeline::lut` (process-wide
   registry, 3D texture at bindings 15–16, `lut_amount` uniform), `luts.rs` (`.lensflow/luts/`).
   Merge to HDR: `lf-merge` (align + fuse), `merge_job.rs` (16-bit TIFF beside the first frame),

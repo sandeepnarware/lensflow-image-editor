@@ -50,6 +50,7 @@ impl eframe::App for Check {
                 before,
                 crop: None,
                 view: p.view,
+                clipping: false,
             };
             self.renderer
                 .draw(&self.settings, &opts, canvas)

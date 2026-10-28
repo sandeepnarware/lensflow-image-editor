@@ -34,7 +34,11 @@ type DetailKey = (SpotsKey, Option<f64>, Option<f64>);
 #[derive(Clone, Copy)]
 enum Mode {
     Before,
-    Develop { spotted: bool },
+    /// `clipping`: paint clipped highlights red and blocked shadows blue (the preview only).
+    Develop {
+        spotted: bool,
+        clipping: bool,
+    },
 }
 
 /// The part of the output a draw shows, as fractions of the output (zoom and pan).
@@ -65,6 +69,8 @@ pub struct DrawOptions {
     /// Draws this crop instead of the settings' (e.g. the whole turned frame while cropping).
     pub crop: Option<Crop>,
     pub view: View,
+    /// Desktop only: clipped highlights show red and blocked shadows blue (never in exports).
+    pub clipping: bool,
 }
 
 /// Where a develop pass draws: a cached target by name, or the caller's canvas.
@@ -371,7 +377,10 @@ impl Renderer {
         let w = ((f64::from(ow) * k).round() as u32).max(1);
         let h = ((f64::from(oh) * k).round() as u32).max(1);
         self.cached("output", w, h, false, FORMAT)?;
-        let mode = Mode::Develop { spotted };
+        let mode = Mode::Develop {
+            spotted,
+            clipping: false,
+        };
         let dest = Dest::Cached("output");
         self.develop_into(s, &geometry, &s.crop, &View::default(), mode, dest);
         read_back(&self.gpu, &self.targets["output"])
@@ -392,7 +401,10 @@ impl Renderer {
         let w = ((f64::from(ow) * k).round() as u32).max(1);
         let h = ((f64::from(oh) * k).round() as u32).max(1);
         self.cached("output_f16", w, h, false, FLOAT_FORMAT)?;
-        let mode = Mode::Develop { spotted };
+        let mode = Mode::Develop {
+            spotted,
+            clipping: false,
+        };
         let dest = Dest::Cached("output_f16");
         self.develop_into(s, &geometry, &s.crop, &View::default(), mode, dest);
         read_back_f16(&self.gpu, &self.targets["output_f16"])
@@ -485,6 +497,7 @@ impl Renderer {
         } else {
             Mode::Develop {
                 spotted: self.prepare_caches(s)?,
+                clipping: opts.clipping,
             }
         };
         self.develop_into(s, &geometry, &crop, &opts.view, mode, Dest::Canvas(canvas));
@@ -510,7 +523,10 @@ impl Renderer {
         let w = ((f64::from(ow) * k).round() as u32).max(1);
         let h = ((f64::from(oh) * k).round() as u32).max(1);
         self.cached(name, w, h, false, FORMAT)?;
-        let mode = Mode::Develop { spotted };
+        let mode = Mode::Develop {
+            spotted,
+            clipping: false,
+        };
         let dest = Dest::Cached(name);
         self.develop_into(s, &geometry, &s.crop, &View::default(), mode, dest);
         read_back(&self.gpu, &self.targets[name])
@@ -531,9 +547,9 @@ impl Renderer {
             Dest::Cached(name) => &self.targets[name],
             Dest::Canvas(t) => t,
         };
-        let (spotted, develop) = match mode {
-            Mode::Before => (false, false),
-            Mode::Develop { spotted } => (spotted, true),
+        let (spotted, develop, clipping) = match mode {
+            Mode::Before => (false, false, false),
+            Mode::Develop { spotted, clipping } => (spotted, true, clipping),
         };
         let (tw, th) = turned_size(self.full_width, self.full_height, geometry.rotate);
         let frame = Frame {
@@ -552,6 +568,7 @@ impl Renderer {
             (None, None)
         };
         let mut uniforms = Uniforms::new(s, &frame, sharp.is_some(), texture.is_some());
+        uniforms.clip_warn = u32::from(clipping);
         // A LUT that is not loaded (or too big for the device) is no LUT.
         let lut_ready = develop
             && self.lut.update(&self.gpu, s).unwrap_or_else(|e| {
