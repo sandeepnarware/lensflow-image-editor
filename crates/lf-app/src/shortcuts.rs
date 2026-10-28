@@ -48,6 +48,8 @@ pub enum Action {
     Metadata,
     /// Two to four selected photos side by side, zoomed together.
     Compare,
+    /// Where the photos shown were taken, on a map.
+    Map,
     // AI (on this computer)
     /// Remove noise; a new photo beside each.
     AiDenoise,
@@ -141,6 +143,7 @@ impl Action {
             Action::ToggleZoom => "Fit / 100 %",
             Action::Metadata => "Metadata panel",
             Action::Compare => "Compare",
+            Action::Map => "Map",
             Action::AiDenoise => "AI Denoise…",
             Action::AiUpscale => "AI Upscale…",
             Action::AiRetouch => "Retouch portrait…",

@@ -18,6 +18,7 @@ pub mod grid;
 pub mod import_ui;
 pub mod ingest_ui;
 pub mod lut_ui;
+pub mod map;
 pub mod merge_ui;
 pub mod meta_ui;
 pub mod print_ui;
@@ -125,6 +126,8 @@ pub struct Library {
     local_ai: bool,
     /// Compare, while open (it shows in place of the grid).
     compare: Option<compare::Compare>,
+    /// View → Map, while open (it shows in place of the grid).
+    map: Option<map::MapView>,
     compare_generation: u64,
     albums: Vec<lf_catalog::albums::Album>,
     /// New album, New smart album or Edit album, while open.
@@ -230,6 +233,7 @@ impl Library {
             remove: None,
             local_ai: false,
             compare: None,
+            map: None,
             compare_generation: 0,
             albums: Vec::new(),
             album_dialog: None,
@@ -877,6 +881,8 @@ impl Library {
             Msg::AiProgress(step) => self.ai_progress(step),
             Msg::RemoveRendered { id, result } => self.remove_rendered(id, result),
             Msg::AiDone(result) => self.ai_done(result, env),
+            Msg::Tile { key, result } => self.tile_arrived(key, result),
+            Msg::PlacesRead { root, result } => self.places_read(root, result, env),
             Msg::CompareRendered {
                 generation,
                 id,
@@ -1114,6 +1120,7 @@ impl Library {
     /// Shows `folder` (or nothing) and loads its photos.
     fn show_folder(&mut self, folder: Option<i64>, env: &mut Env) {
         self.compare = None;
+        self.map = None;
         if self.current_folder != folder || self.current_album.is_some() {
             self.selection = Selection::default();
             self.photos.clear();
@@ -1322,6 +1329,9 @@ impl Library {
             self.pick_lut(env);
         }
         match self.mode {
+            Mode::Library if self.map.is_some() => {
+                egui::CentralPanel::default_margins().show(ui, |ui| self.map_ui(ui, env));
+            }
             Mode::Library if self.compare.is_some() => {
                 egui::CentralPanel::default_margins().show(ui, |ui| self.compare_ui(ui));
             }
@@ -1407,6 +1417,7 @@ impl Library {
             }
             Action::SelectAll | Action::Previous | Action::Next => !self.order.is_empty(),
             Action::Metadata => !develop,
+            Action::Map => !develop && (self.map.is_some() || !self.order.is_empty()),
             Action::Compare => {
                 !develop
                     && (self.compare.is_some()
@@ -1435,6 +1446,7 @@ impl Library {
             | Action::ResetAll
             | Action::AutoTone
             | Action::AutoWhiteBalance => develop && self.develop.is_ready(),
+            Action::LeaveTool if self.mapping() => true,
             Action::LeaveTool if self.comparing() => true,
             Action::CropTool
             | Action::SpotTool
@@ -1492,6 +1504,8 @@ impl Library {
                 }
             }
             Action::Metadata => self.toggle_metadata(),
+            Action::Map if self.map.is_some() => self.map = None,
+            Action::Map => self.open_map(env),
             Action::Compare if self.compare.is_some() => self.close_compare(),
             Action::Compare => self.open_compare(env),
             Action::AiDenoise => self.open_ai(crate::ai_job::AiTool::Denoise { strength: 0.8 }),
@@ -1505,6 +1519,7 @@ impl Library {
             }
             Action::AddToAlbum => self.adding_to_album = true,
             Action::RemoveFromAlbum => self.remove_from_album(env),
+            Action::LeaveTool if self.mapping() => self.map = None,
             Action::LeaveTool if self.comparing() => self.close_compare(),
             Action::Previous if self.comparing() => self.compare_step(false),
             Action::Next if self.comparing() => self.compare_step(true),

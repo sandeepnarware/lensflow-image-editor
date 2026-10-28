@@ -143,6 +143,7 @@ impl Library {
     /// Shows the album `id` in the grid (in place of a folder) and loads its photos.
     pub(super) fn show_album(&mut self, id: i64, env: &mut Env) {
         self.compare = None;
+        self.map = None;
         if self.current_album != Some(id) {
             self.selection = Selection::default();
             self.photos.clear();

@@ -129,6 +129,11 @@ in the order you add them. A smart album keeps a rule instead (stars, flag, colo
 label, words, taken within the last week or month) and always holds what matches.
 Albums live in the catalogue; deleting one never touches its photos.
 
+Map (View → Map): where the photos shown were taken, from their EXIF GPS, as pins on
+OpenStreetMap; a click on a pin selects its photos. Tiles download when shown (only the
+tile's address is sent) and are kept for next time. Photos added before this version are read
+for their place the first time the map shows them.
+
 Compare (`C`, Library → Compare): two to four selected photos side by side, large
 and with their edits, zoomed and panned together to pick the sharpest of a burst.
 Click one to make it active; flags, stars and labels go to it alone; `←`/`→` move

@@ -580,6 +580,18 @@ change runs on the `Io` lane (`Msg::AlbumChanged`), then the list is read again 
 (`Msg::Albums`) and the album shown reloaded (`Msg::AlbumPhotos`). Removing a folder from the
 catalogue takes its photos out of every album (`ON DELETE CASCADE`).
 
+### Map
+
+View → Map (`Action::Map`, `library/map.rs`) shows the folder's or album's photos that have a
+place (`PhotoRow::gps`, schema v9: `lat`, `lon`, `gps_read`; import reads EXIF GPS through
+`ExifSummary::gps`, JPEG/TIFF via kamadak and RAW via rawler) in place of the grid. Opening it
+reads the photos not read yet, headers only, on the `Query` lane (`Catalog::fill_gps`,
+`Msg::PlacesRead`) and reloads the rows. Web Mercator tiles from `tile.openstreetmap.org` with an
+identifying User-Agent, at most six fetched at once on short threads (`Msg::Tile`), kept under
+`<cache>/tiles/z/x/y.png`; the credit is drawn on the map. It fits every place on opening;
+the wheel zooms about the pointer, a drag pans, pins within 22 points group with a count, and a
+click selects a pin's photos. `Esc` or "Back to grid" closes it.
+
 ### Compare
 
 `C` (`Action::Compare`, Library → View) with two to four photos selected shows them side by

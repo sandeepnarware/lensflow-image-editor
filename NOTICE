@@ -621,6 +621,8 @@ libwebp-sys builds Google's libwebp (BSD-3-Clause) from source into the program 
 WebP export; AVIF export uses rav1e and ravif (BSD-2-Clause / BSD-3-Clause), pure Rust.
 lcms2-sys builds Little CMS (MIT) from source into the program for colour-space exports
 and soft-proofing.
+The Map view shows OpenStreetMap tiles, (c) OpenStreetMap contributors (data under the Open
+Database Licence), fetched from tile.openstreetmap.org when shown and cached on disk.
 webbrowser opens links (Help > About) in the system browser.
 winresource (MIT) is build-only on Windows: it embeds the program icon and version
 information into the .exe and is not itself shipped.

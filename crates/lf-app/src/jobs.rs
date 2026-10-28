@@ -201,6 +201,16 @@ pub enum Msg {
     MergeProgress { done: usize, total: usize },
     /// Merge to HDR wrote the merged photo, or why not.
     MergeDone(Result<PathBuf, String>),
+    /// A map tile arrived (or could not be had).
+    Tile {
+        key: crate::library::map::TileKey,
+        result: Result<crate::library::map::TileBytes, String>,
+    },
+    /// Photos were read for their place (how many gained one).
+    PlacesRead {
+        root: PathBuf,
+        result: Result<usize, String>,
+    },
     /// Remove objects' picture of the photo to paint on.
     RemoveRendered {
         id: i64,
@@ -768,6 +778,8 @@ pub(crate) mod owners {
             | Msg::CompareRendered { .. }
             | Msg::AiProgress(..)
             | Msg::RemoveRendered { .. }
+            | Msg::Tile { .. }
+            | Msg::PlacesRead { .. }
             | Msg::AiDone(..)
             | Msg::AlbumPhotos { .. }
             | Msg::AlbumChanged { .. } => Owner::Library,
@@ -884,6 +896,14 @@ pub(crate) mod owners {
             Msg::MergeDone(Err("no".into())),
             Msg::AiProgress(crate::ai_job::Step::Download { done: 1, total: 2 }),
             Msg::AiDone(Err("no".into())),
+            Msg::Tile {
+                key: (3, 1, 2),
+                result: Err("no".into()),
+            },
+            Msg::PlacesRead {
+                root: dir.to_path_buf(),
+                result: Ok(0),
+            },
             Msg::RemoveRendered {
                 id: 1,
                 result: Err("no".into()),

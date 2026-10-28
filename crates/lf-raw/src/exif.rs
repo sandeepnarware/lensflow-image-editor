@@ -24,6 +24,23 @@ pub struct ExifSummary {
     pub artist: Option<String>,
     /// `Copyright` (0x8298).
     pub copyright: Option<String>,
+    /// Where it was taken: latitude and longitude in degrees (north and east positive).
+    pub gps: Option<(f64, f64)>,
+}
+
+/// Degrees, minutes and seconds with their reference (`N`/`S`, `E`/`W`) as signed degrees;
+/// `None` when out of range.
+pub fn gps_degrees(dms: [f64; 3], reference: &str, limit: f64) -> Option<f64> {
+    if dms.iter().any(|v| !v.is_finite() || *v < 0.0) {
+        return None;
+    }
+    let d = dms[0] + dms[1] / 60.0 + dms[2] / 3600.0;
+    let d = if reference.trim().starts_with(['S', 'W', 's', 'w']) {
+        -d
+    } else {
+        d
+    };
+    (d.abs() <= limit).then_some(d)
 }
 
 /// Read the summary from a JPEG, TIFF, PNG or WebP file's bytes (all empty, orientation
@@ -60,6 +77,19 @@ pub fn read_summary(bytes: &[u8]) -> ExifSummary {
         .and_then(|s| iso_date(&s));
     out.artist = text(Tag::Artist);
     out.copyright = text(Tag::Copyright);
+    let dms = |tag| match exif.get_field(tag, In::PRIMARY).map(|f| &f.value)? {
+        Value::Rational(v) if v.len() >= 3 && v.iter().all(|r| r.denom != 0) => {
+            Some([v[0].to_f64(), v[1].to_f64(), v[2].to_f64()])
+        }
+        _ => None,
+    };
+    let lat = dms(Tag::GPSLatitude)
+        .zip(text(Tag::GPSLatitudeRef))
+        .and_then(|(d, r)| gps_degrees(d, &r, 90.0));
+    let lon = dms(Tag::GPSLongitude)
+        .zip(text(Tag::GPSLongitudeRef))
+        .and_then(|(d, r)| gps_degrees(d, &r, 180.0));
+    out.gps = lat.zip(lon).filter(|&(a, b)| a != 0.0 || b != 0.0);
     out.orientation = get(Tag::Orientation)
         .and_then(|v| v.get_uint(0))
         .filter(|v| (1..=8).contains(v))
@@ -151,5 +181,25 @@ fn patch_tiff(seg: &mut [u8], tiff: usize) {
     let next = ifd0 + 2 + count * 12;
     if next + 4 <= seg.len() {
         seg[next..next + 4].fill(0);
+    }
+}
+
+#[cfg(test)]
+mod gps_tests {
+    use super::*;
+
+    #[test]
+    fn degrees_minutes_and_seconds_with_their_reference() {
+        let jaipur = gps_degrees([26.0, 54.0, 43.2], "N", 90.0).unwrap();
+        assert!((jaipur - 26.912).abs() < 1e-9);
+        let west = gps_degrees([73.0, 59.0, 0.0], "W", 180.0).unwrap();
+        assert!((west + 73.983_333).abs() < 1e-5);
+        assert_eq!(gps_degrees([95.0, 0.0, 0.0], "N", 90.0), None);
+        assert_eq!(gps_degrees([f64::NAN, 0.0, 0.0], "E", 180.0), None);
+    }
+
+    #[test]
+    fn a_file_without_gps_has_none() {
+        assert_eq!(read_summary(b"not an image").gps, None);
     }
 }

@@ -180,7 +180,7 @@ pub const RIBBON: &[Tab] = &[
         title: "View",
         groups: &[
             group("Mode", &[Do(Action::Library), Do(Action::Develop)]),
-            group("Panels", &[Do(Action::Metadata)]),
+            group("Panels", &[Do(Action::Metadata), Do(Action::Map)]),
             group(
                 "Preview",
                 &[
@@ -271,6 +271,7 @@ pub fn icon(action: Action) -> &'static str {
         Action::ToggleZoom => "🔍",
         Action::Metadata => "📝",
         Action::Compare => "⚖",
+        Action::Map => "🗺",
         Action::AiDenoise => "✨",
         Action::AiUpscale => "⛶",
         Action::AiRetouch => "☺",
@@ -710,6 +711,7 @@ mod tests {
             Action::AiCutout,
             Action::AiRemoveObjects,
             Action::Compare,
+            Action::Map,
             Action::NewAlbum,
             Action::NewSmartAlbum,
             Action::AddToAlbum,

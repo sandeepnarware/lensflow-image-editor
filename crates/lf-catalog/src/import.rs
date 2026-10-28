@@ -141,6 +141,8 @@ struct Meta {
     captured_at: Option<String>,
     orientation: i64,
     error: Option<String>,
+    /// Where it was taken (latitude, longitude), from its EXIF.
+    gps: Option<(f64, f64)>,
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -182,6 +184,7 @@ fn read_meta(path: &Path) -> Result<Meta, RawError> {
         captured_at: exif.captured_at,
         orientation: i64::from(exif.orientation.max(1)),
         error: None,
+        gps: exif.gps,
     })
 }
 
@@ -210,6 +213,7 @@ fn unreadable(error: String) -> Meta {
         captured_at: None,
         orientation: 1,
         error: Some(error),
+        gps: None,
     }
 }
 
@@ -352,6 +356,10 @@ pub fn run(
                         tx.last_insert_rowid()
                     }
                 };
+                tx.execute(
+                    "UPDATE photos SET lat = ?2, lon = ?3, gps_read = 1 WHERE id = ?1",
+                    rusqlite::params![id, m.gps.map(|g| g.0), m.gps.map(|g| g.1)],
+                )?;
                 match &w.sidecar {
                     Ok(sc) => {
                         let r = reconcile_in(&tx, id, sc.as_ref())?;

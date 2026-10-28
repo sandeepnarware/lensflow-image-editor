@@ -22,7 +22,7 @@ and 2d tasks 1–2 are built; packaging tasks 3–5 are in flight.
 | `lf-merge` | CPU merging: exposure fusion (Mertens, with ghost removal), focus stacking through Laplacian pyramids, median-threshold-bitmap alignment; panoramas (`panorama.rs`: cylinder fit, NCC registration, gain and feather blending). No GPU, no catalogue. | `src/lib.rs` |
 | `lf-ai` | Local AI through ONNX Runtime (loaded at run time, never linked): pinned downloads (`assets.rs`), tiles, denoise and upscale (`restore.rs`), subject and sky masks (`segment.rs`), removal (`inpaint.rs`), faces and skin retouch (`faces.rs`). | `src/lib.rs`, `src/assets.rs` |
 | `lf-account` | Blocking reqwest/rustls LensFlow client: sign-in + 2FA, token store, entitlement gate/offline grace, desktop grade, presets sync, download link. | `src/client.rs`, `src/entitlement.rs` |
-| `lf-catalog` | SQLite catalogue (bundled, WAL, schema v8), sidecars, edit history (cap 50), versions, import, thumbnails, export, presets. Never touches pixels directly. | `src/db.rs`, `src/edits.rs`, `src/export.rs` |
+| `lf-catalog` | SQLite catalogue (bundled, WAL, schema v9), sidecars, edit history (cap 50), versions, import, thumbnails, export, presets. Never touches pixels directly. | `src/db.rs`, `src/edits.rs`, `src/export.rs` |
 | `lf-fixtures` | Loads `tests/fixtures` goldens and applies the parity thresholds. | `src/lib.rs` |
 | `lf-app` | The `lensflow-image-editor` binary: eframe/egui-wgpu window, lanes, session, Develop/Library UI, dialogs, the console's `grade` (`grade_cli.rs`, before any window), release plumbing. | `src/main.rs` → `src/app.rs` |
 
@@ -141,6 +141,7 @@ cargo test --workspace                   # includes the 228-render parity suite
   WB presets: `shader_values::{WB_PRESETS, kelvin_wb}`, `lf_raw::open::as_shot_kelvin`.
   Healing strokes: `lf_settings::heal` (`desktop.heal`), dabs through `spots::run_dabs`, the spot tool's Brush.
   Upright: `develop::upright` (Hough lines), `lf_settings::upright::fit`, the Lens section's buttons.
+  Map: `library/map.rs` (OSM tiles), `lf_catalog::places` (schema v9 GPS), `ExifSummary::gps`.
   Export presets (`dialogs/export_presets.rs`, `prefs.export_presets`) and the `{title}` file-name token.
   Mask ranges: `lf_settings::masks::Range` (brightness or colour), `range_weight` in `develop.wgsl`.
   AI tools: `lf-ai`, `ai_job.rs`, `dialogs/ai.rs`, `library/ai_ui.rs` (AI tab: Denoise, Upscale, Remove objects with `dialogs/remove.rs`, Retouch, Remove background).

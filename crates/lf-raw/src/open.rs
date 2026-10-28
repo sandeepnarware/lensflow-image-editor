@@ -369,6 +369,26 @@ fn raw_summary(path: &Path) -> Result<ExifSummary, RawError> {
     let mut out = empty;
     let non_empty = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
     let x = &meta.exif;
+    out.gps = x.gps.as_ref().and_then(|g| {
+        let dms = |v: &Option<[rawler::formats::tiff::Rational; 3]>| {
+            v.map(|r| {
+                r.map(|q| {
+                    if q.d == 0 {
+                        f64::NAN
+                    } else {
+                        f64::from(q.n) / f64::from(q.d)
+                    }
+                })
+            })
+        };
+        let lat = dms(&g.gps_latitude)
+            .zip(g.gps_latitude_ref.as_deref())
+            .and_then(|(d, r)| crate::exif::gps_degrees(d, r, 90.0))?;
+        let lon = dms(&g.gps_longitude)
+            .zip(g.gps_longitude_ref.as_deref())
+            .and_then(|(d, r)| crate::exif::gps_degrees(d, r, 180.0))?;
+        (lat != 0.0 || lon != 0.0).then_some((lat, lon))
+    });
     out.make = non_empty(&meta.make);
     out.model = non_empty(&meta.model);
     out.lens = meta

@@ -221,6 +221,13 @@ CREATE TABLE album_photos (
 );
 CREATE INDEX album_photos_photo ON album_photos(photo_id);
 "#,
+    // Where each photo was taken (EXIF GPS, degrees), and whether its file has been read for
+    // it (photos catalogued before this version are read when the map first wants them).
+    r#"
+ALTER TABLE photos ADD COLUMN lat REAL;
+ALTER TABLE photos ADD COLUMN lon REAL;
+ALTER TABLE photos ADD COLUMN gps_read INTEGER NOT NULL DEFAULT 0;
+"#,
 ];
 
 pub struct Catalog {
@@ -434,7 +441,7 @@ impl Folder {
 }
 
 /// One photo as the library shows it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PhotoRow {
     pub id: i64,
     pub folder_id: i64,
@@ -462,6 +469,8 @@ pub struct PhotoRow {
     pub label: Option<Label>,
     /// Title, caption, creator, copyright and keywords ([`crate::meta`]).
     pub meta: Meta,
+    /// Where it was taken (latitude, longitude in degrees), when its EXIF says.
+    pub gps: Option<(f64, f64)>,
 }
 
 pub(crate) const PHOTO_COLUMNS: &str =
@@ -470,7 +479,8 @@ pub(crate) const PHOTO_COLUMNS: &str =
      EXISTS (SELECT 1 FROM edits e WHERE e.photo_id = p.id), p.updated_at,
      p.flag, p.rating, p.label, p.title, p.caption, p.creator, p.copyright,
      (SELECT group_concat(keyword, char(31)) FROM
-         (SELECT keyword FROM keywords k WHERE k.photo_id = p.id ORDER BY keyword))";
+         (SELECT keyword FROM keywords k WHERE k.photo_id = p.id ORDER BY keyword)),
+     p.lat, p.lon";
 
 pub(crate) fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
     Ok(PhotoRow {
@@ -505,6 +515,9 @@ pub(crate) fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
                 .map(|k| k.split('\u{1f}').map(str::to_owned).collect())
                 .unwrap_or_default(),
         },
+        gps: r
+            .get::<_, Option<f64>>(22)?
+            .zip(r.get::<_, Option<f64>>(23)?),
     })
 }
 

@@ -232,6 +232,7 @@ fn the_exif_writer_round_trips_every_tag() {
         orientation: 6,
         artist: Some("Asha".into()),
         copyright: Some("(c) Asha".into()),
+        gps: None,
     };
     let app1 = build_exif(&summary, false).unwrap();
     let jpeg = insert_exif(&[0xff, 0xd8, 0xff, 0xd9], &app1);
