@@ -77,11 +77,11 @@ pub struct Uniforms {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MaskUniform {
-    /// kind (0 linear, 1 radial), invert (0 or 1), the radial's inner radius (1 − feather),
+    /// kind (0 linear, 1 radial, 2 brush), invert (0 or 1), the radial's inner radius (1 − feather),
     /// unused.
     pub kind: [f32; 4],
     /// Linear: start x, y and end x, y. Radial: centre x, y and radii x, y. All in the square
-    /// space (x × aspect).
+    /// space (x × aspect). Brush: its layer in the brush texture.
     pub shape: [f32; 4],
     /// Radial: cos and sin of the angle.
     pub turn: [f32; 4],
@@ -95,12 +95,19 @@ pub struct MaskUniform {
 }
 
 impl MaskUniform {
-    fn new(m: &Mask, aspect: f64) -> MaskUniform {
+    /// `layer`: where a brush mask's coverage sits in the brush texture (its place in the list).
+    fn new(m: &Mask, layer: usize, aspect: f64) -> MaskUniform {
         let p = |x: f64| (x / 100.0) as f32;
         let l = &m.local;
         let g = wb_gains(l.temperature, l.tint);
         let y = 0.2126 * g[0] + 0.7152 * g[1] + 0.0722 * g[2];
         let (kind, shape, turn, inner) = match m.shape {
+            Shape::Brush { .. } => (
+                2.0,
+                [layer as f32, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                0.0,
+            ),
             Shape::Linear { x0, y0, x1, y1 } => (
                 0.0,
                 [x0 * aspect, y0, x1 * aspect, y1].map(|v| v as f32),
@@ -184,8 +191,8 @@ impl Uniforms {
         let lens = lf_settings::lens::Lens::from_settings(s);
         let aspect = f64::from(f.img_size[0]) / f64::from(f.img_size[1].max(1));
         let mut mask_uniforms = [MaskUniform::default(); MAX_MASKS];
-        for (slot, mask) in mask_uniforms.iter_mut().zip(&masks.0) {
-            *slot = MaskUniform::new(mask, aspect);
+        for (layer, (slot, mask)) in mask_uniforms.iter_mut().zip(&masks.0).enumerate() {
+            *slot = MaskUniform::new(mask, layer, aspect);
         }
         let p = |x: f64| (x / 100.0) as f32;
         let mut hsl = [[0.0f32; 4]; 8];
@@ -260,12 +267,14 @@ impl Uniforms {
     }
 }
 
-/// The develop pipeline: six textures (bindings 0–5), a sampler for each (6–11) and the
-/// uniforms (12).
+/// The develop pipeline: six textures (bindings 0–5), a sampler for each (6–11), the
+/// uniforms (12), and (desktop only) the brush masks' coverage and its sampler (13, 14).
 pub(crate) fn pipeline(device: &wgpu::Device, source: &str) -> FullscreenPass {
     let mut entries: Vec<_> = (0..6).map(texture_entry).collect();
     entries.extend((6..12).map(sampler_entry));
     entries.push(uniform_entry(12));
+    entries.push(texture_entry(13));
+    entries.push(sampler_entry(14));
     FullscreenPass::with_entries(device, "develop", source, "fs_develop", &entries)
 }
 
@@ -278,6 +287,9 @@ pub struct Inputs<'a> {
     pub blur_t: &'a Target,
     /// The 256×1 curve texture (linear clamp sampler).
     pub curve: &'a Target,
+    /// Desktop only: the brush masks' coverage, one layer per mask stacked top to bottom
+    /// ([`crate::brush`]); a 1×1 stand-in when no mask is a brush.
+    pub brush: &'a Target,
 }
 
 /// A one-entry arena for the develop uniforms, to pass to [`run`] draw after draw.
@@ -332,6 +344,14 @@ pub fn run(
             offset: 0,
             size: wgpu::BufferSize::new(size),
         }),
+    });
+    entries.push(wgpu::BindGroupEntry {
+        binding: 13,
+        resource: wgpu::BindingResource::TextureView(&inputs.brush.view),
+    });
+    entries.push(wgpu::BindGroupEntry {
+        binding: 14,
+        resource: wgpu::BindingResource::Sampler(&gpu.samplers.linear_level0),
     });
     let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("develop"),

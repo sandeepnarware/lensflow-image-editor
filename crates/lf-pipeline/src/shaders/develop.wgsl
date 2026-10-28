@@ -20,8 +20,8 @@
 
 // Desktop only: one local adjustment (`passes::develop::MaskUniform`).
 struct MaskU {
-    kind: vec4<f32>,   // kind (0 linear, 1 radial), invert, the radial's inner radius
-    shape: vec4<f32>,  // linear: start, end; radial: centre, radii (x × aspect)
+    kind: vec4<f32>,   // kind (0 linear, 1 radial, 2 brush), invert, the radial's inner radius
+    shape: vec4<f32>,  // linear: start, end; radial: centre, radii (x × aspect); brush: its layer
     turn: vec4<f32>,   // radial: cos, sin of its angle
     tone: vec4<f32>,   // exposure, contrast, highlights, shadows
     more: vec4<f32>,   // whites, blacks, saturation, clarity
@@ -89,6 +89,9 @@ struct Uniforms {
 @group(0) @binding(10) var s_blur_t: sampler;
 @group(0) @binding(11) var s_curve: sampler;
 @group(0) @binding(12) var<uniform> u: Uniforms;
+// Desktop only: the brush masks' coverage, one layer per mask (8) stacked top to bottom.
+@group(0) @binding(13) var u_brush: texture_2d<f32>;
+@group(0) @binding(14) var s_brush: sampler;
 
 // d(uv)/dx and d(uv)/dy per output pixel, set by fs_develop.
 var<private> grad_x: vec2<f32>;
@@ -152,11 +155,17 @@ fn lens_to_source(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.5 + x * f, 0.5 + y * f);
 }
 
-// Desktop only: how much mask `m` applies at `p` (photo UV with x × aspect), 0..1. The same
-// formula as `lf_settings::masks::weight`.
-fn mask_weight(m: MaskU, p: vec2<f32>) -> f32 {
+// Desktop only: how much mask `m` applies at `muv` (photo UV; `p` is it with x × aspect), 0..1.
+// The same formula as `lf_settings::masks::weight`; a brush reads its painted layer.
+fn mask_weight(m: MaskU, p: vec2<f32>, muv: vec2<f32>) -> f32 {
     var w: f32;
-    if (m.kind.x < 0.5) {
+    if (m.kind.x > 1.5) {
+        // Brush: its own layer, kept off its neighbours' rows.
+        let rows = f32(textureDimensions(u_brush).y) / 8.0;
+        let edge = 0.5 / rows;
+        let v = (m.shape.x + clamp(muv.y, edge, 1.0 - edge)) / 8.0;
+        w = textureSampleLevel(u_brush, s_brush, vec2<f32>(clamp(muv.x, 0.0, 1.0), v), 0.0).r;
+    } else if (m.kind.x < 0.5) {
         // Linear: full behind the start line, none past the end line.
         let a = m.shape.xy;
         let d = m.shape.zw - a;
@@ -193,7 +202,7 @@ fn develop(photo: vec3<f32>, uv: vec2<f32>, muv: vec2<f32>) -> vec3<f32> {
         let p = vec2<f32>(muv.x * u.aspect, muv.y);
         for (var i = 0u; i < u.mask_count; i++) {
             let m = u.masks[i];
-            let w = mask_weight(m, p);
+            let w = mask_weight(m, p, muv);
             exposure += w * m.tone.x;
             contrast += w * m.tone.y;
             highlights += w * m.tone.z;

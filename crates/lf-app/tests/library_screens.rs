@@ -2061,3 +2061,59 @@ fn export_to_a_gallery_lists_galleries_uploads_and_says_how_it_went() {
     h.step();
     assert!(h.state().lib.gallery().is_none());
 }
+
+#[test]
+fn a_brush_mask_is_painted_by_dragging_as_one_step() {
+    use lf_app::develop::tools::{ToolKind, masks as mask_tool};
+    use lf_settings::masks::{Masks, Shape};
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    let id = h.state().lib.photos()[0].id;
+    let root = dir.path().join("catalogue");
+    let masks = |h: &Harness<'static, State>| Masks::from_settings(&settings(h));
+
+    h.key_press(Key::M);
+    h.step();
+    assert_eq!(h.state().lib.develop().tool(), Some(ToolKind::Masks));
+    h.get_by_label(mask_tool::ADD_BRUSH).click();
+    h.step();
+    h.step();
+    let added = history(&root, id);
+    let Shape::Brush { strokes } = &masks(&h).0[0].shape else {
+        panic!("a brush")
+    };
+    assert!(strokes.is_empty());
+
+    // A drag across the middle lays one stroke with several points, saved on release.
+    let from = egui::pos2(520.0, 330.0);
+    let to = egui::pos2(680.0, 330.0);
+    h.hover_at(from);
+    h.step();
+    h.drag_at(from);
+    h.step();
+    for i in 1..=8 {
+        h.hover_at(from + (to - from) * (i as f32 / 8.0));
+        h.step();
+    }
+    h.drop_at(to);
+    h.step();
+    h.step();
+    let Shape::Brush { strokes } = &masks(&h).0[0].shape else {
+        panic!("a brush")
+    };
+    assert_eq!(strokes.len(), 1);
+    assert!(strokes[0].points.len() >= 3, "{:?}", strokes[0].points);
+    let (first, last) = (strokes[0].points[0], *strokes[0].points.last().unwrap());
+    assert!(
+        last[0] > first[0] + 0.1,
+        "it runs left to right: {first:?} {last:?}"
+    );
+    assert!((first[1] - last[1]).abs() < 0.02);
+    assert_eq!(history(&root, id), added + 1, "the stroke is one step");
+    h.key_press(Key::Escape);
+    h.step();
+    assert_eq!(h.state().lib.develop().tool(), None);
+}

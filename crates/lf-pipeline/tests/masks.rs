@@ -157,3 +157,74 @@ fn local_contrast_and_saturation_stay_in_range() {
     Masks(vec![everywhere]).write_into(&mut s);
     assert_eq!(r.render(&s).unwrap(), global);
 }
+
+fn brush(strokes: Vec<lf_settings::masks::Stroke>, exposure: f64) -> Mask {
+    Mask {
+        shape: Shape::Brush { strokes },
+        invert: false,
+        local: Local {
+            exposure,
+            ..Local::default()
+        },
+    }
+}
+
+fn stroke(points: &[[f64; 2]], size: f64, erase: bool) -> lf_settings::masks::Stroke {
+    lf_settings::masks::Stroke {
+        points: points.to_vec(),
+        size,
+        feather: 0.0,
+        flow: 100.0,
+        erase,
+    }
+}
+
+#[test]
+fn a_brush_mask_brightens_where_it_is_painted() {
+    let plain = render(&EditSettings::default_settings());
+    // A band across the top third, with a hole rubbed out of its middle.
+    let painted = brush(
+        vec![
+            stroke(&[[0.0, 0.2], [1.0, 0.2]], 0.1, false),
+            stroke(&[[0.5, 0.2]], 0.08, true),
+        ],
+        1.0,
+    );
+    // A gradient before it, so the brush is not the first mask (its own layer is read).
+    let none = Mask {
+        local: Local::default(),
+        ..Mask::linear()
+    };
+    let out = render(&with(vec![none, painted]));
+    let at = |img: &RgbaImage, u: f64, v: f64| {
+        img.get_pixel((u * f64::from(W)) as u32, (v * f64::from(H)) as u32)
+            .0[0]
+    };
+    assert!(at(&out, 0.2, 0.2) > at(&plain, 0.2, 0.2) + 30, "painted");
+    assert!(at(&out, 0.8, 0.2) > at(&plain, 0.8, 0.2) + 30, "painted");
+    assert_eq!(at(&out, 0.5, 0.2), at(&plain, 0.5, 0.2), "rubbed out");
+    assert_eq!(at(&out, 0.2, 0.7), at(&plain, 0.2, 0.7), "never painted");
+}
+
+#[test]
+fn every_layer_is_read_by_its_own_mask() {
+    // Eight brush masks, each a dot in its own column: each darkens only its own.
+    let plain = render(&EditSettings::default_settings());
+    let masks: Vec<Mask> = (0..8)
+        .map(|i| {
+            let u = (f64::from(i) + 0.5) / 8.0;
+            brush(vec![stroke(&[[u, 0.5]], 0.04, false)], -1.0)
+        })
+        .collect();
+    let out = render(&with(masks));
+    for i in 0..8u32 {
+        let x = (f64::from(i) + 0.5) / 8.0 * f64::from(W);
+        let p = out.get_pixel(x as u32, H / 2).0[0];
+        assert!(p + 20 < plain.get_pixel(x as u32, H / 2).0[0], "dot {i}");
+        assert_eq!(
+            out.get_pixel(x as u32, H / 2 + 30),
+            plain.get_pixel(x as u32, H / 2 + 30),
+            "below dot {i}"
+        );
+    }
+}

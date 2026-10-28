@@ -1,5 +1,7 @@
-//! Local adjustments ("masks"): areas of the photo, each with its own exposure, contrast,
-//! tone, white balance, saturation and clarity, as Lightroom's masking panel has them.
+//! Local adjustments ("masks"): areas of the photo (a linear or radial gradient, or painted
+//! with a brush), each with its own exposure, contrast, tone, white balance, saturation and
+//! clarity, as Lightroom's masking panel has them. A brush mask's strokes are drawn into a
+//! coverage map ([`rasterize`]) that the develop pass samples.
 //!
 //! They are desktop-only and live in `desktop.masks` (as `desktop.develop` does), so the web
 //! editor keeps them in a sidecar it rewrites but does not draw them. Read them with
@@ -20,7 +22,7 @@ use crate::EditSettings;
 pub const MAX_MASKS: usize = 8;
 
 /// The area a mask covers.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Shape {
     /// A graduated filter: full effect behind the start line (`x0`, `y0`), none past the end
@@ -37,6 +39,193 @@ pub enum Shape {
         angle: f64,
         feather: f64,
     },
+    /// Painted by hand: the strokes, in the order they were made (an erasing stroke takes
+    /// away what the ones before it painted).
+    Brush { strokes: Vec<Stroke> },
+}
+
+/// The most strokes a brush mask keeps, and the most points one stroke keeps: a sidecar
+/// stays small and a redraw stays quick however long someone paints.
+pub const MAX_STROKES: usize = 400;
+pub const MAX_POINTS: usize = 4000;
+
+/// One drag of the brush: a line through `points` (photo fractions), `size` across on each
+/// side (a radius, as a fraction of the photo's height), soft for its outer `feather`
+/// percent, laid down at `flow` percent strength (or taken away, when `erase`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Stroke {
+    pub points: Vec<[f64; 2]>,
+    pub size: f64,
+    #[serde(default = "half")]
+    pub feather: f64,
+    #[serde(default = "full")]
+    pub flow: f64,
+    #[serde(default)]
+    pub erase: bool,
+}
+
+fn half() -> f64 {
+    50.0
+}
+
+fn full() -> f64 {
+    100.0
+}
+
+impl Stroke {
+    /// The same stroke made safe: finite points (a little outside the photo is allowed),
+    /// a size and percentages in range; `None` with no point left.
+    fn clamped(mut self) -> Option<Stroke> {
+        self.points.retain(|p| p[0].is_finite() && p[1].is_finite());
+        self.points.truncate(MAX_POINTS);
+        for p in &mut self.points {
+            *p = [p[0].clamp(-1.0, 2.0), p[1].clamp(-1.0, 2.0)];
+        }
+        if self.points.is_empty() {
+            return None;
+        }
+        let pct = |v: f64, default: f64| {
+            if v.is_finite() {
+                v.clamp(0.0, 100.0)
+            } else {
+                default
+            }
+        };
+        self.size = if self.size.is_finite() {
+            self.size.clamp(0.001, 1.0)
+        } else {
+            0.05
+        };
+        self.feather = pct(self.feather, 50.0);
+        self.flow = pct(self.flow, 100.0);
+        Some(self)
+    }
+
+    /// How much of this stroke reaches `p` (square space: x × aspect), 0..=1 (before its
+    /// flow): full within the hard core, fading to nothing at `size`.
+    fn reach(&self, p: (f64, f64), aspect: f64) -> f64 {
+        let d = self.distance(p, aspect);
+        let inner = self.size * (1.0 - self.feather / 100.0);
+        if d >= self.size {
+            0.0
+        } else {
+            1.0 - smoothstep(inner, self.size + 1e-9, d)
+        }
+    }
+
+    /// The distance from `p` (square space) to the stroke's line.
+    fn distance(&self, p: (f64, f64), aspect: f64) -> f64 {
+        let pts: Vec<(f64, f64)> = self.points.iter().map(|q| (q[0] * aspect, q[1])).collect();
+        if pts.len() == 1 {
+            return (p.0 - pts[0].0).hypot(p.1 - pts[0].1);
+        }
+        pts.windows(2)
+            .map(|w| segment_distance(p, w[0], w[1]))
+            .fold(f64::INFINITY, f64::min)
+    }
+}
+
+fn segment_distance(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    let d = (b.0 - a.0, b.1 - a.1);
+    let len2 = d.0 * d.0 + d.1 * d.1;
+    let t = if len2 > 0.0 {
+        (((p.0 - a.0) * d.0 + (p.1 - a.1) * d.1) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (p.0 - a.0 - t * d.0).hypot(p.1 - a.1 - t * d.1)
+}
+
+/// Lays `stroke` over `amount` (what the strokes before it left): painting adds its flow
+/// towards full, erasing takes its flow away.
+fn lay(amount: f64, stroke: &Stroke, reach: f64) -> f64 {
+    let k = reach * stroke.flow / 100.0;
+    if stroke.erase {
+        amount * (1.0 - k)
+    } else {
+        amount + (1.0 - amount) * k
+    }
+}
+
+/// How much `strokes` cover `p` (photo fractions) of a photo `aspect` wide: 0..=1.
+pub fn brush_weight(strokes: &[Stroke], (u, v): (f64, f64), aspect: f64) -> f64 {
+    let p = (u * aspect, v);
+    strokes
+        .iter()
+        .fold(0.0, |a, s| lay(a, s, s.reach(p, aspect)))
+}
+
+/// `strokes` drawn into a `width`×`height` coverage map (row by row, 0 none to 255 full),
+/// each pixel sampled at its centre, as [`brush_weight`] would give it. The develop pass
+/// samples this; the photo's aspect is `width / height`. Each stroke only visits the pixels
+/// within its reach.
+pub fn rasterize(strokes: &[Stroke], width: usize, height: usize) -> Vec<u8> {
+    let mut amount = vec![0f32; width * height];
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+    let aspect = width as f64 / height as f64;
+    let mut reach = vec![0f32; width * height];
+    for stroke in strokes {
+        // The stroke's box, in pixels, grown by its size.
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for p in &stroke.points {
+            x0 = x0.min(p[0]);
+            x1 = x1.max(p[0]);
+            y0 = y0.min(p[1]);
+            y1 = y1.max(p[1]);
+        }
+        let grow_x = stroke.size / aspect;
+        let px = |v: f64, n: usize| (v * n as f64).floor().clamp(0.0, n as f64) as usize;
+        let (ix0, ix1) = (px(x0 - grow_x, width), px(x1 + grow_x, width) + 1);
+        let (iy0, iy1) = (
+            px(y0 - stroke.size, height),
+            px(y1 + stroke.size, height) + 1,
+        );
+        let (ix1, iy1) = (ix1.min(width), iy1.min(height));
+        // Each segment visits its own box, so a long stroke does not visit every pixel of
+        // its whole box once per segment.
+        let pts: Vec<[f64; 2]> = if stroke.points.len() == 1 {
+            vec![stroke.points[0], stroke.points[0]]
+        } else {
+            stroke.points.clone()
+        };
+        for w in pts.windows(2) {
+            let (a, b) = ((w[0][0] * aspect, w[0][1]), (w[1][0] * aspect, w[1][1]));
+            let sx0 = px(w[0][0].min(w[1][0]) - grow_x, width).max(ix0);
+            let sx1 = (px(w[0][0].max(w[1][0]) + grow_x, width) + 1).min(ix1);
+            let sy0 = px(w[0][1].min(w[1][1]) - stroke.size, height).max(iy0);
+            let sy1 = (px(w[0][1].max(w[1][1]) + stroke.size, height) + 1).min(iy1);
+            let inner = stroke.size * (1.0 - stroke.feather / 100.0);
+            for y in sy0..sy1 {
+                let v = (y as f64 + 0.5) / height as f64;
+                for x in sx0..sx1 {
+                    let u = (x as f64 + 0.5) / width as f64;
+                    let d = segment_distance((u * aspect, v), a, b);
+                    if d >= stroke.size {
+                        continue;
+                    }
+                    let r = (1.0 - smoothstep(inner, stroke.size + 1e-9, d)) as f32;
+                    let cell = &mut reach[y * width + x];
+                    *cell = cell.max(r);
+                }
+            }
+        }
+        for y in iy0..iy1 {
+            for x in ix0..ix1 {
+                let i = y * width + x;
+                if reach[i] > 0.0 {
+                    amount[i] = lay(f64::from(amount[i]), stroke, f64::from(reach[i])) as f32;
+                    reach[i] = 0.0;
+                }
+            }
+        }
+    }
+    amount
+        .into_iter()
+        .map(|a| (a.clamp(0.0, 1.0) * 255.0).round() as u8)
+        .collect()
 }
 
 /// What a mask does where it applies: the global sliders' units (exposure in stops, the rest
@@ -126,11 +315,23 @@ impl Mask {
         }
     }
 
+    /// A new brush mask with nothing painted yet.
+    pub fn brush() -> Mask {
+        Mask {
+            shape: Shape::Brush {
+                strokes: Vec::new(),
+            },
+            invert: false,
+            local: Local::default(),
+        }
+    }
+
     /// What the mask is called in the panel.
     pub fn kind_name(&self) -> &'static str {
         match self.shape {
             Shape::Linear { .. } => "Linear gradient",
             Shape::Radial { .. } => "Radial gradient",
+            Shape::Brush { .. } => "Brush",
         }
     }
 
@@ -185,6 +386,13 @@ impl Mask {
                     },
                 }
             }
+            Shape::Brush { strokes } => Shape::Brush {
+                strokes: strokes
+                    .into_iter()
+                    .filter_map(Stroke::clamped)
+                    .take(MAX_STROKES)
+                    .collect(),
+            },
         };
         self.local = self.local.clamped();
         Some(self)
@@ -234,14 +442,15 @@ impl Masks {
 /// height: 0..=1. The shader's `mask_weight`, for tests and for the panel's overlay.
 pub fn weight(mask: &Mask, (u, v): (f64, f64), aspect: f64) -> f64 {
     let p = (u * aspect, v);
-    let w = match mask.shape {
-        Shape::Linear { x0, y0, x1, y1 } => {
+    let w = match &mask.shape {
+        Shape::Brush { strokes } => brush_weight(strokes, (u, v), aspect),
+        &Shape::Linear { x0, y0, x1, y1 } => {
             let a = (x0 * aspect, y0);
             let d = (x1 * aspect - a.0, y1 - a.1);
             let t = ((p.0 - a.0) * d.0 + (p.1 - a.1) * d.1) / (d.0 * d.0 + d.1 * d.1);
             1.0 - smoothstep(0.0, 1.0, t)
         }
-        Shape::Radial {
+        &Shape::Radial {
             cx,
             cy,
             rx,
@@ -414,5 +623,103 @@ mod tests {
         // Turned a quarter: long up and down, narrow across.
         assert_eq!(weight(&m, (0.5, 0.75), 1.0), 1.0);
         assert_eq!(weight(&m, (0.6, 0.5), 1.0), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod brush_tests {
+    use super::*;
+
+    fn stroke(points: &[[f64; 2]], size: f64, erase: bool) -> Stroke {
+        Stroke {
+            points: points.to_vec(),
+            size,
+            feather: 0.0,
+            flow: 100.0,
+            erase,
+        }
+    }
+
+    #[test]
+    fn a_stroke_covers_its_line_and_an_eraser_takes_it_back() {
+        let line = stroke(&[[0.2, 0.5], [0.8, 0.5]], 0.1, false);
+        let aspect = 1.0;
+        assert_eq!(
+            brush_weight(std::slice::from_ref(&line), (0.5, 0.5), aspect),
+            1.0
+        );
+        assert_eq!(
+            brush_weight(std::slice::from_ref(&line), (0.5, 0.58), aspect),
+            1.0
+        );
+        assert_eq!(
+            brush_weight(std::slice::from_ref(&line), (0.5, 0.7), aspect),
+            0.0
+        );
+        assert_eq!(
+            brush_weight(std::slice::from_ref(&line), (0.95, 0.5), aspect),
+            0.0
+        );
+        let rubber = stroke(&[[0.5, 0.5]], 0.05, true);
+        let both = [line.clone(), rubber];
+        assert_eq!(brush_weight(&both, (0.5, 0.5), aspect), 0.0);
+        assert_eq!(brush_weight(&both, (0.3, 0.5), aspect), 1.0);
+        // Half flow, twice over, builds up to three quarters.
+        let soft = Stroke { flow: 50.0, ..line };
+        let w = brush_weight(&[soft.clone(), soft], (0.5, 0.5), aspect);
+        assert!((w - 0.75).abs() < 1e-9, "{w}");
+    }
+
+    #[test]
+    fn the_map_is_the_weight_at_each_pixel_centre() {
+        let strokes = vec![
+            Stroke {
+                feather: 60.0,
+                ..stroke(&[[0.1, 0.2], [0.6, 0.7], [0.9, 0.3]], 0.12, false)
+            },
+            Stroke {
+                flow: 70.0,
+                feather: 30.0,
+                ..stroke(&[[0.55, 0.55]], 0.08, true)
+            },
+        ];
+        let (w, h) = (90, 60);
+        let map = rasterize(&strokes, w, h);
+        assert_eq!(map.len(), w * h);
+        let aspect = w as f64 / h as f64;
+        for y in 0..h {
+            for x in 0..w {
+                let uv = ((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
+                let want = (brush_weight(&strokes, uv, aspect) * 255.0).round() as i32;
+                let got = i32::from(map[y * w + x]);
+                assert!((want - got).abs() <= 1, "({x}, {y}): {got} vs {want}");
+            }
+        }
+        assert!(map.contains(&255) && map.contains(&0));
+    }
+
+    #[test]
+    fn brush_masks_round_trip_and_bad_strokes_are_dropped() {
+        let mut s = EditSettings::default_settings();
+        let mut m = Mask::brush();
+        m.shape = Shape::Brush {
+            strokes: vec![
+                stroke(&[[0.1, 0.1], [0.2, 0.2]], 0.05, false),
+                stroke(&[], 0.05, false),
+                stroke(&[[0.3, 0.3]], 9.0, true),
+            ],
+        };
+        Masks(vec![m]).write_into(&mut s);
+        let back = Masks::from_settings(&s);
+        let Shape::Brush { strokes } = &back.0[0].shape else {
+            panic!("a brush")
+        };
+        assert_eq!(strokes.len(), 2, "the stroke with no usable point is gone");
+        assert_eq!(strokes[1].size, 1.0);
+        assert!(strokes[1].erase);
+        assert_eq!(back.0[0].kind_name(), "Brush");
+        // An empty brush (just added) is kept.
+        Masks(vec![Mask::brush()]).write_into(&mut s);
+        assert_eq!(Masks::from_settings(&s).0.len(), 1);
     }
 }

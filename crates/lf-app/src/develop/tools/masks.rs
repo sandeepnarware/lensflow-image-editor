@@ -6,14 +6,27 @@
 //! middle line (moves the whole). A radial has its centre (moves it), a handle on its right
 //! and one on its bottom edge (each sets that radius, along the ellipse's own axes), and its
 //! inside (moves it).
+//!
+//! A brush mask is painted: while one is picked, a drag lays a stroke along the pointer with the
+//! brush's size, softness and flow ([`BrushTip`]), or takes one away when erasing (the
+//! panel's "Erase", or Alt held). A click is a single dab.
 
-use lf_settings::masks::{MAX_MASKS, Mask, Masks, Shape};
+use lf_settings::masks::{MAX_MASKS, MAX_POINTS, MAX_STROKES, Mask, Masks, Shape, Stroke};
+
+/// A point kept to four places (a tenth of a pixel on a 10,000-pixel photo), so a sidecar
+/// holding many strokes stays small.
+fn rounded((u, v): (f64, f64)) -> [f64; 2] {
+    [(u * 1e4).round() / 1e4, (v * 1e4).round() / 1e4]
+}
 
 /// The hint over the masks panel.
-pub const HINT: &str =
-    "Add a gradient, then drag its handles on the photo. Each mask has its own sliders.";
+pub const HINT: &str = "Add a gradient and drag its handles, or a brush and paint on the \
+                        photo. Each mask has its own sliders.";
 pub const ADD_LINEAR: &str = "Add linear";
 pub const ADD_RADIAL: &str = "Add radial";
+pub const ADD_BRUSH: &str = "Add brush";
+pub const BRUSH_HINT: &str = "Paint on the photo. Hold Alt to erase.";
+pub const ERASE: &str = "Erase";
 pub const REMOVE: &str = "Remove mask";
 pub const INVERT: &str = "Invert";
 pub const FULL: &str = "A photo can have up to 8 masks.";
@@ -32,11 +45,35 @@ pub enum Grab {
     RadialBody((f64, f64)),
 }
 
-/// The tool's state: the mask being edited and the handle held.
+/// The brush a stroke is laid with: `size` across on each side (a fraction of the photo's
+/// height), its outer `feather` percent soft, at `flow` percent; `erase` takes away instead.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BrushTip {
+    pub size: f64,
+    pub feather: f64,
+    pub flow: f64,
+    pub erase: bool,
+}
+
+impl Default for BrushTip {
+    fn default() -> BrushTip {
+        BrushTip {
+            size: 0.05,
+            feather: 50.0,
+            flow: 100.0,
+            erase: false,
+        }
+    }
+}
+
+/// The tool's state: the mask being edited, the handle held, and the stroke being painted.
 #[derive(Debug, Clone, Default)]
 pub struct MaskTool {
     pub selected: Option<usize>,
     pub grab: Option<(usize, Grab)>,
+    pub brush: BrushTip,
+    /// The brush mask a stroke is being laid on (its last stroke).
+    pub painting: Option<usize>,
 }
 
 /// A point in the square space (x × aspect), where distances mean the same both ways.
@@ -182,6 +219,7 @@ impl MaskTool {
                     .min_by(|a, b| dist(a.1, p).total_cmp(&dist(b.1, p)))
                     .map(|(g, _)| g)
                 }
+                Shape::Brush { .. } => None,
             };
             if let Some(grab) = grab {
                 self.selected = Some(i);
@@ -216,7 +254,7 @@ impl MaskTool {
         let Some(mask) = masks.0.get_mut(i) else {
             return false;
         };
-        let before = mask.shape;
+        let before = mask.shape.clone();
         match (&mut mask.shape, grab) {
             (Shape::Linear { x0, y0, .. }, Grab::LinearStart) => (*x0, *y0) = p,
             (Shape::Linear { x1, y1, .. }, Grab::LinearEnd) => (*x1, *y1) = p,
@@ -259,13 +297,68 @@ impl MaskTool {
             && ((x1 - x0) * aspect).hypot(y1 - y0) < 1e-3
         {
             mask.shape = before;
+            return false;
         }
         mask.shape != before
     }
 
+    /// The picked mask, when it is a brush (a drag paints it rather than catching handles).
+    pub fn brush_selected(&self, masks: &Masks) -> Option<usize> {
+        self.selected
+            .filter(|&i| matches!(masks.0.get(i).map(|m| &m.shape), Some(Shape::Brush { .. })))
+    }
+
+    /// Starts a stroke at `p` on the picked brush mask; `erase` (Alt held) takes away
+    /// whatever the panel says. True when a stroke was started; false with no brush picked
+    /// or at [`MAX_STROKES`].
+    pub fn start_stroke(&mut self, masks: &mut Masks, p: (f64, f64), erase: bool) -> bool {
+        let Some(i) = self.brush_selected(masks) else {
+            return false;
+        };
+        let Shape::Brush { strokes } = &mut masks.0[i].shape else {
+            return false;
+        };
+        if strokes.len() >= MAX_STROKES {
+            return false;
+        }
+        strokes.push(Stroke {
+            points: vec![rounded(p)],
+            size: self.brush.size,
+            feather: self.brush.feather,
+            flow: self.brush.flow,
+            erase: self.brush.erase != erase,
+        });
+        self.painting = Some(i);
+        true
+    }
+
+    /// The stroke being painted reaches `p`: a point is added once the pointer is a fifth of
+    /// the brush's size from the last (the line between them is painted, so nothing is
+    /// lost). True when the mask changed.
+    pub fn extend_stroke(&mut self, masks: &mut Masks, p: (f64, f64), aspect: f64) -> bool {
+        let Some(Shape::Brush { strokes }) = self
+            .painting
+            .and_then(|i| masks.0.get_mut(i))
+            .map(|m| &mut m.shape)
+        else {
+            return false;
+        };
+        let Some(stroke) = strokes.last_mut() else {
+            return false;
+        };
+        let last = *stroke.points.last().expect("a stroke has a point");
+        let moved = ((p.0 - last[0]) * aspect).hypot(p.1 - last[1]);
+        if moved < stroke.size * 0.2 || stroke.points.len() >= MAX_POINTS {
+            return false;
+        }
+        stroke.points.push(rounded(p));
+        true
+    }
+
     /// The button came up: the gesture is over (the caller commits it).
     pub fn release(&mut self) -> bool {
-        self.grab.take().is_some()
+        let held = self.grab.take().is_some();
+        self.painting.take().is_some() || held
     }
 }
 
@@ -402,5 +495,46 @@ mod tests {
         // The start line runs across (horizontally) through the start point.
         assert!((lines[0][0].1 - 0.15).abs() < 1e-9 && (lines[0][1].1 - 0.15).abs() < 1e-9);
         assert!(lines[0][0].0 != lines[0][1].0);
+    }
+
+    fn strokes(masks: &Masks, i: usize) -> &[Stroke] {
+        match &masks.0[i].shape {
+            Shape::Brush { strokes } => strokes,
+            _ => panic!("a brush"),
+        }
+    }
+
+    #[test]
+    fn a_picked_brush_is_painted_and_points_are_thinned() {
+        let aspect = 1.5;
+        let mut tool = MaskTool::default();
+        let mut masks = Masks::default();
+        tool.add(&mut masks, Mask::radial()).unwrap();
+        // A gradient picked: nothing to paint.
+        assert!(!tool.start_stroke(&mut masks, (0.5, 0.5), false));
+        tool.add(&mut masks, Mask::brush()).unwrap();
+        assert_eq!(tool.brush_selected(&masks), Some(1));
+        assert!(tool.start_stroke(&mut masks, (0.123456, 0.5), false));
+        // Too close to the last point (a fifth of the 0.05 size): not kept.
+        assert!(!tool.extend_stroke(&mut masks, (0.124, 0.5), aspect));
+        assert!(tool.extend_stroke(&mut masks, (0.2, 0.5), aspect));
+        assert!(tool.release());
+        assert!(
+            !tool.extend_stroke(&mut masks, (0.4, 0.5), aspect),
+            "released"
+        );
+        let s = &strokes(&masks, 1)[0];
+        assert_eq!(s.points, vec![[0.1235, 0.5], [0.2, 0.5]]);
+        assert_eq!((s.size, s.erase), (0.05, false));
+        // Alt erases; with the panel's Erase on, Alt paints.
+        assert!(tool.start_stroke(&mut masks, (0.3, 0.3), true));
+        tool.release();
+        tool.brush.erase = true;
+        assert!(tool.start_stroke(&mut masks, (0.3, 0.3), true));
+        tool.release();
+        let erased: Vec<bool> = strokes(&masks, 1).iter().map(|s| s.erase).collect();
+        assert_eq!(erased, [false, true, false]);
+        // The radial is untouched.
+        assert_eq!(masks.0[0], Mask::radial());
     }
 }

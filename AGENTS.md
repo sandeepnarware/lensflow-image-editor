@@ -131,8 +131,9 @@ cargo test --workspace                   # includes the 228-render parity suite
   `dialogs/gallery_export.rs`, `library/gallery_ui.rs`; gated by `SessionFlow::gallery_link`.
   Lens corrections: distortion, lens vignetting, CA, keystone, desktop-only in `desktop.lens`
   (`lf_settings::lens`, `lens_to_source` in `develop.wgsl`, `SpotMap::through_lens`).
-  Masks: linear and radial local adjustments, desktop-only in `desktop.masks`
-  (`lf_settings::masks`, `develop/tools/masks.rs`, `mask_weight` in `develop.wgsl`).
+  Masks: linear, radial and brush local adjustments, desktop-only in `desktop.masks`
+  (`lf_settings::masks`, `develop/tools/masks.rs`, `mask_weight` in `develop.wgsl`; brush
+  coverage from `lf_pipeline::brush`, bindings 13–14).
   Export finishing: sharpening, watermark, sRGB profile, WebP, EXIF in PNG/WebP
   (`lf_catalog::finish`). White balance eyedropper, Auto WB and Auto tone (`develop/auto.rs`, `ToolKind::WhiteBalance`,
   `lf_settings::shader_values::{wb_gains, neutral_wb}`).

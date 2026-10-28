@@ -339,7 +339,7 @@ few Newton steps), so the spot tool and the eyedropper map the pointer through i
 
 `M` (or the tool row's "Masks", or the ribbon's Develop → Masks) opens the masks tool. "Add
 linear" puts a graduated filter on the top of the photo; "Add radial" an ellipse in the
-middle. Each mask has its own Exposure, Contrast, Highlights, Shadows, Whites, Blacks,
+middle; "Add brush" a mask to paint. Each mask has its own Exposure, Contrast, Highlights, Shadows, Whites, Blacks,
 Temperature, Tint, Saturation and Clarity, added to the global sliders where it applies;
 "Invert" turns it inside out, and a radial has Feather and Angle. Up to 8 masks.
 
@@ -350,6 +350,17 @@ its right and on its bottom (each sets that radius along the ellipse's own axes)
 inside moves it. A drag that catches no handle pans; a click picks the mask under it. The
 mask being edited is drawn in white with brand-coloured handles. `Delete` removes it. Each
 add, drag, slider gesture and removal is one history step.
+
+While a brush mask is picked, a drag on the photo paints a stroke (a click, a dab) with the
+panel's Size (percent of the photo's height), Feather and Flow; "Erase" (or Alt held)
+rubs out instead. The brush shows as a ring under the pointer, and what the mask covers as a
+red tint. Strokes are stored as points (photo fractions, four places, a new point once the
+pointer has moved a fifth of the size; at most 400 strokes of 4,000 points) and each stroke
+is one history step. The develop pass cannot draw strokes analytically: `lf_pipeline::brush`
+draws them on the CPU (`lf_settings::masks::rasterize`) into an `R8` texture, one layer per
+mask stacked top to bottom (long edge 512), redrawn only when the strokes change, and the
+shader samples the mask's layer at the corrected position (bindings 13 and 14; a 1×1
+stand-in when no mask is a brush).
 
 Masks are desktop-only: they live in `desktop.masks` (`lf_settings::masks`), which the web
 editor keeps in a sidecar it rewrites but does not draw. Shapes are in source-photo
@@ -416,7 +427,7 @@ even if the filter would hide it.
 | `R` | Crop and straighten tool |
 | `Q` | Heal and clone spots tool |
 | `W` | White balance eyedropper (click something grey or white) |
-| `M` | Masks: linear and radial gradients with their own sliders |
+| `M` | Masks: linear and radial gradients and a brush, with their own sliders |
 | `Ctrl+U` | Auto tone |
 | `Ctrl+Shift+U` | Auto white balance |
 | `\` (held) | Before/After (View → Before/After toggles it) |

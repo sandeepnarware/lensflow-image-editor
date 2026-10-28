@@ -401,7 +401,49 @@ impl Develop {
                 let aspect = spot_map.aspect;
                 // The handles' reach, in the masks' square units (fractions of the height).
                 let reach = spot_map.width_fraction(HANDLE_REACH) * aspect;
-                if response.drag_started()
+                let painting = tool
+                    .brush_selected(&Masks::from_settings(&edit.settings))
+                    .is_some();
+                let alt = ui.input(|i| i.modifiers.alt);
+                // A picked brush mask is painted: a drag lays a stroke, a click a dab.
+                let mut stroke_at = |tool: &mut MaskTool, at: Pos2, out: &mut ToolOutput| {
+                    let p = spot_map.uv(at);
+                    edit.set(|s| {
+                        let mut masks = Masks::from_settings(s);
+                        let changed = if tool.painting.is_some() {
+                            tool.extend_stroke(&mut masks, p, aspect)
+                        } else {
+                            tool.start_stroke(&mut masks, p, alt)
+                        };
+                        if changed {
+                            masks.write_into(s);
+                            out.changed = true;
+                        }
+                    });
+                };
+                if painting {
+                    if response.drag_started()
+                        && let Some(at) = origin
+                    {
+                        stroke_at(tool, at, &mut out);
+                    }
+                    if response.dragged()
+                        && tool.painting.is_some()
+                        && let Some(at) = pointer
+                    {
+                        stroke_at(tool, at, &mut out);
+                    }
+                    if response.clicked()
+                        && let Some(at) = origin.or(pointer)
+                    {
+                        stroke_at(tool, at, &mut out);
+                    }
+                    if (response.drag_stopped() || response.clicked()) && tool.release() {
+                        out.commit = true;
+                    }
+                }
+                if !painting
+                    && response.drag_started()
                     && let Some(at) = origin
                 {
                     tool.press(
@@ -428,7 +470,8 @@ impl Develop {
                     out.commit = true;
                 }
                 // A click picks the mask under it (and changes nothing).
-                if response.clicked()
+                if !painting
+                    && response.clicked()
                     && let Some(at) = origin.or(pointer)
                 {
                     tool.press(
@@ -439,8 +482,8 @@ impl Develop {
                     );
                     tool.release();
                 }
-                // A drag that caught no handle pans the photo.
-                input.owns_drag = tool.grab.is_some();
+                // A drag that caught no handle (with no brush picked) pans the photo.
+                input.owns_drag = painting || tool.grab.is_some();
                 if response.hovered() {
                     ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
                 }
@@ -588,6 +631,26 @@ impl Develop {
                 for (i, m) in masks.0.iter().enumerate() {
                     paint_mask(&painter, &spot_map, m, tool.selected == Some(i));
                 }
+                // The brush, where it would paint.
+                if tool.brush_selected(&masks).is_some()
+                    && let Some(at) = ui.ctx().pointer_hover_pos().filter(|p| area.contains(*p))
+                {
+                    let r = (tool.brush.size / spot_map.aspect * spot_map.scale) as f32;
+                    let inner = r * (1.0 - tool.brush.feather as f32 / 100.0);
+                    painter.circle_stroke(
+                        at,
+                        r + 1.0,
+                        Stroke::new(3.0, Color32::from_black_alpha(90)),
+                    );
+                    painter.circle_stroke(at, r, Stroke::new(1.5, Color32::WHITE));
+                    if inner > 2.0 && inner < r - 2.0 {
+                        painter.circle_stroke(
+                            at,
+                            inner,
+                            Stroke::new(1.0, Color32::from_white_alpha(140)),
+                        );
+                    }
+                }
             }
             Active::Spots(tool) => {
                 let spot_map =
@@ -696,6 +759,9 @@ impl Develop {
 /// A mask's exposure range (stops) and its turn (degrees).
 const MASK_EXPOSURE: Range = Range::new(-4.0, 4.0).step(0.05, 2);
 const MASK_ANGLE: Range = Range::new(0.0, 360.0).step(1.0, 0);
+/// The brush's size (percent of the photo's height, each side of the stroke) and flow.
+const BRUSH_SIZE: Range = Range::new(0.5, 30.0).step(0.5, 1);
+const BRUSH_FLOW: Range = Range::new(1.0, 100.0).step(1.0, 0);
 
 /// The masks panel: the hint, the add buttons, the list (click to pick one) and the picked
 /// mask's own settings. Returns what changed, and why an add was refused.
@@ -711,13 +777,14 @@ fn masks_panel(
     let mut out = ToolOutput::default();
     let mut problem = None;
     ui.label(RichText::new(masks::HINT).color(theme::MUTED));
-    ui.horizontal(|ui| {
-        for (label, linear) in [(masks::ADD_LINEAR, true), (masks::ADD_RADIAL, false)] {
+    // Wrapped: three buttons are close to the side panel's width.
+    ui.horizontal_wrapped(|ui| {
+        for label in [masks::ADD_LINEAR, masks::ADD_RADIAL, masks::ADD_BRUSH] {
             if ui.button(label).clicked() {
-                let mask = if linear {
-                    Mask::linear()
-                } else {
-                    Mask::radial()
+                let mask = match label {
+                    masks::ADD_LINEAR => Mask::linear(),
+                    masks::ADD_RADIAL => Mask::radial(),
+                    _ => Mask::brush(),
                 };
                 match tool.add(list, mask) {
                     Ok(()) => out = step,
@@ -747,6 +814,17 @@ fn masks_panel(
         out.changed |= r.changed;
         out.commit |= r.released;
     };
+    if let Shape::Brush { .. } = m.shape {
+        ui.label(RichText::new(masks::BRUSH_HINT).color(theme::MUTED));
+        let tip = &mut tool.brush;
+        let mut size = tip.size * 100.0;
+        panels::slider::edit(ui, "Size", &mut size, BRUSH_SIZE, None);
+        tip.size = size / 100.0;
+        panels::slider::edit(ui, "Feather", &mut tip.feather, Range::AMOUNT, None);
+        panels::slider::edit(ui, "Flow", &mut tip.flow, BRUSH_FLOW, None);
+        ui.checkbox(&mut tip.erase, masks::ERASE);
+        ui.separator();
+    }
     if let Shape::Radial { feather, angle, .. } = &mut m.shape {
         absorb(panels::slider::edit(
             ui,
@@ -795,8 +873,8 @@ fn paint_mask(painter: &egui::Painter, map: &SpotMap, m: &Mask, selected: bool) 
             Stroke::new(1.5, colour),
         );
     };
-    match m.shape {
-        Shape::Linear { x0, y0, x1, y1 } => {
+    match &m.shape {
+        &Shape::Linear { x0, y0, x1, y1 } => {
             // Lines long enough to cross any photo (they are clipped to it).
             if let Some(lines) = masks::linear_lines(&m.shape, map.aspect, 3.0) {
                 for (k, [a, b]) in lines.into_iter().enumerate() {
@@ -813,6 +891,12 @@ fn paint_mask(painter: &egui::Painter, map: &SpotMap, m: &Mask, selected: bool) 
             handle((x1, y1));
             handle(((x0 + x1) / 2.0, (y0 + y1) / 2.0));
         }
+        Shape::Brush { strokes } => {
+            // Only the mask being painted shows where it reaches.
+            if selected {
+                paint_coverage(painter, map, strokes);
+            }
+        }
         Shape::Radial { .. } => {
             let ring: Vec<Pos2> = masks::radial_outline(&m.shape, map.aspect, 96)
                 .into_iter()
@@ -827,6 +911,71 @@ fn paint_mask(painter: &egui::Painter, map: &SpotMap, m: &Mask, selected: bool) 
             }
         }
     }
+}
+
+/// The long edge of the painted-area overlay, in pixels (it is soft; the photo shows the rest).
+const COVERAGE_EDGE: usize = 256;
+
+/// Where a brush mask reaches, as a red tint over the photo: its strokes drawn by the same
+/// rasterizer the develop pass uses, into a small texture kept (in egui's memory) until the
+/// strokes change, laid on the photo's four corners.
+fn paint_coverage(painter: &egui::Painter, map: &SpotMap, strokes: &[lf_settings::masks::Stroke]) {
+    use std::hash::{Hash, Hasher};
+    if strokes.is_empty() {
+        return;
+    }
+    let (w, h) = if map.aspect >= 1.0 {
+        (
+            COVERAGE_EDGE,
+            (COVERAGE_EDGE as f64 / map.aspect).round().max(1.0) as usize,
+        )
+    } else {
+        (
+            (COVERAGE_EDGE as f64 * map.aspect).round().max(1.0) as usize,
+            COVERAGE_EDGE,
+        )
+    };
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_string(strokes)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    (w, h).hash(&mut hasher);
+    let key = hasher.finish();
+    let id = egui::Id::unique("brush-coverage");
+    let ctx = painter.ctx();
+    let cached: Option<(u64, egui::TextureHandle)> = ctx.data(|d| d.get_temp(id));
+    let texture = match cached {
+        Some((k, t)) if k == key => t,
+        _ => {
+            let cover = lf_settings::masks::rasterize(strokes, w, h);
+            let pixels = cover
+                .iter()
+                .map(|&a| {
+                    Color32::from_rgba_unmultiplied(230, 40, 40, (u32::from(a) * 110 / 255) as u8)
+                })
+                .collect();
+            let image = egui::ColorImage::new([w, h], pixels);
+            let t = ctx.load_texture("brush-coverage", image, egui::TextureOptions::LINEAR);
+            ctx.data_mut(|d| d.insert_temp(id, (key, t.clone())));
+            t
+        }
+    };
+    let mut mesh = egui::Mesh::with_texture(texture.id());
+    for (corner, uv) in [
+        ((0.0, 0.0), egui::pos2(0.0, 0.0)),
+        ((1.0, 0.0), egui::pos2(1.0, 0.0)),
+        ((1.0, 1.0), egui::pos2(1.0, 1.0)),
+        ((0.0, 1.0), egui::pos2(0.0, 1.0)),
+    ] {
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: map.screen(corner),
+            uv,
+            color: Color32::WHITE,
+        });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 /// The spot tool's panel: the hint, Heal / Clone, the count and "Remove spot".

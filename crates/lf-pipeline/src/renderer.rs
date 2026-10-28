@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::brush::BrushTexture;
 use crate::curve_texture::CurveTexture;
 use crate::error::PipelineError;
 use crate::gpu::Gpu;
@@ -99,6 +100,8 @@ pub struct Renderer {
     /// [`Renderer::from_texture`], `Rgba8Unorm` from [`Renderer::new`].
     chain: wgpu::TextureFormat,
     curve: CurveTexture,
+    /// Desktop only: the brush masks' coverage.
+    brush: BrushTexture,
     blur_m: Target,
     blur_l: Target,
     /// Kept, as the web keeps them, though only the constructor draws into them.
@@ -203,6 +206,7 @@ impl Renderer {
         }
         let chain = source.format;
         let curve = CurveTexture::new(&gpu)?;
+        let brush = BrushTexture::new(&gpu)?;
 
         let k = SMALL_EDGE / f64::from(width.max(height));
         let small_size = |v: u32| ((f64::from(v) * k.min(1.0)).round() as u32).max(1);
@@ -229,6 +233,7 @@ impl Renderer {
             source,
             chain,
             curve,
+            brush,
             blur_m,
             blur_l,
             _small: small,
@@ -332,6 +337,7 @@ impl Renderer {
             self.detail_key = Some(key);
         }
         self.curve.update(&self.gpu, &s.curve);
+        self.brush.update(&self.gpu, s, w, h)?;
         Ok(spotted)
     }
 
@@ -422,6 +428,7 @@ impl Renderer {
         self.spots_key.clear();
         self.detail_key = None;
         self.curve.invalidate();
+        self.brush.invalidate();
     }
 
     /// Test hook: the next call provokes a validation error inside its own error scope.
@@ -551,6 +558,7 @@ impl Renderer {
             blur_s: sharp.unwrap_or(&self.blur_m),
             blur_t: texture.unwrap_or(&self.blur_m),
             curve: &self.curve.target,
+            brush: &self.brush.target,
         };
         develop::run(
             &self.gpu,

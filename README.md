@@ -71,8 +71,9 @@ skipped as duplicates.
 Lens corrections (a section after Effects): distortion, lens vignetting, red/cyan and
 blue/yellow fringes, and vertical and horizontal perspective, kept for the desktop only.
 
-Masks (`M`): linear and radial gradients, each with its own exposure, tone, white
-balance, saturation and clarity, moved by their handles on the photo. They are kept for
+Masks (`M`): linear and radial gradients and a brush, each with its own exposure, tone,
+white balance, saturation and clarity. Gradients are moved by their handles on the photo; a
+brush mask is painted (size, feather, flow; Alt or "Erase" rubs out). They are kept for
 the desktop only (the web editor keeps them but does not draw them).
 
 White balance: the Colour panel's list (As shot, Auto) and its eyedropper (`W`: click
@@ -103,7 +104,7 @@ and the tool keys work only in Develop.
 | `R` | Crop and straighten |
 | `Q` | Heal and clone spots |
 | `W` | White balance eyedropper (click something grey or white) |
-| `M` | Masks: linear and radial gradients with their own sliders |
+| `M` | Masks: linear and radial gradients and a brush, with their own sliders |
 | `Ctrl+U` | Auto tone |
 | `Ctrl+Shift+U` | Auto white balance |
 | `\` (held) | Before/After |
