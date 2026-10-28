@@ -126,7 +126,7 @@ cargo test --workspace                   # includes the 228-render parity suite
 ## Current state and roadmap
 
 - Shipped in 0.1.1: the DirectX 12 + OpenGL backend pair on Windows, the preview gutter.
-- Since 0.1.1 (unreleased): the console's `grade` (`crates/lf-app/src/grade_cli.rs`) and the
+- In 0.2.0 (version set, not yet released): the console's `grade` (`crates/lf-app/src/grade_cli.rs`) and the
   grid's marquee multi-select (`library/grid.rs`, `library/selection.rs`), and culling:
   flags, stars and colour labels (`lf_catalog::cull`, `library/cull.rs`, `library/cull_ui.rs`).
   Metadata and search: title, caption, creator, copyright, keywords (`lf_catalog::meta`,
@@ -134,6 +134,7 @@ cargo test --workspace                   # includes the 228-render parity suite
   `Filter::text`).
   Albums and smart albums: `lf_catalog::albums` (schema v8, `Rule` as JSON), `library/albums_ui.rs`,
   `dialogs/album.rs`, `Action::{NewAlbum, NewSmartAlbum, AddToAlbum, RemoveFromAlbum}`.
+  Tethering was dropped (2026-10-28): it needs camera makers' SDKs.
   Compare (`C`): `library/compare.rs` (render on `Open`, `Msg::CompareRendered`, shared zoom).
   Show clipping (`J`): `DrawOptions::clipping` → `clip_warn` in `develop.wgsl` (preview only).
   Export presets (`dialogs/export_presets.rs`, `prefs.export_presets`) and the `{title}` file-name token.
