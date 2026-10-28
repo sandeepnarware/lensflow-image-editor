@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/lf-settings", "crates/lf-pipeline", "crates/lf-fixtures", "crates/lf-raw", "crates/lf-grade", "crates/lf-account", "crates/lf-catalog", "crates/lf-app"]
+members = ["crates/lf-settings", "crates/lf-pipeline", "crates/lf-fixtures", "crates/lf-raw", "crates/lf-grade", "crates/lf-merge", "crates/lf-account", "crates/lf-catalog", "crates/lf-app"]
 
 [workspace.package]
 # The release version: the build workflow writes its input here, and lf-app inherits it.
@@ -35,6 +35,10 @@ debug-assertions = false
 opt-level = 3
 
 [profile.dev.package.lf-raw]
+opt-level = 3
+[profile.dev.package.lf-merge]
+opt-level = 3
+[profile.test.package.lf-merge]
 opt-level = 3
 [profile.test.package.lf-raw]
 opt-level = 3

@@ -2394,3 +2394,36 @@ fn print_writes_a_pdf_of_the_selection() {
     h.step();
     assert!(h.state().lib.print().is_none());
 }
+
+#[test]
+fn a_bracket_merges_to_hdr_and_the_result_is_catalogued_beside_it() {
+    use lf_app::dialogs::merge;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 3);
+    import_folder(&mut h, &shoot, 3);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    // One photo cannot be merged.
+    h.state_mut().lib.selection.click(ids[0]);
+    assert!(!h.state().lib.enabled(Action::MergeHdr));
+    h.state_mut().lib.selection.select_all(&ids);
+    assert!(run_action(&mut h, Action::MergeHdr));
+    h.step();
+    h.step();
+    h.get_by_label("Merge 3 photos to HDR");
+    h.get_by_label(merge::MERGE).click();
+    step_until(&mut h, "the merge and its catalogue import", |s| {
+        s.lib
+            .merge()
+            .is_some_and(|d| matches!(d.stage, merge::Stage::Done(Ok(_))))
+            && !s.lib.importing()
+            && s.lib.photos().len() == 4
+    });
+    assert!(shoot.join("p0-HDR.tif").exists());
+    h.get_by_label(merge::CLOSE).click();
+    h.step();
+    assert!(h.state().lib.merge().is_none());
+}

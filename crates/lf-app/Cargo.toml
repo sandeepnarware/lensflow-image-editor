@@ -15,6 +15,7 @@ lf-account = { path = "../lf-account" }
 lf-catalog = { path = "../lf-catalog" }
 lf-raw = { path = "../lf-raw" }
 lf-settings = { path = "../lf-settings" }
+lf-merge = { path = "../lf-merge" }
 lf-grade = { path = "../lf-grade" }
 # File dialogs (MIT). Default features: the XDG desktop portal on Linux, so no GTK.
 rfd = "0.17"
@@ -33,7 +34,7 @@ log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # `grade --out` writes JPEG copies (the `jpeg` feature; the workspace's has png only).
-image = { workspace = true, features = ["jpeg"] }
+image = { workspace = true, features = ["jpeg", "tiff"] }
 # Sidecar timestamps (`updated_at`), so a grade written beside a photo wins over an older one.
 chrono.workspace = true
 

@@ -44,6 +44,8 @@ pub enum Action {
     MatchReference,
     /// Render the photo to a TIFF beside it and open it in the studio's external editor.
     EditIn,
+    /// Blend an exposure bracket (the selected photos) into one photo.
+    MergeHdr,
     AddVersion,
     ResetAll,
     /// Exposure and the tone sliders from the photo.
@@ -105,6 +107,7 @@ impl Action {
             Action::Metadata => "Metadata panel",
             Action::MatchReference => "Match a reference…",
             Action::EditIn => "Edit in external editor…",
+            Action::MergeHdr => "Merge to HDR…",
             Action::AddVersion => "Add version…",
             Action::ResetAll => "Reset all edits",
             Action::AutoTone => "Auto tone",
@@ -186,6 +189,7 @@ pub const MAP: Map = Map(&[
     (Action::Export, cmd_shift(Key::E)),
     (Action::EditIn, cmd(Key::E)),
     (Action::Print, cmd(Key::P)),
+    (Action::MergeHdr, cmd(Key::H)),
     (Action::CropTool, key(Key::R)),
     (Action::SpotTool, key(Key::Q)),
     (Action::WhiteBalanceTool, key(Key::W)),
@@ -344,6 +348,7 @@ mod tests {
             (Action::Export, cmd_shift(Key::E)),
             (Action::EditIn, cmd(Key::E)),
             (Action::Print, cmd(Key::P)),
+            (Action::MergeHdr, cmd(Key::H)),
             (Action::CropTool, key(Key::R)),
             (Action::SpotTool, key(Key::Q)),
             (Action::WhiteBalanceTool, key(Key::W)),

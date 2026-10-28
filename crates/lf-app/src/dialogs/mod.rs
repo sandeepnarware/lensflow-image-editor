@@ -10,6 +10,7 @@ pub mod group_picker;
 pub mod ingest;
 pub mod keys;
 pub mod match_reference;
+pub mod merge;
 pub mod preferences;
 pub mod print;
 pub mod quit;

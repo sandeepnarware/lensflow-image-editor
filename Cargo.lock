@@ -2884,6 +2884,7 @@ dependencies = [
  "lf-account",
  "lf-catalog",
  "lf-grade",
+ "lf-merge",
  "lf-pipeline",
  "lf-raw",
  "lf-settings",
@@ -2946,6 +2947,13 @@ dependencies = [
  "image",
  "lf-settings",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "lf-merge"
+version = "0.1.0"
+dependencies = [
+ "rayon",
 ]
 
 [[package]]

@@ -197,6 +197,10 @@ pub enum Msg {
     PrintProgress { done: usize, total: usize },
     /// The PDF was written (its path, and whether it was opened to print), or why not.
     PrintDone(Result<(PathBuf, bool), String>),
+    /// Merge to HDR moved on.
+    MergeProgress { done: usize, total: usize },
+    /// Merge to HDR wrote the merged photo, or why not.
+    MergeDone(Result<PathBuf, String>),
 
     #[cfg(test)]
     Probe(&'static str),
@@ -725,7 +729,9 @@ pub(crate) mod owners {
             | Msg::LutImported(..)
             | Msg::EditInDone(..)
             | Msg::PrintProgress { .. }
-            | Msg::PrintDone(..) => Owner::Library,
+            | Msg::PrintDone(..)
+            | Msg::MergeProgress { .. }
+            | Msg::MergeDone(..) => Owner::Library,
             Msg::DeviceReset(..) => Owner::App,
             Msg::Probe(..) => Owner::Test,
         }
@@ -835,6 +841,8 @@ pub(crate) mod owners {
             Msg::EditInDone(Err("no".into())),
             Msg::PrintProgress { done: 1, total: 2 },
             Msg::PrintDone(Err("no".into())),
+            Msg::MergeProgress { done: 1, total: 2 },
+            Msg::MergeDone(Err("no".into())),
             Msg::DeviceReset(device_reset::Choice::Quit),
             Msg::Probe("probe"),
         ]

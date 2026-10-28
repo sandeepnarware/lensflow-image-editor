@@ -15,6 +15,7 @@ pub mod grid;
 pub mod import_ui;
 pub mod ingest_ui;
 pub mod lut_ui;
+pub mod merge_ui;
 pub mod meta_ui;
 pub mod print_ui;
 pub mod selection;
@@ -128,6 +129,8 @@ pub struct Library {
     /// File → Print, while open; and the layout waiting for the "Save PDF" answer.
     print: Option<crate::dialogs::print::PrintDialog>,
     print_pending: Option<lf_catalog::print::PrintSpec>,
+    /// Merge to HDR, while open.
+    merge: Option<crate::dialogs::merge::MergeDialog>,
     pub selection: Selection,
     /// The box being dragged over the grid, while the mouse button is down.
     pub marquee: Option<grid::Marquee>,
@@ -236,6 +239,7 @@ impl Library {
             ingest: None,
             print: None,
             print_pending: None,
+            merge: None,
             keep: None,
             keys: Keys::default(),
         }
@@ -422,6 +426,9 @@ impl Library {
         }
         if let Some(print) = &self.print {
             print.stop.store(true, Ordering::SeqCst);
+        }
+        if let Some(merge) = &self.merge {
+            merge.stop.store(true, Ordering::SeqCst);
         }
     }
 
@@ -807,6 +814,8 @@ impl Library {
             Msg::EditInDone(result) => self.edit_in_done(result, env),
             Msg::PrintProgress { done, total } => self.print_progress(done, total),
             Msg::PrintDone(result) => self.print_done(result),
+            Msg::MergeProgress { done, total } => self.merge_progress(done, total),
+            Msg::MergeDone(result) => self.merge_done(result, env),
             Msg::LutImported(result) => match result {
                 Ok(name) => {
                     env.toasts
@@ -1249,6 +1258,7 @@ impl Library {
         self.gallery_dialog(ui.ctx(), env);
         self.ingest_dialog(ui.ctx(), env);
         self.print_dialog(ui.ctx(), env);
+        self.merge_dialog(ui.ctx(), env);
         self.reveal_active = false;
     }
 
@@ -1264,6 +1274,7 @@ impl Library {
             || self.gallery.as_ref().is_some_and(|d| d.visible)
             || self.ingest.as_ref().is_some_and(|d| d.visible)
             || self.print.is_some()
+            || self.merge.is_some()
     }
 
     /// Whether `action` (a menu item or a key) is possible now in the library or Develop.
@@ -1286,6 +1297,11 @@ impl Library {
             Action::PasteSettings | Action::ApplyToSelected | Action::MatchReference => selected,
             Action::EditIn => (develop || selected) && self.can_add(),
             Action::Print => develop || selected,
+            Action::MergeHdr => {
+                !develop
+                    && crate::dialogs::merge::can_merge(self.selection.current.len())
+                    && self.can_add()
+            }
             Action::SelectAll | Action::Previous | Action::Next => !self.order.is_empty(),
             Action::Metadata => !develop,
             Action::Library => develop,
@@ -1339,6 +1355,7 @@ impl Library {
             Action::MatchReference => self.open_match(),
             Action::EditIn => self.edit_in(env),
             Action::Print => self.open_print(),
+            Action::MergeHdr => self.open_merge(),
             Action::Library => {
                 self.mode = Mode::Library;
                 if self.filter.narrows() {

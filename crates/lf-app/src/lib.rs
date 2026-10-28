@@ -20,6 +20,7 @@ pub mod library;
 pub mod logging;
 pub mod luts;
 pub mod menu;
+pub mod merge_job;
 pub mod platform;
 pub mod prefs;
 pub mod presets_sync;

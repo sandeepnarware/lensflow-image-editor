@@ -19,6 +19,7 @@ and 2d tasks 1–2 are built; packaging tasks 3–5 are in flight.
 | `lf-pipeline` | Headless wgpu renderer: `Gpu`, `Renderer`, mip-chained textures, copy/gaussian/spots/develop passes, curve texture, histogram, preview draw. | `src/renderer.rs`, `src/passes/develop.rs` |
 | `lf-raw` | Magic-byte kind sniffing, rawler decode, demosaic (bilinear/AHD/X-Trans/preview bin), WB + colour + highlight handling, f16 headroom, EXIF, frame cache, `lf-render` example. | `src/open.rs`, `src/develop.rs` |
 | `lf-grade` | CPU maths for "Match a reference": measure, correct, calibrate (injected renderer), strength/exposure, contact sheet. | `src/lib.rs` |
+| `lf-merge` | CPU merging: exposure fusion (Mertens) through Laplacian pyramids, median-threshold-bitmap alignment. No GPU, no catalogue. | `src/lib.rs` |
 | `lf-account` | Blocking reqwest/rustls LensFlow client: sign-in + 2FA, token store, entitlement gate/offline grace, desktop grade, presets sync, download link. | `src/client.rs`, `src/entitlement.rs` |
 | `lf-catalog` | SQLite catalogue (bundled, WAL, schema v7), sidecars, edit history (cap 50), versions, import, thumbnails, export, presets. Never touches pixels directly. | `src/db.rs`, `src/edits.rs`, `src/export.rs` |
 | `lf-fixtures` | Loads `tests/fixtures` goldens and applies the parity thresholds. | `src/lib.rs` |
@@ -132,6 +133,8 @@ cargo test --workspace                   # includes the 228-render parity suite
   `Filter::text`).
   LUT looks: `lf_settings::lut` (`.cube` parser, `desktop.lut`), `lf_pipeline::lut` (process-wide
   registry, 3D texture at bindings 15–16, `lut_amount` uniform), `luts.rs` (`.lensflow/luts/`).
+  Merge to HDR: `lf-merge` (align + fuse), `merge_job.rs` (16-bit TIFF beside the first frame),
+  `dialogs/merge.rs`, `library/merge_ui.rs`, `Action::MergeHdr` (`Ctrl+H`).
   Edit in external editor: `edit_in.rs`, `library/edit_in_ui.rs`, `prefs.external_editor`.
   Print to PDF: `lf_catalog::print` (hand-written PDF, JPEGs as DCTDecode), `print_job.rs`,
   `dialogs/print.rs`, `library/print_ui.rs`.

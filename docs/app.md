@@ -426,6 +426,7 @@ even if the filter would hide it.
 | `Ctrl+Shift+E` | Export… |
 | `Ctrl+E` | Edit in external editor… |
 | `Ctrl+P` | Print… |
+| `Ctrl+H` | Merge to HDR… |
 | `R` | Crop and straighten tool |
 | `Q` | Heal and clone spots tool |
 | `W` | White balance eyedropper (click something grey or white) |
@@ -547,3 +548,21 @@ Stop) renders each photo through the disk export as a JPEG sized for 300 dpi in 
 `lf_catalog::print::pdf` writes the pages: a small hand-written PDF 1.4 with the JPEGs placed
 as they are (`DCTDecode`, nothing compressed twice) and captions in the built-in Helvetica
 (characters outside WinAnsi print as `?`).
+
+### Merge to HDR
+
+`Ctrl+H` (Library → Merge; `Action::MergeHdr`) merges two to seven selected photos, an
+exposure bracket, into one (`dialogs/merge.rs`, `library/merge_ui.rs`). The run
+(`merge_job::run`, `Long` lane, with Stop) develops each frame with the default settings (the
+photo as shot, through the develop pass, so RAW frames keep their highlights until then) at
+most 5000 px on the long side, keeps it as 16-bit, lines each frame up with the middle one
+(`lf_merge::align`: Ward's median threshold bitmaps over a pyramid, so brightness does not
+matter, up to ±64 px), then fuses them (`lf_merge::fuse`: exposure fusion after Mertens,
+Kautz and Van Reeth, as Enfuse does: each pixel weighted by contrast, saturation and how
+close it is to mid grey, blended through Laplacian pyramids so no seam shows). The result is
+a finished, natural-looking photo (no tone mapping step), written as a 16-bit TIFF with the
+sRGB profile beside the first frame (`<name>-HDR.tif`, `-HDR-2`, …); the catalogue folder is
+rescanned so it shows beside the bracket. Frames of different sizes are refused. Moving
+subjects are not de-ghosted.
+
+`lf-merge` is CPU-only (rayon), with no GPU and no catalogue.
