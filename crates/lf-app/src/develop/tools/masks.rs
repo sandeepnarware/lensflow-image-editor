@@ -29,6 +29,9 @@ pub const BRUSH_HINT: &str = "Paint on the photo. Hold Alt to erase.";
 pub const ERASE: &str = "Erase";
 pub const REMOVE: &str = "Remove mask";
 pub const INVERT: &str = "Invert";
+pub const RANGE: &str = "Range";
+pub const RANGE_PICK: &str = "Alt-click the photo to pick the colour.";
+pub const NO_HUE: &str = "That spot has no colour to pick (it is grey); try a more colourful part.";
 pub const FULL: &str = "A photo can have up to 8 masks.";
 
 /// What a press caught.

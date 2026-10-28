@@ -136,6 +136,7 @@ cargo test --workspace                   # includes the 228-render parity suite
   Compare (`C`): `library/compare.rs` (render on `Open`, `Msg::CompareRendered`, shared zoom).
   Show clipping (`J`): `DrawOptions::clipping` → `clip_warn` in `develop.wgsl` (preview only).
   Export presets (`dialogs/export_presets.rs`, `prefs.export_presets`) and the `{title}` file-name token.
+  Mask ranges: `lf_settings::masks::Range` (brightness or colour), `range_weight` in `develop.wgsl`.
   LUT looks: `lf_settings::lut` (`.cube` parser, `desktop.lut`), `lf_pipeline::lut` (process-wide
   registry, 3D texture at bindings 15–16, `lut_amount` uniform), `luts.rs` (`.lensflow/luts/`).
   Merge to HDR: `lf-merge` (align + fuse), `merge_job.rs` (16-bit TIFF beside the first frame),

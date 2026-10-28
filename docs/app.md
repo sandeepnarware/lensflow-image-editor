@@ -381,6 +381,17 @@ weight analytically (`mask_weight`, the same formula as `lf_settings::masks::wei
 adds the masks' shares to the sliders it moves, clamped to each slider's range. With no
 masks every value is the uniform itself, so the parity gate is untouched.
 
+A mask's `range` (`lf_settings::masks::Range`: `All`, `Luminance { low, high, smooth }`,
+`Colour { hue, width, smooth }`) narrows it inside its shape. The shader's `range_weight`
+multiplies the shape's weight by how well the photo's own colour at that pixel (before any
+edit, so moving a slider never moves the mask) fits: luma between `low` and `high` with
+smoothstep edges, or a hue (the angle in the opponent plane `r − (g+b)/2`, `√3/2 (g − b)`)
+within `width` degrees, fading over `smooth`, greys (chroma < 0.02) never matching.
+`Range::weight` is the CPU twin. `MaskU` gained a seventh row (`range`). The panel offers
+Whole shape / Brightness range / Colour range with their sliders, and Alt-click on the photo
+with a colour range picks the hue there (`Develop::pick_range_colour`, from the frame's
+sample).
+
 ### White balance and Auto tone
 
 Colour has a white-balance list (As shot, Auto) and a "Pick neutral" eyedropper (`W`, also

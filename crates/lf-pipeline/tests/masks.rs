@@ -33,6 +33,7 @@ fn radial(exposure: f64, invert: bool) -> Mask {
             feather: 0.0,
         },
         invert,
+        range: lf_settings::masks::Range::All,
         local: Local {
             exposure,
             ..Local::default()
@@ -114,6 +115,7 @@ fn a_warm_linear_mask_warms_the_top_only_and_masks_add_up() {
             y1: 0.4,
         },
         invert: false,
+        range: lf_settings::masks::Range::All,
         local: Local {
             temperature: 60.0,
             ..Local::default()
@@ -148,6 +150,7 @@ fn local_contrast_and_saturation_stay_in_range() {
             y1: 2.0,
         },
         invert: false,
+        range: lf_settings::masks::Range::All,
         local: Local {
             contrast: 100.0,
             saturation: 100.0,
@@ -162,6 +165,7 @@ fn brush(strokes: Vec<lf_settings::masks::Stroke>, exposure: f64) -> Mask {
     Mask {
         shape: Shape::Brush { strokes },
         invert: false,
+        range: lf_settings::masks::Range::All,
         local: Local {
             exposure,
             ..Local::default()
@@ -227,4 +231,62 @@ fn every_layer_is_read_by_its_own_mask() {
             "below dot {i}"
         );
     }
+}
+
+/// A mask over the whole photo, narrowed by `range`, lifting exposure a stop.
+fn everywhere(range: lf_settings::masks::Range) -> Mask {
+    Mask {
+        shape: Shape::Linear {
+            x0: 0.5,
+            y0: 1.5,
+            x1: 0.5,
+            y1: 2.0,
+        },
+        invert: false,
+        range,
+        local: Local {
+            exposure: 1.0,
+            ..Local::default()
+        },
+    }
+}
+
+#[test]
+fn a_range_narrows_the_mask_to_tones_or_colours() {
+    use lf_settings::masks::Range;
+    // Four patches: dark grey, light grey, sky blue, red.
+    let patches = [
+        [40u8, 40, 40],
+        [200, 200, 200],
+        [70, 120, 200],
+        [200, 50, 40],
+    ];
+    let img = RgbaImage::from_fn(W, H, |x, _| {
+        let [r, g, b] = patches[(x * 4 / W) as usize];
+        Rgba([r, g, b, 255])
+    });
+    let at = |i: u32| (W / 8 + i * W / 4, H / 2);
+    let mut r = Renderer::new(shared_gpu(), &img, W, H).unwrap();
+    let plain = r.render(&EditSettings::default_settings()).unwrap();
+    let lifted = |out: &RgbaImage, i: u32| {
+        let (x, y) = at(i);
+        out.get_pixel(x, y).0[1] > plain.get_pixel(x, y).0[1] + 8
+    };
+
+    let bright = r
+        .render(&with(vec![everywhere(Range::luminance())]))
+        .unwrap();
+    assert!(!lifted(&bright, 0), "the dark patch moved");
+    assert!(lifted(&bright, 1), "the light patch did not move");
+
+    let blue = r.render(&with(vec![everywhere(Range::colour())])).unwrap();
+    assert!(!lifted(&blue, 0) && !lifted(&blue, 1), "a grey moved");
+    assert!(lifted(&blue, 2), "the blue did not move");
+    assert!(!lifted(&blue, 3), "the red moved");
+
+    // The CPU's weights agree.
+    let rgb = |p: [u8; 3]| p.map(|v| f64::from(v) / 255.0);
+    assert_eq!(Range::colour().weight(rgb(patches[2])), 1.0);
+    assert_eq!(Range::colour().weight(rgb(patches[3])), 0.0);
+    assert_eq!(Range::luminance().weight(rgb(patches[0])), 0.0);
 }

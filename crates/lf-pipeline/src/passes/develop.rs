@@ -5,7 +5,7 @@ use crate::passes::{FullscreenPass, UniformArena, sampler_entry, texture_entry, 
 use crate::texture::Target;
 use lf_settings::EditSettings;
 use lf_settings::geometry::Affine;
-use lf_settings::masks::{MAX_MASKS, Mask, Masks, Shape};
+use lf_settings::masks::{MAX_MASKS, Mask, Masks, Range, Shape};
 use lf_settings::shader_values::{shader_values, wb_gains};
 
 /// `DEVELOP`'s uniforms, laid out as `develop.wgsl`'s `Uniforms` (WGSL uniform layout: each
@@ -75,7 +75,7 @@ pub struct Uniforms {
     pub persp: [f32; 4],
 }
 
-/// One local adjustment as `develop.wgsl`'s `MaskU` takes it (six 16-byte rows).
+/// One local adjustment as `develop.wgsl`'s `MaskU` takes it (seven 16-byte rows).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MaskUniform {
@@ -94,6 +94,9 @@ pub struct MaskUniform {
     /// The white-balance multiplier where the mask applies fully (normalised as the global
     /// one is), and an unused `w`.
     pub wb: [f32; 4],
+    /// The range ([`lf_settings::masks::Range`]): 0 all; 1 brightness low, high, smooth (0..1);
+    /// 2 colour hue, width, smooth (radians).
+    pub range: [f32; 4],
 }
 
 impl MaskUniform {
@@ -145,6 +148,16 @@ impl MaskUniform {
             ],
             more: [p(l.whites), p(l.blacks), p(l.saturation), p(l.clarity)],
             wb: [(g[0] / y) as f32, (g[1] / y) as f32, (g[2] / y) as f32, 0.0],
+            range: match m.range {
+                Range::All => [0.0; 4],
+                Range::Luminance { low, high, smooth } => [1.0, p(low), p(high), p(smooth)],
+                Range::Colour { hue, width, smooth } => [
+                    2.0,
+                    hue.to_radians() as f32,
+                    width.to_radians() as f32,
+                    smooth.to_radians() as f32,
+                ],
+            },
         }
     }
 }
@@ -153,8 +166,8 @@ impl MaskUniform {
 // `pixel`, the three 16-byte-stride arrays and the masks after them.
 const _: () = {
     use std::mem::{offset_of, size_of};
-    assert!(size_of::<MaskUniform>() == 96);
-    assert!(size_of::<Uniforms>() == 624 + 16 + MAX_MASKS * 96 + 32);
+    assert!(size_of::<MaskUniform>() == 112);
+    assert!(size_of::<Uniforms>() == 624 + 16 + MAX_MASKS * 112 + 32);
     assert!(offset_of!(Uniforms, wb) == 128);
     assert!(offset_of!(Uniforms, pixel) == 232);
     assert!(offset_of!(Uniforms, hsl) == 240);
@@ -162,7 +175,7 @@ const _: () = {
     assert!(offset_of!(Uniforms, band_width) == 240 + 2 * 8 * 16);
     assert!(offset_of!(Uniforms, mask_count) == 624);
     assert!(offset_of!(Uniforms, masks) == 640);
-    assert!(offset_of!(Uniforms, lens) == 640 + MAX_MASKS * 96);
+    assert!(offset_of!(Uniforms, lens) == 640 + MAX_MASKS * 112);
 };
 
 /// Where the develop pass draws from and how (the arguments of `developPass` that are not

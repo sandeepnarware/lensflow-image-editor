@@ -73,7 +73,9 @@ blue/yellow fringes, and vertical and horizontal perspective, kept for the deskt
 
 Masks (`M`): linear and radial gradients and a brush, each with its own exposure, tone,
 white balance, saturation and clarity. Gradients are moved by their handles on the photo; a
-brush mask is painted (size, feather, flow; Alt or "Erase" rubs out). They are kept for
+brush mask is painted (size, feather, flow; Alt or "Erase" rubs out). A Range narrows any
+mask to a brightness band (only the highlights of the sky) or a colour (only the blues;
+Alt-click the photo to pick it). They are kept for
 the desktop only (the web editor keeps them but does not draw them).
 
 White balance: the Colour panel's list (As shot, Auto) and its eyedropper (`W`: click

@@ -20,7 +20,7 @@ use eframe::egui::{self, Color32, CursorIcon, Pos2, Rect, RichText, Stroke};
 use lf_pipeline::renderer::View;
 use lf_settings::geometry::{self, Geometry, apply, invert, output_to_source};
 use lf_settings::lens::Lens;
-use lf_settings::masks::{Mask, Masks, Shape};
+use lf_settings::masks::{Mask, Masks, Range as MaskRange, Shape};
 use lf_settings::{Crop, EditSettings, MAX_SPOTS, Spot, SpotMode};
 use masks::MaskTool;
 use panels::slider::Range;
@@ -395,16 +395,35 @@ impl Develop {
         };
         // Where the eyedropper was clicked (the sample is read once the borrows end).
         let mut picked = None;
+        // Where Alt-click picked a mask's range colour (read the same way).
+        let mut picked_colour = None;
         match active {
             Active::Masks(tool) => {
                 let spot_map = SpotMap::new(map, &edit.settings, full, output_w);
                 let aspect = spot_map.aspect;
                 // The handles' reach, in the masks' square units (fractions of the height).
                 let reach = spot_map.width_fraction(HANDLE_REACH) * aspect;
-                let painting = tool
-                    .brush_selected(&Masks::from_settings(&edit.settings))
-                    .is_some();
                 let alt = ui.input(|i| i.modifiers.alt);
+                // Alt-click on the photo picks the colour of a colour range.
+                let picking_colour = alt
+                    && tool
+                        .selected
+                        .and_then(|i| Masks::from_settings(&edit.settings).0.get(i).cloned())
+                        .is_some_and(|m| matches!(m.range, MaskRange::Colour { .. }));
+                if picking_colour
+                    && response.clicked()
+                    && let Some(at) = origin.or(pointer)
+                {
+                    picked_colour = Some(
+                        SpotMap::new(map, &edit.settings, full, output_w)
+                            .through_lens(&edit.settings)
+                            .uv(at),
+                    );
+                }
+                let painting = !picking_colour
+                    && tool
+                        .brush_selected(&Masks::from_settings(&edit.settings))
+                        .is_some();
                 // A picked brush mask is painted: a drag lays a stroke, a click a dab.
                 let mut stroke_at = |tool: &mut MaskTool, at: Pos2, out: &mut ToolOutput| {
                     let p = spot_map.uv(at);
@@ -471,6 +490,7 @@ impl Develop {
                 }
                 // A click picks the mask under it (and changes nothing).
                 if !painting
+                    && !picking_colour
                     && response.clicked()
                     && let Some(at) = origin.or(pointer)
                 {
@@ -597,6 +617,9 @@ impl Develop {
         if let Some(at) = picked {
             self.pick_white_balance(at, toasts);
         }
+        if let Some(at) = picked_colour {
+            self.pick_range_colour(at, toasts);
+        }
         input
     }
 
@@ -612,6 +635,36 @@ impl Develop {
             }
             None => toasts.push(Level::Info, auto::TOO_DARK),
         }
+    }
+
+    /// Alt-click with a colour range: the selected mask's range takes the hue at `at` (source
+    /// fractions), one history step.
+    fn pick_range_colour(&mut self, at: (f64, f64), toasts: &mut Toasts) {
+        let Some(Active::Masks(tool)) = &self.tools.active else {
+            return;
+        };
+        let Some(index) = tool.selected else {
+            return;
+        };
+        // The sample is linear light; the range is measured on the photo's own (gamma) values.
+        let hue = self
+            .opened()
+            .and_then(|o| o.sample.linear_at(at, 2))
+            .and_then(|lin| lf_settings::masks::hue_of(lin.map(|v| v.max(0.0).powf(1.0 / 2.2))));
+        let Some(picked) = hue else {
+            toasts.push(Level::Info, masks::NO_HUE);
+            return;
+        };
+        self.commit(toasts);
+        self.edit(|s| {
+            let mut list = Masks::from_settings(s);
+            if let Some(MaskRange::Colour { hue, .. }) = list.0.get_mut(index).map(|m| &mut m.range)
+            {
+                *hue = picked.round();
+                list.write_into(s);
+            }
+        });
+        self.commit(toasts);
     }
 
     /// Draws the open tool's overlay over the photo in `map`, clipped to `area`.
@@ -762,6 +815,10 @@ const MASK_ANGLE: Range = Range::new(0.0, 360.0).step(1.0, 0);
 /// The brush's size (percent of the photo's height, each side of the stroke) and flow.
 const BRUSH_SIZE: Range = Range::new(0.5, 30.0).step(0.5, 1);
 const BRUSH_FLOW: Range = Range::new(1.0, 100.0).step(1.0, 0);
+/// A mask range's percentages and hues.
+const RANGE_PERCENT: Range = Range::new(0.0, 100.0).step(1.0, 0);
+const RANGE_HUE: Range = Range::new(0.0, 359.0).step(1.0, 0);
+const RANGE_WIDTH: Range = Range::new(1.0, 180.0).step(1.0, 0);
 
 /// The masks panel: the hint, the add buttons, the list (click to pick one) and the picked
 /// mask's own settings. Returns what changed, and why an add was refused.
@@ -835,6 +892,75 @@ fn masks_panel(
         ));
         absorb(panels::slider::edit(ui, "Angle", angle, MASK_ANGLE, None));
     }
+    // Range: only some tones or colours inside the shape.
+    let before = m.range;
+    let combo = egui::ComboBox::from_id_salt("mask-range")
+        .selected_text(m.range.name())
+        .show_ui(ui, |ui| {
+            for choice in [MaskRange::All, MaskRange::luminance(), MaskRange::colour()] {
+                let same = std::mem::discriminant(&m.range) == std::mem::discriminant(&choice);
+                if ui.selectable_label(same, choice.name()).clicked() && !same {
+                    m.range = choice;
+                }
+            }
+        });
+    combo
+        .response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, masks::RANGE));
+    if m.range != before {
+        absorb(panels::slider::SliderResponse {
+            changed: true,
+            released: true,
+        });
+    }
+    match &mut m.range {
+        MaskRange::All => {}
+        MaskRange::Luminance { low, high, smooth } => {
+            absorb(panels::slider::edit(
+                ui,
+                "Darkest",
+                low,
+                RANGE_PERCENT,
+                None,
+            ));
+            absorb(panels::slider::edit(
+                ui,
+                "Brightest",
+                high,
+                RANGE_PERCENT,
+                None,
+            ));
+            absorb(panels::slider::edit(
+                ui,
+                "Smoothness",
+                smooth,
+                RANGE_PERCENT,
+                None,
+            ));
+            if *high < *low {
+                *high = *low;
+            }
+        }
+        MaskRange::Colour { hue, width, smooth } => {
+            ui.horizontal(|ui| {
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                let rgb = egui::ecolor::Hsva::new((*hue / 360.0) as f32, 0.8, 0.9, 1.0);
+                ui.painter().rect_filled(rect, 3.0, Color32::from(rgb));
+                ui.label(RichText::new(masks::RANGE_PICK).color(theme::MUTED).small());
+            });
+            absorb(panels::slider::edit(ui, "Hue", hue, RANGE_HUE, None));
+            absorb(panels::slider::edit(ui, "Range", width, RANGE_WIDTH, None));
+            absorb(panels::slider::edit(
+                ui,
+                "Smoothness",
+                smooth,
+                RANGE_WIDTH,
+                None,
+            ));
+        }
+    }
+    ui.separator();
     for (label, value) in m.local.sliders() {
         let range = if label == "Exposure" {
             MASK_EXPOSURE

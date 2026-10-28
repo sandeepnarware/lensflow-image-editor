@@ -272,6 +272,120 @@ impl Local {
     }
 }
 
+/// Narrows a mask to part of the photo's tones or colours, inside its shape: Lightroom's range
+/// masks. Measured on the photo as shot at each pixel (before the edits), so moving a slider
+/// never moves the mask. Numbers are percentages; the hue is in degrees.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Range {
+    /// The whole shape.
+    #[default]
+    All,
+    /// Brightness between `low` and `high` (0..100), fading over `smooth` beyond them.
+    Luminance { low: f64, high: f64, smooth: f64 },
+    /// Colours whose hue is within `width` degrees of `hue`, fading over `smooth` degrees;
+    /// greys never match.
+    Colour { hue: f64, width: f64, smooth: f64 },
+}
+
+impl Range {
+    /// A brightness range taking the highlights.
+    pub fn luminance() -> Range {
+        Range::Luminance {
+            low: 60.0,
+            high: 100.0,
+            smooth: 10.0,
+        }
+    }
+
+    /// A colour range taking blues (skies).
+    pub fn colour() -> Range {
+        Range::Colour {
+            hue: 215.0,
+            width: 25.0,
+            smooth: 20.0,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Range::All => "Whole shape",
+            Range::Luminance { .. } => "Brightness range",
+            Range::Colour { .. } => "Colour range",
+        }
+    }
+
+    /// The same range with safe numbers.
+    fn clamped(self) -> Range {
+        let fix =
+            |v: f64, lo: f64, hi: f64, or: f64| if v.is_finite() { v.clamp(lo, hi) } else { or };
+        match self {
+            Range::All => Range::All,
+            Range::Luminance { low, high, smooth } => {
+                let low = fix(low, 0.0, 100.0, 0.0);
+                Range::Luminance {
+                    low,
+                    high: fix(high, low, 100.0, 100.0),
+                    smooth: fix(smooth, 1.0, 50.0, 10.0),
+                }
+            }
+            Range::Colour { hue, width, smooth } => Range::Colour {
+                hue: if hue.is_finite() {
+                    hue.rem_euclid(360.0)
+                } else {
+                    0.0
+                },
+                width: fix(width, 1.0, 180.0, 25.0),
+                smooth: fix(smooth, 1.0, 90.0, 20.0),
+            },
+        }
+    }
+
+    /// How much of the mask a colour (sRGB, 0..1) keeps: the GPU's `range_weight`.
+    pub fn weight(self, rgb: [f64; 3]) -> f64 {
+        match self {
+            Range::All => 1.0,
+            Range::Luminance { low, high, smooth } => {
+                let y = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) * 100.0;
+                let below = if low <= 0.0 {
+                    1.0
+                } else {
+                    smoothstep(low - smooth, low, y)
+                };
+                let above = if high >= 100.0 {
+                    1.0
+                } else {
+                    1.0 - smoothstep(high, high + smooth, y)
+                };
+                below * above
+            }
+            Range::Colour { hue, width, smooth } => {
+                let (a, b) = opponent(rgb);
+                let chroma = a.hypot(b);
+                let (ta, tb) = (hue.to_radians().cos(), hue.to_radians().sin());
+                let cos = ((a * ta + b * tb) / chroma.max(1e-5)).clamp(-1.0, 1.0);
+                let off = cos.acos().to_degrees();
+                (1.0 - smoothstep(width, width + smooth, off)) * smoothstep(0.02, 0.08, chroma)
+            }
+        }
+    }
+}
+
+/// A colour's place on the colour wheel: red along `a`, green and blue a third of a turn
+/// either side (the hue angle is `atan2(b, a)`, 0° red, 120° green, 240° blue).
+pub fn opponent(rgb: [f64; 3]) -> (f64, f64) {
+    (
+        rgb[0] - 0.5 * (rgb[1] + rgb[2]),
+        0.866_025_4 * (rgb[1] - rgb[2]),
+    )
+}
+
+/// The hue of a colour in degrees (0 red, 120 green, 240 blue), if it has one.
+pub fn hue_of(rgb: [f64; 3]) -> Option<f64> {
+    let (a, b) = opponent(rgb);
+    (a.hypot(b) > 0.02).then(|| b.atan2(a).to_degrees().rem_euclid(360.0))
+}
+
 /// One local adjustment.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -282,6 +396,9 @@ pub struct Mask {
     pub invert: bool,
     #[serde(default)]
     pub local: Local,
+    /// Only part of the shape's tones or colours ([`Range`]).
+    #[serde(default)]
+    pub range: Range,
 }
 
 impl Mask {
@@ -295,6 +412,7 @@ impl Mask {
                 y1: 0.5,
             },
             invert: false,
+            range: Range::All,
             local: Local::default(),
         }
     }
@@ -311,6 +429,7 @@ impl Mask {
                 feather: 50.0,
             },
             invert: false,
+            range: Range::All,
             local: Local::default(),
         }
     }
@@ -322,6 +441,7 @@ impl Mask {
                 strokes: Vec::new(),
             },
             invert: false,
+            range: Range::All,
             local: Local::default(),
         }
     }
@@ -395,6 +515,7 @@ impl Mask {
             },
         };
         self.local = self.local.clamped();
+        self.range = self.range.clamped();
         Some(self)
     }
 }
@@ -479,6 +600,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_range_reads_back_safe_and_old_masks_take_the_whole_shape() {
+        let m: Mask = serde_json::from_value(serde_json::json!({
+            "shape": { "kind": "linear", "x0": 0.5, "y0": 0.1, "x1": 0.5, "y1": 0.5 },
+        }))
+        .unwrap();
+        assert_eq!(m.range, Range::All);
+        let wild = Range::Luminance {
+            low: 80.0,
+            high: 20.0,
+            smooth: 0.0,
+        }
+        .clamped();
+        assert_eq!(
+            wild,
+            Range::Luminance {
+                low: 80.0,
+                high: 80.0,
+                smooth: 1.0
+            }
+        );
+        let hue = Range::Colour {
+            hue: -30.0,
+            width: 500.0,
+            smooth: f64::NAN,
+        }
+        .clamped();
+        assert_eq!(
+            hue,
+            Range::Colour {
+                hue: 330.0,
+                width: 180.0,
+                smooth: 20.0
+            }
+        );
+        assert_eq!(hue_of([1.0, 0.0, 0.0]).map(f64::round), Some(0.0));
+        assert_eq!(hue_of([0.0, 0.0, 1.0]).map(f64::round), Some(240.0));
+        assert_eq!(hue_of([0.5, 0.5, 0.5]), None);
+    }
+
+    #[test]
     fn masks_round_trip_through_desktop_and_none_leaves_no_key() {
         let mut s = EditSettings::default_settings();
         assert_eq!(Masks::from_settings(&s), Masks::default());
@@ -555,6 +716,7 @@ mod tests {
                 y1: 0.6,
             },
             invert: false,
+            range: Range::All,
             local: Local::default(),
         };
         assert_eq!(weight(&m, (0.3, 0.1), 1.5), 1.0, "behind the start");
@@ -578,6 +740,7 @@ mod tests {
                 feather: 0.0,
             },
             invert: false,
+            range: Range::All,
             local: Local::default(),
         };
         let aspect = 1.5;
@@ -618,6 +781,7 @@ mod tests {
                 feather: 0.0,
             },
             invert: false,
+            range: Range::All,
             local: Local::default(),
         };
         // Turned a quarter: long up and down, narrow across.

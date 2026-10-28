@@ -26,6 +26,7 @@ struct MaskU {
     tone: vec4<f32>,   // exposure, contrast, highlights, shadows
     more: vec4<f32>,   // whites, blacks, saturation, clarity
     wb: vec4<f32>,     // white-balance multiplier at full effect
+    range: vec4<f32>,  // 0 all; 1 brightness: low, high, smooth; 2 colour: hue, width, smooth (radians)
 }
 
 struct Uniforms {
@@ -182,6 +183,25 @@ fn mask_weight(m: MaskU, p: vec2<f32>, muv: vec2<f32>) -> f32 {
     return select(w, 1.0 - w, m.kind.y > 0.5);
 }
 
+// Desktop only: how much of a mask the photo's own colour `c` keeps (its range), as
+// `lf_settings::masks::Range::weight` computes it.
+fn range_weight(r: vec4<f32>, c: vec3<f32>) -> f32 {
+    if (r.x < 0.5) { return 1.0; }
+    if (r.x < 1.5) {
+        let y = luma(c);
+        var below = 1.0;
+        if (r.y > 0.0) { below = smoothstep(r.y - r.w, r.y, y); }
+        var above = 1.0;
+        if (r.z < 1.0) { above = 1.0 - smoothstep(r.z, r.z + r.w, y); }
+        return below * above;
+    }
+    let a = vec2<f32>(c.r - 0.5 * (c.g + c.b), 0.8660254 * (c.g - c.b));
+    let chroma = length(a);
+    let t = vec2<f32>(cos(r.y), sin(r.y));
+    let off = acos(clamp(dot(a, t) / max(chroma, 1e-5), -1.0, 1.0));
+    return (1.0 - smoothstep(r.z, r.z + r.w, off)) * smoothstep(0.02, 0.08, chroma);
+}
+
 // The GLSL's develop() after its first two lines (`c = texture(uImg, uv)`, and the early
 // return when uDevelop is off), which fs_develop does: with FXC's optimiser that early return
 // made WARP lose the device.
@@ -205,7 +225,7 @@ fn develop(photo: vec3<f32>, uv: vec2<f32>, muv: vec2<f32>) -> vec3<f32> {
         let p = vec2<f32>(muv.x * u.aspect, muv.y);
         for (var i = 0u; i < u.mask_count; i++) {
             let m = u.masks[i];
-            let w = mask_weight(m, p, muv);
+            let w = mask_weight(m, p, muv) * range_weight(m.range, photo);
             exposure += w * m.tone.x;
             contrast += w * m.tone.y;
             highlights += w * m.tone.z;
