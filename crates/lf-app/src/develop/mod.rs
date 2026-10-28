@@ -101,6 +101,7 @@ struct DrawKey {
     view: View,
     before: bool,
     clipping: bool,
+    proof: bool,
 }
 
 /// What became of an open answer, for the library (badges, neighbours).
@@ -127,6 +128,10 @@ pub struct Develop {
     clipping: bool,
     /// The AI tools may be used (the library passes the gate's answer).
     local_ai: bool,
+    /// Soft-proofing through this ICC profile (View → Soft proof), and what the proof LUT was
+    /// last built for (profile, look, amount).
+    proof: Option<PathBuf>,
+    proof_key: Option<(PathBuf, Option<String>, i64)>,
     before_held: bool,
     /// View → Fit, 100 % or `Space`, applied when the preview is next laid out.
     zoom_asked: Option<Action>,
@@ -164,6 +169,8 @@ impl Develop {
             before_toggled: false,
             clipping: false,
             local_ai: false,
+            proof: None,
+            proof_key: None,
             before_held: false,
             zoom_asked: None,
             preview: None,
@@ -379,6 +386,51 @@ impl Develop {
     /// Before/after is showing the photo as it was.
     pub fn before(&self) -> bool {
         self.before_toggled || self.before_held
+    }
+
+    /// Whether the preview is soft-proofed.
+    pub fn proofing(&self) -> bool {
+        self.proof.is_some()
+    }
+
+    /// Soft-proofs the preview through the ICC profile at `profile` (`None` stops).
+    pub fn set_proof(&mut self, profile: Option<PathBuf>) {
+        self.proof = profile;
+        self.proof_key = None;
+        self.dirty = true;
+    }
+
+    /// Builds the proof LUT (the photo's look, then the profile) when the profile or the look
+    /// changed, and registers it for the renderer; a profile that fails stops proofing.
+    fn refresh_proof(&mut self, settings: &lf_settings::EditSettings, toasts: &mut Toasts) {
+        let Some(profile) = self.proof.clone() else {
+            return;
+        };
+        let look = lf_settings::lut::LutChoice::from_settings(settings);
+        let key = (
+            profile.clone(),
+            look.as_ref().map(|c| c.name.clone()),
+            look.as_ref()
+                .map_or(0, |c| (c.amount * 1000.0).round() as i64),
+        );
+        if self.proof_key.as_ref() == Some(&key) {
+            return;
+        }
+        let lut = look
+            .as_ref()
+            .and_then(|c| lf_pipeline::lut::get(&c.name).map(|l| (l, c.amount as f32)));
+        match lf_catalog::colour::proof_lut(&profile, lut.as_ref().map(|(l, a)| (&**l, *a))) {
+            Ok(proof) => {
+                lf_pipeline::lut::register(lf_pipeline::lut::SOFT_PROOF, proof);
+                self.proof_key = Some(key);
+                self.dirty = true;
+            }
+            Err(e) => {
+                toasts.push(Level::Warning, e.to_string());
+                self.proof = None;
+                self.proof_key = None;
+            }
+        }
     }
 
     /// Whether the AI buttons may be used.
@@ -858,11 +910,19 @@ impl Develop {
         let placement = self.viewport.placement(output, panel);
         let (_, _, rw, rh) = placement.rect;
         let size = preview::canvas_size(&self.gpu, rw, rh);
+        if let State::Ready(photo, _) = &self.state {
+            let settings = self
+                .session
+                .edit()
+                .map_or_else(|| photo.settings.clone(), |e| e.settings.clone());
+            self.refresh_proof(&settings, toasts);
+        }
         let key = DrawKey {
             size,
             view: placement.view,
             before,
             clipping: self.clipping,
+            proof: self.proof.is_some(),
         };
         let preview = self
             .preview
@@ -884,6 +944,7 @@ impl Develop {
                     view: placement.view,
                     // Never over the photo as it was.
                     clipping: self.clipping && !before,
+                    proof: self.proof.is_some() && !before,
                 };
                 let settings = self.session.edit().map_or(&photo.settings, |e| &e.settings);
                 if let Err(e) = photo.renderer.draw(settings, &opts, canvas) {

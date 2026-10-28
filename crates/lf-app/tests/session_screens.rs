@@ -174,6 +174,7 @@ fn menus(session: Session, can_switch: bool) -> Harness<'static, (MenuState, Vec
         studio,
         before: false,
         clipping: false,
+        proofing: false,
         context: None,
     };
     Harness::new_ui_state(

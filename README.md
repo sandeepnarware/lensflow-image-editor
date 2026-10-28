@@ -130,6 +130,10 @@ Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white 
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.
 
+Soft proof (`S`, View → Soft proof): the preview shows the photo as a printer and paper ICC
+profile (a lab's, RGB or CMYK) would print it. View → Proof profile… picks the profile;
+it is remembered.
+
 AI tools (the AI tab), run on this computer, nothing uploaded: AI Denoise, AI Upscale
 (2× or 4×), Remove objects (paint over what should go), Retouch portrait (smooths the skin of the faces found) and Remove background
 (a PNG with transparency). Each photo is rendered with its edits and the result saved
@@ -396,6 +400,9 @@ resolution through the GPU pipeline.
   the profile, EXIF and XMP chunks (`lf_catalog::containers`); TIFF carries the profile,
   XMP and the artist, copyright, description, make and model tags. AVIF carries no EXIF or
   XMP yet (its encoder has no way in).
+- Colour space: sRGB, Display P3, Adobe RGB (1998) or a lab's RGB ICC profile (Little
+  CMS, perceptual), with that profile embedded. The render is sRGB, so a wider space holds
+  the same colours. AVIF exports are sRGB only.
 - Presets: the export dialog's Preset bar applies a built-in preset (Web 2048 px
   JPEG, Full size JPEG, Print 16-bit TIFF) or one of the studio's own, saved with
   "Save as preset…" (`prefs.export_presets`); a preset saved without a folder

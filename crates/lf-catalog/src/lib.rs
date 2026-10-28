@@ -2,6 +2,7 @@
 //! history and named versions. This crate never touches pixels.
 
 pub mod albums;
+pub mod colour;
 pub mod containers;
 pub mod cull;
 pub mod db;

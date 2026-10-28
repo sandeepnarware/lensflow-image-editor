@@ -44,6 +44,7 @@ pub fn run(
         overwrite: true,
         sharpen: lf_catalog::finish::Sharpen::Standard,
         watermark: None,
+        space: Default::default(),
     };
     let mut placed = Vec::with_capacity(ids.len());
     progress(0, ids.len());

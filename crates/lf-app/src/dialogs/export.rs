@@ -8,6 +8,7 @@ use crate::catalog_ext::count;
 use crate::export_job::{ExportOutcome, Failed};
 use crate::theme;
 use eframe::egui::{self, Key, RichText};
+use lf_catalog::colour::OutputSpace;
 use lf_catalog::export::{Destination, ExportSpec, Format, Metadata, Pattern, Size};
 use lf_catalog::finish::{Corner, Sharpen, Stamp, Watermark};
 use std::path::PathBuf;
@@ -38,6 +39,8 @@ pub const SHARPEN: &str = "Sharpen for screen";
 pub const WATERMARK: &str = "Add a watermark";
 pub const WATERMARK_TEXT: &str = "Watermark text";
 pub const CHOOSE_LOGO: &str = "Choose a logo…";
+pub const COLOUR_SPACE: &str = "Colour space";
+pub const CHOOSE_PROFILE: &str = "Profile…";
 pub const NO_WATERMARK_TEXT: &str = "Type the watermark's text, or turn the watermark off.";
 pub const NO_LOGO: &str = "Choose a logo picture, or turn the watermark off.";
 /// The watermark's text to start from.
@@ -139,6 +142,9 @@ pub struct ExportForm {
     /// Percent.
     pub stamp_opacity: f32,
     pub corner: Corner,
+    /// The colour space written, and the last ICC profile picked (offered in the list).
+    pub space: OutputSpace,
+    pub profile: Option<PathBuf>,
 }
 
 impl Default for ExportForm {
@@ -163,6 +169,8 @@ impl Default for ExportForm {
             stamp_width: 20.0,
             stamp_opacity: 60.0,
             corner: Corner::BottomRight,
+            space: OutputSpace::Srgb,
+            profile: None,
         }
     }
 }
@@ -209,6 +217,10 @@ impl ExportForm {
         }
         spec.rename.0.clone_into(&mut f.pattern);
         f.metadata = spec.metadata;
+        if let OutputSpace::Profile(p) = &spec.space {
+            f.profile = Some(p.clone());
+        }
+        f.space = spec.space.clone();
         f.overwrite = spec.overwrite;
         let Destination::Folder(folder) = &spec.destination;
         f.folder = Some(folder.clone());
@@ -291,6 +303,7 @@ impl ExportForm {
             overwrite: self.overwrite,
             sharpen: self.sharpen,
             watermark,
+            space: self.space.clone(),
         })
     }
 }
@@ -313,6 +326,8 @@ pub enum ExportAction {
     Pick(u64),
     /// Open the system file picker for the watermark's logo, for this ticket.
     PickLogo(u64),
+    /// Open the system file picker for an ICC profile, for this ticket.
+    PickProfile(u64),
     /// Check the typed path for this ticket.
     CheckTyped(u64, PathBuf),
     /// Open the folder holding this file.
@@ -345,6 +360,8 @@ pub struct ExportDialog {
     /// The logo picker's latest ticket, and whether it is open.
     logo_ticket: u64,
     picking_logo: bool,
+    profile_ticket: u64,
+    picking_profile: bool,
     /// The studio's export presets (`prefs.export_presets`) and the bar choosing them.
     pub presets: Vec<super::export_presets::ExportPreset>,
     preset_bar: super::export_presets::PresetBar,
@@ -367,12 +384,35 @@ impl ExportDialog {
             start_ready: false,
             logo_ticket: 0,
             picking_logo: false,
+            profile_ticket: 0,
+            picking_profile: false,
             presets: Vec::new(),
             preset_bar: super::export_presets::PresetBar::default(),
         }
     }
 
     /// The logo picker answered for `ticket`: the picture, `None` (cancelled) or a problem.
+    /// The profile picker answered for `ticket`: an ICC file, `None` (cancelled) or a problem.
+    pub fn profile_chosen(&mut self, ticket: u64, result: Result<Option<PathBuf>, String>) {
+        if ticket != self.profile_ticket {
+            return;
+        }
+        self.picking_profile = false;
+        match result {
+            Ok(Some(path)) => {
+                match lf_catalog::colour::profile(&OutputSpace::Profile(path.clone())) {
+                    Ok(_) => {
+                        self.form.profile = Some(path.clone());
+                        self.form.space = OutputSpace::Profile(path);
+                    }
+                    Err(e) => self.error = Some(e.to_string()),
+                }
+            }
+            Ok(None) => {}
+            Err(e) => self.error = Some(e),
+        }
+    }
+
     pub fn logo_chosen(&mut self, ticket: u64, result: Result<Option<PathBuf>, String>) {
         if ticket != self.logo_ticket {
             return;
@@ -599,6 +639,39 @@ impl ExportDialog {
                     ui.label(RichText::new(hint).color(theme::MUTED).small());
                     ui.end_row();
                 }
+                ui.label(COLOUR_SPACE);
+                ui.horizontal(|ui| {
+                    let combo = egui::ComboBox::from_id_salt("export-space")
+                        .selected_text(f.space.name())
+                        .width(200.0)
+                        .show_ui(ui, |ui| {
+                            for s in [
+                                OutputSpace::Srgb,
+                                OutputSpace::DisplayP3,
+                                OutputSpace::AdobeRgb,
+                            ] {
+                                let name = s.name();
+                                ui.selectable_value(&mut f.space, s, name);
+                            }
+                            if let Some(p) = &f.profile {
+                                let s = OutputSpace::Profile(p.clone());
+                                let name = s.name();
+                                ui.selectable_value(&mut f.space, s, name);
+                            }
+                        });
+                    combo.response.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::ComboBox, true, COLOUR_SPACE)
+                    });
+                    if ui
+                        .add_enabled(!self.picking_profile, egui::Button::new(CHOOSE_PROFILE))
+                        .on_hover_text("A lab's printer and paper profile (.icc or .icm, RGB)")
+                        .clicked()
+                    {
+                        self.picking_profile = true;
+                        action = ExportAction::PickProfile(0);
+                    }
+                });
+                ui.end_row();
                 let label = ui.label("File name");
                 ui.vertical(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut f.pattern).desired_width(260.0))
@@ -724,6 +797,10 @@ impl ExportDialog {
                 self.logo_ticket += 1;
                 ExportAction::PickLogo(self.logo_ticket)
             }
+            ExportAction::PickProfile(_) => {
+                self.profile_ticket += 1;
+                ExportAction::PickProfile(self.profile_ticket)
+            }
             ExportAction::CheckTyped(_, path) => ExportAction::CheckTyped(self.next_ticket(), path),
             other => other,
         };
@@ -814,6 +891,7 @@ mod tests {
                 overwrite: false,
                 sharpen: Sharpen::Off,
                 watermark: None,
+                space: Default::default(),
             })
         );
         assert_eq!(ExportForm::from_prefs(None), ExportForm::default());
@@ -831,6 +909,7 @@ mod tests {
                 overwrite: true,
                 sharpen: Sharpen::Off,
                 watermark: None,
+                space: Default::default(),
             },
             ExportSpec {
                 format: Format::Jpeg { quality: 70 },
@@ -841,6 +920,7 @@ mod tests {
                 overwrite: false,
                 sharpen: Sharpen::Off,
                 watermark: None,
+                space: Default::default(),
             },
             ExportSpec {
                 format: Format::Png,
@@ -851,6 +931,7 @@ mod tests {
                 overwrite: false,
                 sharpen: Sharpen::Off,
                 watermark: None,
+                space: Default::default(),
             },
             ExportSpec {
                 format: Format::Png,
@@ -861,6 +942,7 @@ mod tests {
                 overwrite: false,
                 sharpen: Sharpen::Off,
                 watermark: None,
+                space: Default::default(),
             },
         ] {
             let value = serde_json::to_value(&spec).unwrap();
@@ -877,6 +959,7 @@ mod tests {
             overwrite: false,
             sharpen: Sharpen::Off,
             watermark: None,
+            space: Default::default(),
         });
         assert_eq!(png.quality, DEFAULT_QUALITY);
     }

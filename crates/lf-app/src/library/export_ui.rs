@@ -87,6 +87,24 @@ impl Library {
                     }))
                 });
             }
+            ExportAction::PickProfile(ticket) => {
+                on_own_thread(
+                    env.jobs.reporter(),
+                    Purpose::ExportProfile,
+                    ticket,
+                    move || {
+                        let picked = rfd::FileDialog::new()
+                            .set_title("Choose an ICC profile")
+                            .add_filter("ICC profiles", &["icc", "icm"])
+                            .pick_file();
+                        log::info!("profile picker answered: {picked:?}");
+                        Ok(picked.map(|path| Chosen {
+                            path,
+                            network: false,
+                        }))
+                    },
+                );
+            }
             ExportAction::CheckTyped(ticket, path) => {
                 on_own_thread(env.jobs.reporter(), Purpose::ExportTo, ticket, move || {
                     export_job::check_writable(&path)?;

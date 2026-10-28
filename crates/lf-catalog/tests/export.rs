@@ -24,6 +24,7 @@ fn spec(format: Format, dest: &Path) -> ExportSpec {
         overwrite: false,
         sharpen: Default::default(),
         watermark: None,
+        space: Default::default(),
     }
 }
 
@@ -990,4 +991,35 @@ fn lossy_webp_avif_png_and_tiff_carry_what_they_can() {
     // AVIF: an AVIF file.
     let (avif, _keep) = run(Format::Avif { quality: 70 });
     assert_eq!(&avif[4..12], b"ftypavif");
+}
+
+#[test]
+fn an_export_in_adobe_rgb_is_converted_and_carries_that_profile() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    png(&src.path().join("a.png"), 32, 24);
+    let (c, ids) = catalogue(src.path());
+    let out = tempfile::tempdir().unwrap();
+    let mut sp = spec(Format::Png, out.path());
+    sp.space = lf_catalog::colour::OutputSpace::AdobeRgb;
+    let done = export::run(gpu, &c, &ids, &sp, &mut |_, _| ControlFlow::Continue(())).unwrap();
+    let bytes = std::fs::read(&done.exported[0].path).unwrap();
+    let mut decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(&bytes)).unwrap();
+    let profile = image::ImageDecoder::icc_profile(&mut decoder)
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        profile,
+        lf_catalog::finish::srgb_icc(),
+        "the Adobe RGB profile is embedded"
+    );
+    // AVIF stays sRGB only.
+    let mut avif = spec(Format::Avif { quality: 60 }, out.path());
+    avif.space = lf_catalog::colour::OutputSpace::DisplayP3;
+    let report = export::run(try_shared_gpu().unwrap(), &c, &ids, &avif, &mut |_, _| {
+        ControlFlow::Continue(())
+    })
+    .unwrap();
+    assert_eq!(report.exported.len(), 0);
+    assert!(report.failed[0].1.to_string().contains("sRGB only"));
 }

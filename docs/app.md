@@ -289,6 +289,21 @@ click. A drag that starts in the empty space below or beside the cells draws a b
 too. Only the cells on screen are found by a box, and a box that stays in the gaps
 between cells selects nothing until it reaches one.
 
+### Colour spaces and soft-proofing
+
+`lf_catalog::colour` wraps Little CMS (`lcms2`, built statically). `ExportSpec::space`
+(`OutputSpace::{Srgb, DisplayP3, AdobeRgb, Profile(path)}`, default sRGB) converts the
+finished 8- or 16-bit pixels from sRGB with the perceptual intent and embeds that profile
+(Display P3 and Adobe RGB are built as matrix/TRC profiles); a CMYK profile is refused for
+export. The dialog's Colour space list and Profile… picker (`Purpose::ExportProfile`) set it.
+
+Soft proof (`Action::SoftProof`, `S`; `Action::ProofProfile` picks the file into
+`prefs.proof_profile`): `Develop::refresh_proof` builds a 33³ LUT that applies the photo's LUT
+look, then sends sRGB through the profile with `SOFT_PROOFING` (perceptual, proof relative
+colorimetric) and back, and registers it as `lf_pipeline::lut::SOFT_PROOF`. `DrawOptions::proof`
+makes the develop pass sample that LUT at full strength in place of the look; it is rebuilt
+when the profile, the look or its amount changes. Renders and exports never use it.
+
 ### Export presets
 
 The export form's Preset bar (`dialogs/export_presets.rs`) lists three built-in presets and the

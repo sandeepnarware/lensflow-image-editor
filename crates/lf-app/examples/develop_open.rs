@@ -74,6 +74,7 @@ fn main() -> Result<(), String> {
                         crop: None,
                         view: p.view,
                         clipping: false,
+                        proof: false,
                     };
                     renderer
                         .draw(&settings, &opts, &canvas)

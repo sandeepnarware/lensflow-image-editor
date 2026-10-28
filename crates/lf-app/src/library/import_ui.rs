@@ -37,8 +37,12 @@ pub enum Purpose {
     ExportTo,
     /// The export dialog's watermark logo (a picture file); its own tickets.
     Watermark,
+    /// The export dialog's ICC profile (a file); its own tickets.
+    ExportProfile,
     /// A `.cube` file for Develop's LUT look.
     LutFile,
+    /// The printer and paper profile for soft-proofing.
+    ProofProfile,
     /// The application "Edit in external editor" uses.
     Editor,
     /// Where Print's "Save PDF" writes.
@@ -204,8 +208,10 @@ impl Library {
             Purpose::AddFolder => "Add a folder of photos",
             Purpose::ExportTo => "Export to this folder",
             Purpose::Watermark => "Choose a logo for the watermark",
+            Purpose::ExportProfile => "Choose an ICC profile",
             Purpose::Ingest(_) => "Choose a folder",
             Purpose::LutFile => "Choose a .cube LUT",
+            Purpose::ProofProfile => "Choose a printer and paper profile",
             Purpose::Editor => "Choose an application",
             Purpose::PrintPdf => "Save the PDF",
         };
@@ -263,6 +269,18 @@ impl Library {
             }
             return;
         }
+        if purpose == Purpose::ProofProfile {
+            match result {
+                Ok(Some(chosen)) => {
+                    env.prefs.proof_profile = Some(chosen.path.clone());
+                    env.save_prefs();
+                    self.develop.set_proof(Some(chosen.path));
+                }
+                Ok(None) => {}
+                Err(e) => env.toasts.push(Level::Warning, e),
+            }
+            return;
+        }
         if purpose == Purpose::LutFile {
             match result {
                 Ok(Some(chosen)) => self.import_lut(chosen.path, env),
@@ -275,6 +293,12 @@ impl Library {
             match result {
                 Ok(chosen) => self.ingest_picked(pick, ticket, chosen.map(|c| c.path), env),
                 Err(e) => env.toasts.push(Level::Warning, e),
+            }
+            return;
+        }
+        if purpose == Purpose::ExportProfile {
+            if let Some(dialog) = &mut self.export {
+                dialog.profile_chosen(ticket, result.map(|c| c.map(|c| c.path)));
             }
             return;
         }
@@ -305,8 +329,10 @@ impl Library {
             Purpose::Root => self.use_root(chosen.path, env),
             Purpose::ExportTo
             | Purpose::Watermark
+            | Purpose::ExportProfile
             | Purpose::Ingest(_)
             | Purpose::LutFile
+            | Purpose::ProofProfile
             | Purpose::Editor
             | Purpose::PrintPdf => {}
             Purpose::AddFolder => {

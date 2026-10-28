@@ -38,6 +38,8 @@ enum Mode {
     Develop {
         spotted: bool,
         clipping: bool,
+        /// The soft-proof LUT in place of the look.
+        proof: bool,
     },
 }
 
@@ -71,6 +73,9 @@ pub struct DrawOptions {
     pub view: View,
     /// Desktop only: clipped highlights show red and blocked shadows blue (never in exports).
     pub clipping: bool,
+    /// Desktop only: soft-proof through the LUT registered as [`crate::lut::SOFT_PROOF`]
+    /// (which holds the look too); never in exports.
+    pub proof: bool,
 }
 
 /// Where a develop pass draws: a cached target by name, or the caller's canvas.
@@ -380,6 +385,7 @@ impl Renderer {
         let mode = Mode::Develop {
             spotted,
             clipping: false,
+            proof: false,
         };
         let dest = Dest::Cached("output");
         self.develop_into(s, &geometry, &s.crop, &View::default(), mode, dest);
@@ -404,6 +410,7 @@ impl Renderer {
         let mode = Mode::Develop {
             spotted,
             clipping: false,
+            proof: false,
         };
         let dest = Dest::Cached("output_f16");
         self.develop_into(s, &geometry, &s.crop, &View::default(), mode, dest);
@@ -498,6 +505,7 @@ impl Renderer {
             Mode::Develop {
                 spotted: self.prepare_caches(s)?,
                 clipping: opts.clipping,
+                proof: opts.proof,
             }
         };
         self.develop_into(s, &geometry, &crop, &opts.view, mode, Dest::Canvas(canvas));
@@ -526,6 +534,7 @@ impl Renderer {
         let mode = Mode::Develop {
             spotted,
             clipping: false,
+            proof: false,
         };
         let dest = Dest::Cached(name);
         self.develop_into(s, &geometry, &s.crop, &View::default(), mode, dest);
@@ -547,9 +556,13 @@ impl Renderer {
             Dest::Cached(name) => &self.targets[name],
             Dest::Canvas(t) => t,
         };
-        let (spotted, develop, clipping) = match mode {
-            Mode::Before => (false, false, false),
-            Mode::Develop { spotted, clipping } => (spotted, true, clipping),
+        let (spotted, develop, clipping, proof) = match mode {
+            Mode::Before => (false, false, false, false),
+            Mode::Develop {
+                spotted,
+                clipping,
+                proof,
+            } => (spotted, true, clipping, proof),
         };
         let (tw, th) = turned_size(self.full_width, self.full_height, geometry.rotate);
         let frame = Frame {
@@ -571,7 +584,15 @@ impl Renderer {
         uniforms.clip_warn = u32::from(clipping);
         // A LUT that is not loaded (or too big for the device) is no LUT.
         let lut_ready = develop
-            && self.lut.update(&self.gpu, s).unwrap_or_else(|e| {
+            && if proof {
+                // The proof LUT holds the look as well, at full strength.
+                uniforms.lut_amount = 1.0;
+                crate::lut::get(crate::lut::SOFT_PROOF)
+                    .map_or(Ok(false), |lut| self.lut.upload(&self.gpu, lut))
+            } else {
+                self.lut.update(&self.gpu, s)
+            }
+            .unwrap_or_else(|e| {
                 log::warn!("the LUT look could not be used: {e}");
                 false
             });

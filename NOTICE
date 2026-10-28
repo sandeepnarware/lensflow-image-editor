@@ -253,6 +253,8 @@ keyring-core v1.0.1                      MIT OR Apache-2.0
 khronos-egl v6.0.0                       MIT/Apache-2.0
 kurbo v0.13.1                            Apache-2.0 OR MIT
 lazy_static v1.5.1                       MIT OR Apache-2.0
+lcms2 v6.2.0                             MIT
+lcms2-sys v4.0.7                         MIT
 libc v0.2.191                            MIT OR Apache-2.0
 libflate v2.3.2                          MIT
 libflate_lz77 v2.3.0                     MIT
@@ -617,6 +619,8 @@ SkySeg (MIT), SCUNet (Apache-2.0), Real-ESRGAN general x4v3 (BSD-3-Clause), LaMa
 (Apache-2.0) and YuNet (MIT).
 libwebp-sys builds Google's libwebp (BSD-3-Clause) from source into the program for lossy
 WebP export; AVIF export uses rav1e and ravif (BSD-2-Clause / BSD-3-Clause), pure Rust.
+lcms2-sys builds Little CMS (MIT) from source into the program for colour-space exports
+and soft-proofing.
 webbrowser opens links (Help > About) in the system browser.
 winresource (MIT) is build-only on Windows: it embeds the program icon and version
 information into the .exe and is not itself shipped.

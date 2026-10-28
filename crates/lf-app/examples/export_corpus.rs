@@ -46,6 +46,7 @@ fn main() {
             overwrite: false,
             sharpen: Default::default(),
             watermark: None,
+            space: Default::default(),
         };
         let started = std::time::Instant::now();
         let outcome = export_job::run(

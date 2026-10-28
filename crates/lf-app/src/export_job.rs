@@ -298,6 +298,7 @@ mod tests {
             overwrite: false,
             sharpen: Default::default(),
             watermark: None,
+            space: Default::default(),
         }
     }
 

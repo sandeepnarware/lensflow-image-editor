@@ -1426,6 +1426,8 @@ impl Library {
             Action::Up | Action::Down => !develop && !self.order.is_empty(),
             Action::BeforeAfter
             | Action::Clipping
+            | Action::SoftProof
+            | Action::ProofProfile
             | Action::Fit
             | Action::ActualSize
             | Action::ToggleZoom
@@ -1511,6 +1513,8 @@ impl Library {
             Action::Down => self.step(Dir::Down, env),
             Action::BeforeAfter => self.develop.toggle_before(),
             Action::Clipping => self.develop.toggle_clipping(),
+            Action::SoftProof => self.toggle_proof(env),
+            Action::ProofProfile => self.pick_proof_profile(env),
             Action::Fit | Action::ActualSize | Action::ToggleZoom => self.develop.zoom(action),
             Action::AddVersion => self.develop.ask_add_version(),
             Action::ResetAll => self.develop.reset_all(env.toasts),

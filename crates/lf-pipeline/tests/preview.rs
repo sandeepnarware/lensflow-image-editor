@@ -31,6 +31,7 @@ fn full_view_draw_equals_render() {
             h: 1.0,
         },
         clipping: false,
+        proof: false,
     };
     r.draw(&s, &opts, &canvas).unwrap();
     let got = read_back(&gpu, &canvas).unwrap();
@@ -88,6 +89,34 @@ fn clipping_shows_white_red_and_black_blue_only_when_asked() {
     r.draw(&s, &DrawOptions::default(), &canvas).unwrap();
     let plain = read_back(&gpu, &canvas).unwrap();
     assert_eq!(plain.get_pixel(29, 4).0, [255, 255, 255, 255]);
+}
+
+#[test]
+fn the_soft_proof_lut_shows_only_when_asked_and_never_in_renders() {
+    let gpu = shared_gpu();
+    let src = RgbaImage::from_pixel(8, 8, Rgba([200, 60, 30, 255]));
+    let s = normalise(&json!({}));
+    let mut invert = lf_settings::lut::Lut::identity(2);
+    for c in &mut invert.data {
+        *c = c.map(|v| 1.0 - v);
+    }
+    lf_pipeline::lut::register(lf_pipeline::lut::SOFT_PROOF, invert);
+    let mut r = Renderer::new(gpu.clone(), &src, 8, 8).unwrap();
+    let canvas = Target::new(&gpu, 8, 8, false).unwrap();
+    let proofed = DrawOptions {
+        proof: true,
+        ..DrawOptions::default()
+    };
+    r.draw(&s, &proofed, &canvas).unwrap();
+    let got = read_back(&gpu, &canvas).unwrap();
+    let px = got.get_pixel(4, 4).0;
+    assert!(px[0] < 80 && px[2] > 200, "not proofed: {px:?}");
+    r.draw(&s, &DrawOptions::default(), &canvas).unwrap();
+    assert_eq!(
+        read_back(&gpu, &canvas).unwrap().get_pixel(4, 4).0,
+        [200, 60, 30, 255]
+    );
+    assert_eq!(r.render(&s).unwrap().get_pixel(4, 4).0, [200, 60, 30, 255]);
 }
 
 #[test]

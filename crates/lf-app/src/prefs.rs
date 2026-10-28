@@ -93,6 +93,8 @@ pub struct Prefs {
     /// The application "Edit in external editor" opens copies in.
     pub external_editor: Option<PathBuf>,
     pub develop_quality: DevelopQuality,
+    /// The printer and paper ICC profile soft-proofing uses.
+    pub proof_profile: Option<PathBuf>,
 }
 
 impl Default for Prefs {
@@ -107,6 +109,7 @@ impl Default for Prefs {
             last_ingest: None,
             external_editor: None,
             develop_quality: DevelopQuality::default(),
+            proof_profile: None,
         }
     }
 }
@@ -178,6 +181,7 @@ mod tests {
             }),
             external_editor: Some(PathBuf::from("C:/Apps/Editor.exe")),
             develop_quality: DevelopQuality::Fast,
+            proof_profile: Some(PathBuf::from("C:/Profiles/lab-lustre.icc")),
         };
         prefs.save(&config).unwrap();
         assert_eq!(Prefs::load(&config), prefs);

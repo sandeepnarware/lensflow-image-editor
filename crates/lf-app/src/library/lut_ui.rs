@@ -23,6 +23,32 @@ impl Library {
         });
     }
 
+    /// View → Proof profile… (or Soft proof with none chosen yet): the ICC file picker.
+    pub(super) fn pick_proof_profile(&mut self, env: &mut Env) {
+        on_own_thread(env.jobs.reporter(), Purpose::ProofProfile, 0, move || {
+            let picked = rfd::FileDialog::new()
+                .set_title("Choose a printer and paper profile")
+                .add_filter("ICC profiles", &["icc", "icm"])
+                .pick_file();
+            log::info!("proof profile picker answered: {picked:?}");
+            Ok(picked.map(|path| Chosen {
+                path,
+                network: false,
+            }))
+        });
+    }
+
+    /// S: soft-proof on or off; the first time, a profile is asked for.
+    pub(super) fn toggle_proof(&mut self, env: &mut Env) {
+        if self.develop.proofing() {
+            self.develop.set_proof(None);
+        } else if let Some(p) = env.prefs.proof_profile.clone().filter(|p| p.exists()) {
+            self.develop.set_proof(Some(p));
+        } else {
+            self.pick_proof_profile(env);
+        }
+    }
+
     /// Copies a chosen `.cube` into the catalogue's LUT folder and loads it (`Io` lane).
     pub fn import_lut(&mut self, file: PathBuf, env: &mut Env) {
         let Some(root) = self.root.clone() else {

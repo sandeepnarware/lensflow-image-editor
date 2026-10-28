@@ -15,6 +15,10 @@ use lf_settings::lut::{Lut, LutChoice};
 use crate::error::PipelineError;
 use crate::gpu::Gpu;
 
+/// The name the soft-proof LUT is registered under (the look and the proof in one, built
+/// by the app); the preview uses it in place of the photo's own look while proofing.
+pub const SOFT_PROOF: &str = "\u{1}soft-proof";
+
 static REGISTRY: RwLock<Option<HashMap<String, Arc<Lut>>>> = RwLock::new(None);
 
 /// Makes `lut` available under `name` (replacing one of that name).
@@ -99,6 +103,11 @@ impl LutTexture {
         let Some(lut) = LutChoice::from_settings(s).and_then(|c| get(&c.name)) else {
             return Ok(false);
         };
+        self.upload(gpu, lut)
+    }
+
+    /// Uploads `lut` when it is not the one shown; true once it is ready to sample.
+    pub fn upload(&mut self, gpu: &Gpu, lut: Arc<Lut>) -> Result<bool, PipelineError> {
         if self.shown.as_ref().is_some_and(|l| Arc::ptr_eq(l, &lut)) {
             return Ok(true);
         }

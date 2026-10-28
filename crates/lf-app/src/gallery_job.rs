@@ -134,6 +134,7 @@ pub fn run(
         // The gallery makes its own previews and watermarks.
         sharpen: Default::default(),
         watermark: None,
+        space: Default::default(),
     };
     let mut out = GalleryOutcome {
         total: ids.len(),

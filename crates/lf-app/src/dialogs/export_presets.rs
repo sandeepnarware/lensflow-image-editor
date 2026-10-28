@@ -35,6 +35,7 @@ pub fn built_in() -> Vec<(&'static str, ExportSpec)> {
         overwrite: false,
         sharpen,
         watermark: None,
+        space: Default::default(),
     };
     vec![
         (

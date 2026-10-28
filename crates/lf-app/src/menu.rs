@@ -179,6 +179,8 @@ pub const RIBBON: &[Tab] = &[
                 &[
                     Do(Action::BeforeAfter),
                     Do(Action::Clipping),
+                    Do(Action::SoftProof),
+                    Do(Action::ProofProfile),
                     Do(Action::Fit),
                     Do(Action::ActualSize),
                 ],
@@ -255,6 +257,8 @@ pub fn icon(action: Action) -> &'static str {
         Action::Develop => "🎨",
         Action::BeforeAfter => "◑",
         Action::Clipping => "⚠",
+        Action::SoftProof => "🖶",
+        Action::ProofProfile => "🎨",
         Action::Fit => "⛶",
         Action::ActualSize => "🔍",
         Action::ToggleZoom => "🔍",
@@ -340,6 +344,8 @@ pub fn short_label(action: Action) -> &'static str {
         Action::KeyboardShortcuts => "Shortcuts",
         Action::Metadata => "Metadata",
         Action::Clipping => "Clipping",
+        Action::SoftProof => "Soft proof",
+        Action::ProofProfile => "Profile",
         Action::AiDenoise => "Denoise",
         Action::AiUpscale => "Upscale",
         Action::AiRetouch => "Retouch",
@@ -372,6 +378,7 @@ pub struct MenuState {
     pub studio: Option<String>,
     pub before: bool,
     pub clipping: bool,
+    pub proofing: bool,
     pub context: Option<&'static str>,
 }
 
@@ -498,7 +505,8 @@ fn group_ui(ui: &mut egui::Ui, g: &Group, state: &MenuState, clicked: &mut Optio
                     Do(action) => {
                         let enabled = state.enabled.contains(action);
                         let on = (*action == Action::BeforeAfter && state.before)
-                            || (*action == Action::Clipping && state.clipping);
+                            || (*action == Action::Clipping && state.clipping)
+                            || (*action == Action::SoftProof && state.proofing);
                         if button(ui, *action, enabled, on).clicked() {
                             *clicked = Some(*action);
                         }
@@ -709,6 +717,8 @@ mod tests {
             Action::Develop,
             Action::BeforeAfter,
             Action::Clipping,
+            Action::SoftProof,
+            Action::ProofProfile,
             Action::Fit,
             Action::ActualSize,
             Action::MatchReference,

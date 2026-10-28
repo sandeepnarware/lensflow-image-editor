@@ -137,6 +137,7 @@ cargo test --workspace                   # includes the 228-render parity suite
   Tethering was dropped (2026-10-28): it needs camera makers' SDKs.
   Compare (`C`): `library/compare.rs` (render on `Open`, `Msg::CompareRendered`, shared zoom).
   Show clipping (`J`): `DrawOptions::clipping` → `clip_warn` in `develop.wgsl` (preview only).
+  Colour spaces + soft proof (`S`): `lf_catalog::colour` (lcms2), `ExportSpec::space`, `lut::SOFT_PROOF`, `DrawOptions::proof`.
   Export presets (`dialogs/export_presets.rs`, `prefs.export_presets`) and the `{title}` file-name token.
   Mask ranges: `lf_settings::masks::Range` (brightness or colour), `range_weight` in `develop.wgsl`.
   AI tools: `lf-ai`, `ai_job.rs`, `dialogs/ai.rs`, `library/ai_ui.rs` (AI tab: Denoise, Upscale, Remove objects with `dialogs/remove.rs`, Retouch, Remove background).
@@ -185,7 +186,7 @@ cargo test --workspace                   # includes the 228-render parity suite
 - HEIC/AVIF unsupported; rawler 0.8 gaps: Nikon HE/HE* NEF, DNG 1.7 JPEG XL, some
   Sony ARW / Phase One IIQ.
 - TIFF exports carry baseline tags and XMP but no EXIF IFD; AVIF carries no EXIF or XMP. WebP is lossless or
-  lossy. Every export is sRGB with an embedded profile; no other output space yet.
+  lossy. Exports are sRGB unless Display P3, Adobe RGB or an RGB ICC profile is chosen (AVIF: sRGB only).
 - Float (RAW) intermediate renders are not bit-identical to 8-bit; five sharpen/detail
   cases exceed the parity gate — intentional, the gate covers the 8-bit path.
 - The OpenGL backend is the app's hardware path on Windows, and it is not bit-identical to

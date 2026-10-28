@@ -58,6 +58,7 @@ pub fn render_copy(gpu: Arc<Gpu>, root: &Path, id: i64) -> Result<PathBuf, Strin
         overwrite: false,
         sharpen: Default::default(),
         watermark: None,
+        space: Default::default(),
     };
     let report = export::run(gpu, &catalog, &[id], &spec, &mut |_, _| {
         std::ops::ControlFlow::Continue(())

@@ -111,6 +111,9 @@ pub struct ExportSpec {
     pub sharpen: Sharpen,
     #[serde(default)]
     pub watermark: Option<Watermark>,
+    /// The colour space written (sRGB unless asked; absent in specs saved before it existed).
+    #[serde(default)]
+    pub space: crate::colour::OutputSpace,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -519,7 +522,20 @@ fn export_one(
     let exif = app1.as_deref().and_then(finish::exif_payload);
     // The XMP packet alone, for the formats that hold it in a chunk or tag of their own.
     let packet = xmp.as_deref().map(crate::exif_embed::xmp_packet);
-    let icc = finish::srgb_icc();
+    // The colour space: sRGB as rendered, or converted (and its profile embedded).
+    if spec.space != crate::colour::OutputSpace::Srgb && matches!(spec.format, Format::Avif { .. })
+    {
+        return Err(fail(
+            &"AVIF exports are sRGB only; choose sRGB or another format",
+            &row.path,
+        ));
+    }
+    let icc = match (&spec.space, &mut pixels) {
+        (crate::colour::OutputSpace::Srgb, _) => Ok(finish::srgb_icc()),
+        (space, finish::Pixels::Eight(img)) => crate::colour::convert8(img, space),
+        (space, finish::Pixels::Sixteen(img)) => crate::colour::convert16(img, space),
+    }
+    .map_err(|e| fail(&e, &row.path))?;
     let encode_failed = |e: &dyn std::fmt::Display| fail(e, &row.path);
     // Every encoder here takes a profile; PNG and WebP take EXIF too.
     fn tagged<E: ImageEncoder>(
