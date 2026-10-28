@@ -28,6 +28,10 @@ pub const FULL: &str = "Up to 48 spots per photo.";
 pub const HEAL: &str = "Heal";
 pub const CLONE: &str = "Clone";
 pub const REMOVE: &str = "Remove spot";
+pub const BRUSH: &str = "Brush (paint a line)";
+pub const BRUSH_HINT: &str = "Drag along what should go. Drag the dashed line to choose where it copies from; Delete removes the picked stroke.";
+pub const REMOVE_STROKE: &str = "Remove stroke";
+pub const STROKES_FULL: &str = "Up to 64 healing strokes per photo.";
 pub const HINT: &str = "Click a blemish to cover it, or drag to size the spot. Drag either circle to move it; scroll over one to resize it.";
 
 /// Which circle of a spot.
@@ -40,6 +44,30 @@ pub enum Part {
 }
 
 /// The distance from `a` to `b` (source UV) in fractions of the photo's width.
+/// The distance from `p` to the line through `points` (photo fractions), in the width's
+/// units (`aspect`: width per unit of height).
+pub fn stroke_distance(points: &[[f64; 2]], p: (f64, f64), aspect: f64) -> f64 {
+    let sq = |q: [f64; 2]| (q[0], q[1] / aspect);
+    let p = (p.0, p.1 / aspect);
+    let mut best = f64::INFINITY;
+    if let [only] = points {
+        let a = sq(*only);
+        return (p.0 - a.0).hypot(p.1 - a.1);
+    }
+    for w in points.windows(2) {
+        let (a, b) = (sq(w[0]), sq(w[1]));
+        let d = (b.0 - a.0, b.1 - a.1);
+        let len2 = d.0 * d.0 + d.1 * d.1;
+        let t = if len2 < 1e-18 {
+            0.0
+        } else {
+            (((p.0 - a.0) * d.0 + (p.1 - a.1) * d.1) / len2).clamp(0.0, 1.0)
+        };
+        best = best.min((p.0 - a.0 - d.0 * t).hypot(p.1 - a.1 - d.1 * t));
+    }
+    best
+}
+
 pub fn distance(a: (f64, f64), b: (f64, f64), aspect: f64) -> f64 {
     (a.0 - b.0).hypot((a.1 - b.1) / aspect)
 }
@@ -146,6 +174,10 @@ pub enum SpotDrag {
     },
 }
 
+/// A healing stroke's source line being moved: the stroke, its offset when grabbed, and where
+/// it was grabbed.
+pub type SourceGrab = (usize, (f64, f64), (f64, f64));
+
 /// The open spot tool.
 #[derive(Debug, Clone)]
 pub struct SpotTool {
@@ -156,6 +188,14 @@ pub struct SpotTool {
     pub drag: Option<SpotDrag>,
     /// The wheel resized a spot at this time (seconds, egui's clock): committed once it rests.
     pub resized_at: Option<f64>,
+    /// Brush mode: drags paint healing strokes (`desktop.heal`) of radius `brush_r`.
+    pub brush: bool,
+    pub brush_r: f64,
+    /// The line being painted, the stroke picked, and a source line being moved (the stroke,
+    /// its offset when grabbed, and where it was grabbed).
+    pub stroke: Option<Vec<[f64; 2]>>,
+    pub heal_selected: Option<usize>,
+    pub heal_grab: Option<SourceGrab>,
 }
 
 /// How long the wheel rests before a resize is committed (seconds).
@@ -168,6 +208,11 @@ impl SpotTool {
             mode,
             drag: None,
             resized_at: None,
+            brush: false,
+            brush_r: 0.008,
+            stroke: None,
+            heal_selected: None,
+            heal_grab: None,
         }
     }
 
@@ -330,6 +375,17 @@ impl SpotTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_distance_to_a_stroke_is_to_its_nearest_segment() {
+        let line = [[0.1, 0.5], [0.5, 0.5]];
+        assert!((stroke_distance(&line, (0.3, 0.5), 1.0)).abs() < 1e-12);
+        assert!((stroke_distance(&line, (0.3, 0.6), 1.0) - 0.1).abs() < 1e-12);
+        assert!((stroke_distance(&line, (0.7, 0.5), 1.0) - 0.2).abs() < 1e-12);
+        // Down counts in the width's units.
+        assert!((stroke_distance(&line, (0.3, 0.65), 1.5) - 0.1).abs() < 1e-12);
+        assert!((stroke_distance(&[[0.2, 0.2]], (0.2, 0.3), 1.0) - 0.1).abs() < 1e-12);
+    }
 
     fn spot(x: f64, y: f64, sx: f64, sy: f64, r: f64) -> Spot {
         Spot {

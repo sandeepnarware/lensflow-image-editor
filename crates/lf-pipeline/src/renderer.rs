@@ -305,16 +305,64 @@ impl Renderer {
     /// `prepare` without the borrow: true when the photo is developed from the spotted target.
     fn prepare_caches(&mut self, s: &EditSettings) -> Result<bool, PipelineError> {
         let (w, h) = (self.width, self.height);
-        let spots_key = if s.spots.is_empty() {
-            String::new()
+        // Spots, then (desktop only) healing strokes as chains of dabs, 48 a pass, ping-ponged
+        // between "spots" and "heal" so the last pass lands in "spots".
+        let heals = lf_settings::heal::Heals::from_settings(s);
+        let any = !s.spots.is_empty() || !heals.0.is_empty();
+        let spots_key = if any {
+            format!(
+                "{}|{}",
+                serde_json::to_string(&s.spots).expect("spots serialise"),
+                serde_json::to_string(&heals.0).expect("strokes serialise")
+            )
         } else {
-            serde_json::to_string(&s.spots).expect("spots serialise")
+            String::new()
         };
-        if !s.spots.is_empty() {
+        if any {
             self.cached("spots", w, h, true, self.chain)?;
             if spots_key != self.spots_key {
-                let target = &self.targets["spots"];
-                spots::run(&self.gpu, &self.source, target, &s.spots, w, h);
+                let aspect = f64::from(w) / f64::from(h.max(1));
+                let mut passes: Vec<Vec<lf_settings::heal::Dab>> = Vec::new();
+                if !s.spots.is_empty() {
+                    passes.push(
+                        s.spots
+                            .iter()
+                            .map(|p| lf_settings::heal::Dab {
+                                x: p.x,
+                                y: p.y,
+                                sx: p.sx,
+                                sy: p.sy,
+                                r: p.r,
+                                mode: p.mode,
+                                dir: f64::NAN,
+                            })
+                            .collect(),
+                    );
+                }
+                for chunk in heals.dabs(aspect).chunks(lf_settings::MAX_SPOTS) {
+                    passes.push(chunk.to_vec());
+                }
+                if passes.len() > 1 {
+                    self.cached("heal", w, h, true, self.chain)?;
+                }
+                // Counting back from the last pass (into "spots"), every other one goes into
+                // "heal"; each reads what the one before wrote (the first, the source).
+                let n = passes.len();
+                for (i, dabs) in passes.iter().enumerate() {
+                    let into = if (n - 1 - i).is_multiple_of(2) {
+                        "spots"
+                    } else {
+                        "heal"
+                    };
+                    let from = if i == 0 {
+                        &self.source
+                    } else if into == "spots" {
+                        &self.targets["heal"]
+                    } else {
+                        &self.targets["spots"]
+                    };
+                    spots::run_dabs(&self.gpu, from, &self.targets[into], dabs, w, h);
+                }
                 self.spots_key = spots_key.clone();
                 self.detail_key = None;
             }
@@ -322,7 +370,7 @@ impl Renderer {
             self.spots_key.clear();
             self.detail_key = None;
         }
-        let spotted = !s.spots.is_empty();
+        let spotted = any;
 
         // Blur radii in full-size pixels, scaled to the working size.
         let sharp_sigma = (s.sharpen_radius * self.scale).max(0.35);

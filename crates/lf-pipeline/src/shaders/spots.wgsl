@@ -15,7 +15,7 @@ const MAX_SPOTS: u32 = 48u;
 
 struct Uniforms {
     spot: array<vec4<f32>, 48>,  // uSpot: target x, y, source x, y (UV)
-    spot_b: array<vec4<f32>, 48>, // uSpotB (xy): radius (fraction of width), mode (0 heal, 1 clone)
+    spot_b: array<vec4<f32>, 48>, // uSpotB (xy): radius (fraction of width), mode (0 heal, 1 clone); desktop: zw a stroke's direction and 1
     size: vec2<f32>,             // uSize: photo size in pixels
     count: u32,                  // uCount
     _pad: u32,
@@ -56,7 +56,12 @@ fn fs_spots(in: VsOut) -> @location(0) vec4<f32> {
             for (var k = 0; k < 12; k++) {
                 let a = f32(k) * 0.5235988;
                 let ring = vec2<f32>(cos(a), sin(a)) * r * 1.15;
-                let wk = 1.0 / (dot(offset - ring, offset - ring) / (r * r) + 0.05);
+                var wk = 1.0 / (dot(offset - ring, offset - ring) / (r * r) + 0.05);
+                if (u.spot_b[i].w > 0.5) {
+                    // Desktop only, a healing stroke: its sides, not along the blemish.
+                    let across = sin(a - u.spot_b[i].z);
+                    wk *= across * across + 0.02;
+                }
                 sum += ring_diff(s.xy, s.zw, radius, a) * wk;
                 total += wk;
             }

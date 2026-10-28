@@ -19,6 +19,7 @@ use crop::CropTool;
 use eframe::egui::{self, Color32, CursorIcon, Pos2, Rect, RichText, Stroke};
 use lf_pipeline::renderer::View;
 use lf_settings::geometry::{self, Geometry, apply, invert, output_to_source};
+use lf_settings::heal::{HealStroke, Heals};
 use lf_settings::lens::Lens;
 use lf_settings::masks::{Mask, Masks, Range as MaskRange, Shape};
 use lf_settings::{Crop, EditSettings, MAX_SPOTS, Spot, SpotMode};
@@ -327,7 +328,8 @@ impl Develop {
             Action::LeaveTool => self.tool().is_some(),
             Action::ApplyCrop => self.tool() == Some(ToolKind::Crop),
             Action::DeleteSpot => {
-                matches!(&self.tools.active, Some(Active::Spots(t)) if t.selected.is_some())
+                matches!(&self.tools.active, Some(Active::Spots(t)) if t.selected.is_some()
+                    || (t.brush && t.heal_selected.is_some()))
                     || matches!(&self.tools.active, Some(Active::Masks(t)) if t.selected.is_some())
             }
             _ => false,
@@ -346,6 +348,9 @@ impl Develop {
             Action::DeleteSpot => {
                 let mut out = ToolOutput::default();
                 match (&mut self.tools.active, self.session.edit_mut()) {
+                    (Some(Active::Spots(tool)), Some(edit)) if tool.brush => {
+                        edit.set(|s| out = remove_stroke(tool, s));
+                    }
                     (Some(Active::Spots(tool)), Some(edit)) => {
                         edit.set(|s| out = tool.remove_selected(&mut s.spots));
                     }
@@ -554,6 +559,112 @@ impl Develop {
                     ui.ctx().set_cursor_icon(cursor(handle));
                 }
             }
+            Active::Spots(tool) if tool.brush => {
+                let spot_map =
+                    SpotMap::new(map, &edit.settings, full, output_w).through_lens(&edit.settings);
+                let aspect = spot_map.aspect;
+                let heals = Heals::from_settings(&edit.settings);
+                // A finished line becomes a stroke, its source beside it.
+                let add = |edit: &mut crate::develop::edit_state::EditState,
+                           tool: &mut SpotTool,
+                           points: Vec<[f64; 2]>,
+                           out: &mut ToolOutput,
+                           toasts: &mut Toasts| {
+                    let r = tool.brush_r;
+                    let (dx, dy) = HealStroke::default_offset(&points, r, aspect);
+                    let mode = tool.mode;
+                    let mut full = false;
+                    edit.set(|s| {
+                        let mut h = Heals::from_settings(s);
+                        if h.0.len() >= lf_settings::heal::MAX_STROKES {
+                            full = true;
+                            return;
+                        }
+                        h.0.push(HealStroke {
+                            points,
+                            r,
+                            dx,
+                            dy,
+                            mode,
+                        });
+                        tool.heal_selected = Some(h.0.len() - 1);
+                        h.write_into(s);
+                        out.changed = true;
+                        out.commit = true;
+                    });
+                    if full {
+                        toasts.push(Level::Warning, spots::STROKES_FULL);
+                    }
+                };
+                if response.drag_started()
+                    && let Some(at) = origin
+                {
+                    let p = spot_map.uv(at);
+                    // Grabbing the picked stroke's source line moves where it copies from.
+                    let grab = tool
+                        .heal_selected
+                        .and_then(|i| heals.0.get(i).map(|s| (i, s)))
+                        .filter(|(_, s)| {
+                            let source: Vec<[f64; 2]> = s
+                                .points
+                                .iter()
+                                .map(|q| [q[0] + s.dx, q[1] + s.dy])
+                                .collect();
+                            spots::stroke_distance(&source, p, aspect) <= s.r
+                        });
+                    match grab {
+                        Some((i, s)) => tool.heal_grab = Some((i, (s.dx, s.dy), p)),
+                        None => tool.stroke = Some(vec![[p.0, p.1]]),
+                    }
+                }
+                if response.dragged()
+                    && let Some(at) = pointer
+                {
+                    let p = spot_map.uv(at);
+                    if let Some((i, (dx0, dy0), start)) = tool.heal_grab {
+                        edit.set(|s| {
+                            let mut h = Heals::from_settings(s);
+                            if let Some(st) = h.0.get_mut(i) {
+                                st.dx = dx0 + p.0 - start.0;
+                                st.dy = dy0 + p.1 - start.1;
+                                h.write_into(s);
+                                out.changed = true;
+                            }
+                        });
+                    } else if let Some(points) = &mut tool.stroke
+                        && let Some(last) = points.last().copied()
+                        && (p.0 - last[0]).hypot((p.1 - last[1]) / aspect) >= tool.brush_r * 0.25
+                        && points.len() < lf_settings::heal::MAX_POINTS
+                    {
+                        points.push([p.0, p.1]);
+                    }
+                }
+                if response.drag_stopped() {
+                    if tool.heal_grab.take().is_some() {
+                        out.commit = true;
+                    }
+                    if let Some(points) = tool.stroke.take() {
+                        add(edit, tool, points, &mut out, toasts);
+                    }
+                }
+                if response.clicked()
+                    && let Some(at) = origin.or(pointer)
+                {
+                    let p = spot_map.uv(at);
+                    // A click on a stroke picks it; elsewhere it heals a dab there.
+                    let hit = heals
+                        .0
+                        .iter()
+                        .position(|s| spots::stroke_distance(&s.points, p, aspect) <= s.r);
+                    match hit {
+                        Some(i) => tool.heal_selected = Some(i),
+                        None => add(edit, tool, vec![[p.0, p.1]], &mut out, toasts),
+                    }
+                }
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+                }
+            }
             Active::Spots(tool) => {
                 let spot_map =
                     SpotMap::new(map, &edit.settings, full, output_w).through_lens(&edit.settings);
@@ -711,6 +822,21 @@ impl Develop {
                 for (i, s) in edit.settings.spots.iter().enumerate() {
                     paint_spot(&painter, &spot_map, s, tool.selected == Some(i));
                 }
+                let heals = Heals::from_settings(&edit.settings);
+                for (i, s) in heals.0.iter().enumerate() {
+                    paint_stroke(&painter, &spot_map, s, tool.heal_selected == Some(i));
+                }
+                if let Some(points) = &tool.stroke {
+                    let line: Vec<Pos2> = points
+                        .iter()
+                        .map(|p| spot_map.screen((p[0], p[1])))
+                        .collect();
+                    let width = ((tool.brush_r * spot_map.scale) as f32 * 2.0).max(2.0);
+                    painter.add(egui::Shape::line(
+                        line,
+                        Stroke::new(width, Color32::from_rgba_unmultiplied(230, 60, 60, 110)),
+                    ));
+                }
             }
         }
     }
@@ -779,7 +905,14 @@ impl Develop {
                 });
             }
             Active::Spots(tool) => {
-                edit.set(|s| out = spots_panel(ui, tool, &mut s.spots));
+                edit.set(|s| {
+                    let strokes = Heals::from_settings(s).0.len();
+                    let (o, remove) = spots_panel(ui, tool, &mut s.spots, strokes);
+                    out = o;
+                    if remove {
+                        out = out.or(remove_stroke(tool, s));
+                    }
+                });
             }
             Active::WhiteBalance => {
                 ui.label(RichText::new(WB_HINT).color(theme::MUTED));
@@ -1118,7 +1251,31 @@ fn paint_coverage(painter: &egui::Painter, map: &SpotMap, strokes: &[lf_settings
 }
 
 /// The spot tool's panel: the hint, Heal / Clone, the count and "Remove spot".
-fn spots_panel(ui: &mut egui::Ui, tool: &mut SpotTool, spots: &mut Vec<Spot>) -> ToolOutput {
+/// Removes the picked healing stroke.
+fn remove_stroke(tool: &mut SpotTool, s: &mut lf_settings::EditSettings) -> ToolOutput {
+    let mut heals = Heals::from_settings(s);
+    let Some(i) = tool.heal_selected.filter(|&i| i < heals.0.len()) else {
+        return ToolOutput::default();
+    };
+    heals.0.remove(i);
+    heals.write_into(s);
+    tool.heal_selected = None;
+    ToolOutput {
+        changed: true,
+        commit: true,
+    }
+}
+
+/// The healing brush's size (percent of the photo's width).
+const HEAL_SIZE: Range = Range::new(0.2, 10.0).step(0.1, 1);
+
+fn spots_panel(
+    ui: &mut egui::Ui,
+    tool: &mut SpotTool,
+    spots: &mut Vec<Spot>,
+    settings_strokes: usize,
+) -> (ToolOutput, bool) {
+    let mut remove_stroke = false;
     let mut out = ToolOutput::default();
     ui.label(RichText::new(spots::HINT).color(theme::MUTED));
     ui.horizontal(|ui| {
@@ -1132,7 +1289,19 @@ fn spots_panel(ui: &mut egui::Ui, tool: &mut SpotTool, spots: &mut Vec<Spot>) ->
             }
         }
     });
+    ui.checkbox(&mut tool.brush, spots::BRUSH)
+        .on_hover_text("Paint along a hair, a wire or a scratch; it is healed from beside it");
+    if tool.brush {
+        let mut size = tool.brush_r * 100.0;
+        panels::slider::edit(ui, "Size", &mut size, HEAL_SIZE, None);
+        tool.brush_r =
+            (size / 100.0).clamp(lf_settings::heal::MIN_RADIUS, lf_settings::heal::MAX_RADIUS);
+        ui.label(RichText::new(spots::BRUSH_HINT).color(theme::MUTED));
+    }
     ui.label(RichText::new(format!("{} of {MAX_SPOTS} spots", spots.len())).color(theme::MUTED));
+    if settings_strokes > 0 {
+        ui.label(RichText::new(format!("{settings_strokes} healing strokes")).color(theme::MUTED));
+    }
     if spots.len() >= MAX_SPOTS {
         ui.label(RichText::new(spots::FULL).color(theme::WARNING));
     }
@@ -1143,7 +1312,18 @@ fn spots_panel(ui: &mut egui::Ui, tool: &mut SpotTool, spots: &mut Vec<Spot>) ->
     {
         out = out.or(tool.remove_selected(spots));
     }
-    out
+    if tool.brush
+        && ui
+            .add_enabled(
+                tool.heal_selected.is_some(),
+                egui::Button::new(spots::REMOVE_STROKE),
+            )
+            .on_hover_text("Delete")
+            .clicked()
+    {
+        remove_stroke = true;
+    }
+    (out, remove_stroke)
 }
 
 fn cursor(handle: crop::Handle) -> CursorIcon {
@@ -1155,6 +1335,39 @@ fn cursor(handle: crop::Handle) -> CursorIcon {
         Handle::NW | Handle::SE => CursorIcon::ResizeNwSe,
         Handle::NE | Handle::SW => CursorIcon::ResizeNeSw,
     }
+}
+
+/// A healing stroke: the line it heals (brand when picked) and the line it copies from,
+/// dashed, joined at the start.
+fn paint_stroke(painter: &egui::Painter, map: &SpotMap, s: &HealStroke, selected: bool) {
+    let line: Vec<Pos2> = s.points.iter().map(|p| map.screen((p[0], p[1]))).collect();
+    let source: Vec<Pos2> = s
+        .points
+        .iter()
+        .map(|p| map.screen((p[0] + s.dx, p[1] + s.dy)))
+        .collect();
+    let width = ((s.r * map.scale) as f32 * 2.0).max(2.0);
+    let colour = if selected {
+        theme::BRAND
+    } else {
+        Color32::WHITE
+    };
+    if let (Some(a), Some(b)) = (line.first(), source.first()) {
+        painter.line_segment([*a, *b], Stroke::new(1.0, Color32::from_white_alpha(150)));
+    }
+    painter.add(egui::Shape::line(
+        line,
+        Stroke::new(width, colour.gamma_multiply(0.35)),
+    ));
+    painter.extend(egui::Shape::dashed_line(
+        &source,
+        Stroke::new(
+            1.5,
+            Color32::from_white_alpha(if selected { 255 } else { 170 }),
+        ),
+        4.0,
+        3.0,
+    ));
 }
 
 /// One spot: the line to its source, the source dashed, the spot solid (brand when picked).

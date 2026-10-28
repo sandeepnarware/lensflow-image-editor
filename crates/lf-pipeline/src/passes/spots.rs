@@ -3,6 +3,7 @@
 use crate::gpu::Gpu;
 use crate::passes::UniformArena;
 use crate::texture::{Target, generate_mips};
+use lf_settings::heal::Dab;
 use lf_settings::{MAX_SPOTS, Spot, SpotMode};
 
 /// `SPOTS`'s uniforms, laid out as `spots.wgsl`'s `Uniforms`. `uSpotB` is a `vec2` array in
@@ -30,6 +31,13 @@ const _: () = assert!(std::mem::offset_of!(Uniforms, count) == 1544);
 impl Uniforms {
     /// `spotsPass`'s uniforms: the first [`MAX_SPOTS`] spots of a `width`×`height` photo.
     pub fn new(spots: &[Spot], width: u32, height: u32) -> Uniforms {
+        let dabs: Vec<Dab> = spots.iter().map(dab_of).collect();
+        Uniforms::of_dabs(&dabs, width, height)
+    }
+
+    /// The uniforms for up to [`MAX_SPOTS`] dabs (spots, or a healing stroke's dabs, whose
+    /// direction goes in `uSpotB.zw`).
+    pub fn of_dabs(spots: &[Dab], width: u32, height: u32) -> Uniforms {
         let spots = &spots[..spots.len().min(MAX_SPOTS)];
         let mut u = Uniforms {
             spot: [[0.0; 4]; MAX_SPOTS],
@@ -41,16 +49,46 @@ impl Uniforms {
         for (i, p) in spots.iter().enumerate() {
             u.spot[i] = [p.x as f32, p.y as f32, p.sx as f32, p.sy as f32];
             let clone = if p.mode == SpotMode::Clone { 1.0 } else { 0.0 };
-            u.spot_b[i] = [p.r as f32, clone, 0.0, 0.0];
+            u.spot_b[i] = if p.dir.is_nan() {
+                [p.r as f32, clone, 0.0, 0.0]
+            } else {
+                [p.r as f32, clone, p.dir as f32, 1.0]
+            };
         }
         u
+    }
+}
+
+/// A spot as a dab (no direction: the web's own spot).
+fn dab_of(s: &Spot) -> Dab {
+    Dab {
+        x: s.x,
+        y: s.y,
+        sx: s.sx,
+        sy: s.sy,
+        r: s.r,
+        mode: s.mode,
+        dir: f64::NAN,
     }
 }
 
 /// Draws `spots` over `source` into level 0 of `target` (the photo's size), then rebuilds
 /// `target`'s mips.
 pub fn run(gpu: &Gpu, source: &Target, target: &Target, spots: &[Spot], width: u32, height: u32) {
-    let uniforms = Uniforms::new(spots, width, height);
+    let dabs: Vec<Dab> = spots.iter().map(dab_of).collect();
+    run_dabs(gpu, source, target, &dabs, width, height);
+}
+
+/// As [`run`], for up to [`MAX_SPOTS`] dabs.
+pub fn run_dabs(
+    gpu: &Gpu,
+    source: &Target,
+    target: &Target,
+    dabs: &[Dab],
+    width: u32,
+    height: u32,
+) {
+    let uniforms = Uniforms::of_dabs(dabs, width, height);
     let arena = UniformArena::new(gpu, "spots uniforms", std::slice::from_ref(&uniforms));
     let pass = &gpu.pipelines.spots;
     let bind = pass.bind(

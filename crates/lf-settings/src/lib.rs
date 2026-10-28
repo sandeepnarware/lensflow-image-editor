@@ -10,6 +10,7 @@
 pub mod curve;
 pub mod geometry;
 pub mod groups;
+pub mod heal;
 pub mod lens;
 pub mod looks;
 pub mod lut;

@@ -418,6 +418,18 @@ texture: `BrushTexture` resamples the picture into the mask's layer and the shad
 kind 2; `masks::weight` samples it on the CPU. A picture that does not decode to its size is
 dropped when read.
 
+### Healing strokes
+
+The spot tool's Brush paints healing (or cloning) strokes, desktop-only in `desktop.heal`
+(`lf_settings::heal`): points, a radius (fraction of the width, as a spot's) and one source
+offset, set beside the stroke's overall direction three radii away and moved by dragging the
+dashed source line. The renderer heals a stroke as dabs every 0.4 radius
+(`heal::dabs`), 48 to a spot pass, ping-ponged between the `spots` and `heal` targets so the
+last pass lands in `spots`; the web's own spots come first. A dab carries the stroke's
+direction in `uSpotB.zw`, and `spots.wgsl` then weights its tone-matching ring by how far
+across the stroke each sample lies, so the blemish along the line never counts. The web never
+sets that, so its spots render as before (the parity gate covers it).
+
 ### White balance and Auto tone
 
 Presets (`shader_values::WB_PRESETS`, kelvin) become temperature and tint values, so they need

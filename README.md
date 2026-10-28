@@ -163,7 +163,7 @@ and the tool keys work only in Develop.
 | `Ctrl+H` | Merge to HDR… |
 | `Ctrl+M` | Merge to panorama… |
 | `R` | Crop and straighten |
-| `Q` | Heal and clone spots |
+| `Q` | Heal and clone spots; Brush paints a healing stroke along a hair or a wire |
 | `W` | White balance eyedropper (click something grey or white) |
 | `M` | Masks: linear and radial gradients and a brush, with their own sliders |
 | `Ctrl+U` | Auto tone |
