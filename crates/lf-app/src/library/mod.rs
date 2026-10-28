@@ -1297,9 +1297,14 @@ impl Library {
             Action::PasteSettings | Action::ApplyToSelected | Action::MatchReference => selected,
             Action::EditIn => (develop || selected) && self.can_add(),
             Action::Print => develop || selected,
-            Action::MergeHdr => {
+            Action::MergeHdr | Action::MergePanorama => {
+                let kind = if action == Action::MergeHdr {
+                    crate::merge_job::MergeKind::Hdr
+                } else {
+                    crate::merge_job::MergeKind::Panorama
+                };
                 !develop
-                    && crate::dialogs::merge::can_merge(self.selection.current.len())
+                    && crate::dialogs::merge::can_merge(kind, self.selection.current.len())
                     && self.can_add()
             }
             Action::SelectAll | Action::Previous | Action::Next => !self.order.is_empty(),
@@ -1355,7 +1360,8 @@ impl Library {
             Action::MatchReference => self.open_match(),
             Action::EditIn => self.edit_in(env),
             Action::Print => self.open_print(),
-            Action::MergeHdr => self.open_merge(),
+            Action::MergeHdr => self.open_merge(crate::merge_job::MergeKind::Hdr),
+            Action::MergePanorama => self.open_merge(crate::merge_job::MergeKind::Panorama),
             Action::Library => {
                 self.mode = Mode::Library;
                 if self.filter.narrows() {

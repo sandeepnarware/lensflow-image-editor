@@ -1,10 +1,11 @@
-//! The library's side of Merge to HDR: the dialog for the selection (two to seven photos),
-//! the merge on the `Long` lane ([`crate::merge_job::run`]), and, once written, the merged
+//! The library's side of Merge to HDR and to panorama: the dialog for the selection, the
+//! merge on the `Long` lane ([`crate::merge_job::run`]), and, once written, the merged
 //! photo catalogued by rescanning the catalogue folder it lies in.
 
 use super::{Env, Library};
 use crate::dialogs::merge::{MergeAction, MergeDialog, Stage, can_merge};
 use crate::jobs::{Lane, Msg};
+use crate::merge_job::MergeKind;
 use eframe::egui;
 use std::path::PathBuf;
 
@@ -14,11 +15,11 @@ impl Library {
         self.merge.as_ref()
     }
 
-    /// `Ctrl+H`: the dialog for the selected bracket.
-    pub(super) fn open_merge(&mut self) {
+    /// `Ctrl+H` or `Ctrl+M`: the dialog for the selected photos, in the grid's order.
+    pub(super) fn open_merge(&mut self, kind: MergeKind) {
         let ids = self.selected_in_order();
-        if self.merge.is_none() && can_merge(ids.len()) {
-            self.merge = Some(MergeDialog::new(ids));
+        if self.merge.is_none() && can_merge(kind, ids.len()) {
+            self.merge = Some(MergeDialog::new(ids, kind));
         }
     }
 
@@ -44,15 +45,17 @@ impl Library {
         };
         dialog.started();
         let ids = dialog.ids.clone();
+        let kind = dialog.kind;
         let stop = dialog.stop.clone();
         let gpu = self.gpu.clone();
         let reporter = env.jobs.reporter();
-        log::info!("merging {} photos to HDR", ids.len());
-        env.jobs.spawn(Lane::Long, "merge to HDR", move || {
+        log::info!("merging {} photos ({kind:?})", ids.len());
+        env.jobs.spawn(Lane::Long, "merge", move || {
             let result = crate::merge_job::run(
                 gpu,
                 &root,
                 &ids,
+                kind,
                 |done, total| reporter.send(Msg::MergeProgress { done, total }),
                 &stop,
             );

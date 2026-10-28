@@ -427,6 +427,7 @@ even if the filter would hide it.
 | `Ctrl+E` | Edit in external editor… |
 | `Ctrl+P` | Print… |
 | `Ctrl+H` | Merge to HDR… |
+| `Ctrl+M` | Merge to panorama… |
 | `R` | Crop and straighten tool |
 | `Q` | Heal and clone spots tool |
 | `W` | White balance eyedropper (click something grey or white) |
@@ -551,7 +552,7 @@ as they are (`DCTDecode`, nothing compressed twice) and captions in the built-in
 
 ### Merge to HDR
 
-`Ctrl+H` (Library → Merge; `Action::MergeHdr`) merges two to seven selected photos, an
+`Ctrl+H` (File → Merge; `Action::MergeHdr`) merges two to seven selected photos, an
 exposure bracket, into one (`dialogs/merge.rs`, `library/merge_ui.rs`). The run
 (`merge_job::run`, `Long` lane, with Stop) develops each frame with the default settings (the
 photo as shot, through the develop pass, so RAW frames keep their highlights until then) at
@@ -566,3 +567,27 @@ rescanned so it shows beside the bracket. Frames of different sizes are refused.
 subjects are not de-ghosted.
 
 `lf-merge` is CPU-only (rayon), with no GPU and no catalogue.
+
+### Merge to panorama
+
+`Ctrl+M` (File → Merge; `Action::MergePanorama`) stitches two to twelve selected photos,
+one row taken turning the camera, in the grid's order (left to right or right to left),
+into one wide photo (`merge_job` with `MergeKind::Panorama`). Each frame is developed as
+shot at most 3000 px on the long side (a panorama holds every frame at once), then
+`lf_merge::panorama::stitch`:
+
+- projects the frames onto a cylinder, so turning the camera becomes sliding the picture;
+  the cylinder's radius (the lens's focal length in pixels) is not in the files, so each of
+  a dozen candidates (and "no cylinder", for a flat scene or a long lens, preferred on a
+  near tie) is tried and the best-matching one kept;
+- finds each neighbour's offset by normalised cross-correlation (so brightness differences
+  do not matter) on small copies (96 px tall, every overlap from 5 % to 95 % either way and
+  up to a tenth up or down), refined at 192 and 384 px; a neighbour that matches worse
+  than 0.5 (one minus the correlation) is not a match, and the merge says the photos could
+  not be lined up;
+- evens the frames' brightness from their overlaps, lays them on one canvas (at most
+  60 MP) with feathered edges, and crops to the rectangle every column covers.
+
+The result is a 16-bit TIFF with the sRGB profile beside the first photo (`<name>-Pano.tif`),
+catalogued by a rescan. Several rows, or a panorama shot turning up and down, are not
+stitched; a subject moving in an overlap may show twice, faintly.

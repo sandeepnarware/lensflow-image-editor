@@ -1,8 +1,8 @@
-//! Photo → Merge to HDR (`Ctrl+H`): what will happen, then the merge's progress (with Stop)
-//! and how it ended. The work is [`crate::merge_job::run`] on the `Long` lane.
+//! Library → Merge to HDR (`Ctrl+H`) and Merge to panorama (`Ctrl+M`): what will happen, then
+//! the merge's progress (with Stop) and how it ended. The work is [`crate::merge_job::run`] on the `Long` lane.
 
 use crate::catalog_ext::count;
-use crate::merge_job::MAX_FRAMES;
+use crate::merge_job::MergeKind;
 use crate::theme;
 use eframe::egui::{self, Key, RichText};
 use std::path::PathBuf;
@@ -13,11 +13,15 @@ pub const MERGE: &str = "Merge";
 pub const CANCEL: &str = "Cancel";
 pub const CLOSE: &str = "Close";
 pub const STOP: &str = "Stop";
-pub const ABOUT: &str = "The photos are lined up and blended, each part taken from the frames where it is best exposed. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
+pub const ABOUT_HDR: &str = "The photos are lined up and blended, each part taken from the frames where it is best exposed. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
+pub const ABOUT_PANORAMA: &str = "The photos are stitched in their order in the grid, left to right or right to left, one row. Neighbours should overlap by a third or so. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
 
-/// "Merge 3 photos to HDR".
-pub fn title(n: usize) -> String {
-    format!("Merge {} photos to HDR", count(n))
+/// "Merge 3 photos to HDR", "Merge 5 photos to a panorama".
+pub fn title(kind: MergeKind, n: usize) -> String {
+    match kind {
+        MergeKind::Hdr => format!("Merge {} photos to HDR", count(n)),
+        MergeKind::Panorama => format!("Merge {} photos to a panorama", count(n)),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,14 +40,16 @@ pub enum MergeAction {
 
 pub struct MergeDialog {
     pub ids: Vec<i64>,
+    pub kind: MergeKind,
     pub stage: Stage,
     pub stop: Arc<AtomicBool>,
 }
 
 impl MergeDialog {
-    pub fn new(ids: Vec<i64>) -> MergeDialog {
+    pub fn new(ids: Vec<i64>, kind: MergeKind) -> MergeDialog {
         MergeDialog {
             ids,
+            kind,
             stage: Stage::Confirm,
             stop: Arc::new(AtomicBool::new(false)),
         }
@@ -71,11 +77,15 @@ impl MergeDialog {
         let mut action = MergeAction::None;
         let _ = egui::Modal::new(egui::Id::unique("merge-dialog")).show(ctx, |ui| {
             ui.set_width(420.0);
-            ui.heading(title(self.ids.len()));
+            ui.heading(title(self.kind, self.ids.len()));
             ui.add_space(8.0);
             match self.stage.clone() {
                 Stage::Confirm => {
-                    ui.label(RichText::new(ABOUT).color(theme::MUTED));
+                    let about = match self.kind {
+                        MergeKind::Hdr => ABOUT_HDR,
+                        MergeKind::Panorama => ABOUT_PANORAMA,
+                    };
+                    ui.label(RichText::new(about).color(theme::MUTED));
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
                         if ui.button(MERGE).clicked() {
@@ -122,9 +132,9 @@ impl MergeDialog {
     }
 }
 
-/// Whether `n` selected photos can be merged.
-pub fn can_merge(n: usize) -> bool {
-    (2..=MAX_FRAMES).contains(&n)
+/// Whether `n` selected photos can be merged into `kind`.
+pub fn can_merge(kind: MergeKind, n: usize) -> bool {
+    (2..=kind.max_frames()).contains(&n)
 }
 
 #[cfg(test)]
@@ -132,13 +142,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn two_to_seven_photos_can_be_merged() {
-        assert!(!can_merge(1));
-        assert!(can_merge(2) && can_merge(7));
-        assert!(!can_merge(8));
-        let mut d = MergeDialog::new(vec![1, 2, 3]);
+    fn an_hdr_takes_two_to_seven_photos_and_a_panorama_up_to_twelve() {
+        assert!(!can_merge(MergeKind::Hdr, 1));
+        assert!(can_merge(MergeKind::Hdr, 2) && can_merge(MergeKind::Hdr, 7));
+        assert!(!can_merge(MergeKind::Hdr, 8));
+        assert!(can_merge(MergeKind::Panorama, 12));
+        let mut d = MergeDialog::new(vec![1, 2, 3], MergeKind::Hdr);
         d.started();
         assert_eq!(d.stage, Stage::Running { done: 0, total: 6 });
-        assert_eq!(title(3), "Merge 3 photos to HDR");
+        assert_eq!(title(MergeKind::Hdr, 3), "Merge 3 photos to HDR");
+        assert_eq!(
+            title(MergeKind::Panorama, 5),
+            "Merge 5 photos to a panorama"
+        );
     }
 }

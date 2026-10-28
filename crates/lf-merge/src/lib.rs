@@ -10,6 +10,8 @@
 //! Images are [`Rgb`]: linear rows of interleaved `f32` red, green, blue, display-referred
 //! (0..1, as the develop pass outputs them).
 
+pub mod panorama;
+
 use rayon::prelude::*;
 
 /// An RGB image, `w`×`h`, interleaved `f32` values in 0..1.
@@ -307,6 +309,8 @@ fn gaussian(img: Vec<f32>, w: usize, h: usize, levels: usize) -> Vec<Vec<f32>> {
 pub enum MergeError {
     TooFew,
     SizesDiffer,
+    /// Neighbouring photos could not be matched (they do not overlap, or too little).
+    NoOverlap,
 }
 
 impl std::fmt::Display for MergeError {
@@ -314,6 +318,9 @@ impl std::fmt::Display for MergeError {
         f.write_str(match self {
             MergeError::TooFew => "A merge needs at least two photos.",
             MergeError::SizesDiffer => "The photos are not all the same size.",
+            MergeError::NoOverlap => {
+                "The photos could not be lined up. A panorama needs neighbours in order, overlapping by a third or so."
+            }
         })
     }
 }

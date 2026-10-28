@@ -2427,3 +2427,44 @@ fn a_bracket_merges_to_hdr_and_the_result_is_catalogued_beside_it() {
     h.step();
     assert!(h.state().lib.merge().is_none());
 }
+
+#[test]
+fn a_row_of_photos_merges_to_a_panorama() {
+    use lf_app::dialogs::merge;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    // A wide textured scene cut into three frames overlapping by 150 px.
+    let world = image::RgbaImage::from_fn(900, 260, |x, y| {
+        let mut n = (x / 12).wrapping_mul(374_761_393) ^ (y / 12).wrapping_mul(668_265_263);
+        n = (n ^ (n >> 13)).wrapping_mul(1_274_126_177);
+        let v = (n >> 24) as u8;
+        image::Rgba([v, v / 2 + 60, 255 - v, 255])
+    });
+    let shoot = dir.path().join("pano");
+    std::fs::create_dir_all(&shoot).unwrap();
+    for (i, x0) in [0u32, 250, 500].into_iter().enumerate() {
+        image::imageops::crop_imm(&world, x0, 0, 400, 260)
+            .to_image()
+            .save(shoot.join(format!("f{i}.png")))
+            .unwrap();
+    }
+    import_folder(&mut h, &shoot, 3);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    h.state_mut().lib.selection.select_all(&ids);
+    assert!(run_action(&mut h, Action::MergePanorama));
+    h.step();
+    h.step();
+    h.get_by_label("Merge 3 photos to a panorama");
+    h.get_by_label(merge::MERGE).click();
+    step_until(&mut h, "the panorama and its catalogue import", |s| {
+        s.lib
+            .merge()
+            .is_some_and(|d| matches!(d.stage, merge::Stage::Done(Ok(_))))
+            && !s.lib.importing()
+            && s.lib.photos().len() == 4
+    });
+    let (w, _) = image::image_dimensions(shoot.join("f0-Pano.tif")).unwrap();
+    assert!((880..=905).contains(&w), "{w}");
+}

@@ -1,12 +1,13 @@
-//! Photo → Merge to HDR, on the `Long` lane: each bracketed frame is decoded and developed
+//! Merge to HDR and Merge to panorama, on the `Long` lane: each frame is decoded and developed
 //! with the default settings (the photo as shot, RAW headroom and all, through the develop
-//! pass), lined up with the middle frame ([`lf_merge::align`]), fused
-//! ([`lf_merge::fuse`]) and written as a 16-bit TIFF with the sRGB profile beside the first
-//! photo (`<name>-HDR.tif`, `-HDR-2`, …). The library then rescans its catalogue folder, so
+//! pass); an HDR bracket is lined up with its middle frame ([`lf_merge::align`]) and fused
+//! ([`lf_merge::fuse`]), a panorama row stitched ([`lf_merge::panorama::stitch`]); the result
+//! is written as a 16-bit TIFF with the sRGB profile beside the first photo
+//! (`<name>-HDR.tif` or `<name>-Pano.tif`, then `-2`, … when taken). The library then rescans its catalogue folder, so
 //! the merged photo shows beside the frames, ready to edit.
 //!
-//! Frames are worked on at most [`MAX_EDGE`] pixels on the long side and kept as 16-bit
-//! while waiting, so a seven-frame bracket of 45 MP RAW files still fits in memory.
+//! Frames are worked on at most [`MergeKind::edge`] pixels on the long side and kept as
+//! 16-bit while waiting, so a bracket or a row of 45 MP RAW files still fits in memory.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,9 +20,38 @@ use lf_pipeline::Gpu;
 use lf_raw::demosaic::Quality;
 use lf_settings::{DevelopSettings, EditSettings};
 
-/// The most frames a merge takes, and the long edge they are worked at.
-pub const MAX_FRAMES: usize = 7;
-pub const MAX_EDGE: u32 = 5000;
+/// What a merge makes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeKind {
+    Hdr,
+    Panorama,
+}
+
+impl MergeKind {
+    /// The most frames it takes.
+    pub fn max_frames(self) -> usize {
+        match self {
+            MergeKind::Hdr => 7,
+            MergeKind::Panorama => 12,
+        }
+    }
+
+    /// The long edge each frame is worked at (a panorama holds every frame at once).
+    pub fn edge(self) -> u32 {
+        match self {
+            MergeKind::Hdr => 5000,
+            MergeKind::Panorama => 3000,
+        }
+    }
+
+    /// Added to the first photo's name.
+    pub fn suffix(self) -> &'static str {
+        match self {
+            MergeKind::Hdr => "HDR",
+            MergeKind::Panorama => "Pano",
+        }
+    }
+}
 
 /// A frame held between the passes: 16-bit RGB.
 struct Held {
@@ -43,13 +73,13 @@ impl Held {
 }
 
 /// The merged photo's name for `stem` that is free in `dir`.
-pub fn merged_stem(dir: &Path, stem: &str) -> String {
+pub fn merged_stem(dir: &Path, stem: &str, suffix: &str) -> String {
     let mut n = 1;
     loop {
         let candidate = if n == 1 {
-            format!("{stem}-HDR")
+            format!("{stem}-{suffix}")
         } else {
-            format!("{stem}-HDR-{n}")
+            format!("{stem}-{suffix}-{n}")
         };
         if !dir.join(format!("{candidate}.tif")).exists() {
             return candidate;
@@ -64,20 +94,24 @@ pub fn run(
     gpu: Arc<Gpu>,
     root: &Path,
     ids: &[i64],
+    kind: MergeKind,
     mut progress: impl FnMut(usize, usize),
     stop: &AtomicBool,
 ) -> Result<PathBuf, String> {
     if ids.len() < 2 {
         return Err(lf_merge::MergeError::TooFew.to_string());
     }
-    if ids.len() > MAX_FRAMES {
-        return Err(format!("A merge takes at most {MAX_FRAMES} photos."));
+    if ids.len() > kind.max_frames() {
+        return Err(format!(
+            "A merge takes at most {} photos.",
+            kind.max_frames()
+        ));
     }
     let catalog = Catalog::open(root).map_err(|e| e.to_string())?;
-    // Steps: each frame, aligning, fusing, writing.
+    // Steps: each frame, lining up, blending, writing.
     let total = ids.len() + 3;
     progress(0, total);
-    let edge = MAX_EDGE.min(gpu.max_edge());
+    let edge = kind.edge().min(gpu.max_edge());
     let settings = EditSettings::default_settings();
     let mut frames: Vec<Held> = Vec::with_capacity(ids.len());
     let mut first: Option<PathBuf> = None;
@@ -123,7 +157,27 @@ pub fn run(
         first.get_or_insert(row.path.clone());
         progress(i + 1, total);
     }
-    // Line every frame up with the middle one (the most likely to be well exposed).
+    progress(ids.len() + 1, total);
+    if stop.load(Ordering::SeqCst) {
+        return Err("The merge was stopped.".to_owned());
+    }
+    let merged = match kind {
+        MergeKind::Hdr => fuse_bracket(frames)?,
+        MergeKind::Panorama => {
+            let rgb: Vec<Rgb> = frames.iter().map(Held::rgb).collect();
+            drop(frames);
+            lf_merge::panorama::stitch(&rgb, |_, _| {}).map_err(|e| e.to_string())?
+        }
+    };
+    progress(ids.len() + 2, total);
+    let out = write_merged(&first.expect("two frames at least"), kind, &merged)?;
+    progress(total, total);
+    Ok(out)
+}
+
+/// An HDR bracket: every frame lined up with the middle one (the most likely to be well
+/// exposed), then fused.
+fn fuse_bracket(mut frames: Vec<Held>) -> Result<Rgb, String> {
     let middle = frames.len() / 2;
     let reference = frames[middle].rgb();
     for (i, frame) in frames.iter_mut().enumerate() {
@@ -133,15 +187,12 @@ pub fn run(
         }
     }
     drop(reference);
-    progress(ids.len() + 1, total);
-    if stop.load(Ordering::SeqCst) {
-        return Err("The merge was stopped.".to_owned());
-    }
-    let merged = lf_merge::fuse(frames.len(), |i| frames[i].rgb()).map_err(|e| e.to_string())?;
-    drop(frames);
-    progress(ids.len() + 2, total);
+    lf_merge::fuse(frames.len(), |i| frames[i].rgb()).map_err(|e| e.to_string())
+}
 
-    let first = first.expect("two frames at least");
+/// Writes `merged` as a 16-bit TIFF with the sRGB profile beside `first`, through a
+/// temporary name; returns its path.
+fn write_merged(first: &Path, kind: MergeKind, merged: &Rgb) -> Result<PathBuf, String> {
     let dir = first
         .parent()
         .ok_or_else(|| "The photo's folder could not be found.".to_owned())?;
@@ -149,7 +200,7 @@ pub fn run(
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "photo".to_owned());
-    let out = dir.join(format!("{}.tif", merged_stem(dir, &stem)));
+    let out = dir.join(format!("{}.tif", merged_stem(dir, &stem, kind.suffix())));
     // The encoder takes 16-bit samples as native-endian bytes.
     let pixels: Vec<u8> = merged
         .data
@@ -176,7 +227,6 @@ pub fn run(
             let _ = std::fs::remove_file(&tmp);
             format!("The merged photo could not be written ({e}).")
         })?;
-    progress(total, total);
     Ok(out)
 }
 
@@ -187,9 +237,9 @@ mod tests {
     #[test]
     fn the_merged_photo_takes_the_first_free_name() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(merged_stem(dir.path(), "DSC_1"), "DSC_1-HDR");
+        assert_eq!(merged_stem(dir.path(), "DSC_1", "HDR"), "DSC_1-HDR");
         std::fs::write(dir.path().join("DSC_1-HDR.tif"), b"x").unwrap();
-        assert_eq!(merged_stem(dir.path(), "DSC_1"), "DSC_1-HDR-2");
+        assert_eq!(merged_stem(dir.path(), "DSC_1", "HDR"), "DSC_1-HDR-2");
     }
 
     #[test]
@@ -224,6 +274,7 @@ mod tests {
             gpu,
             dir.path(),
             &ids,
+            MergeKind::Hdr,
             |d, t| steps.push((d, t)),
             &AtomicBool::new(false),
         )
@@ -246,9 +297,19 @@ mod tests {
         };
         let dir = tempfile::tempdir().unwrap();
         let stop = AtomicBool::new(false);
-        assert!(run(gpu.clone(), dir.path(), &[1], |_, _| {}, &stop).is_err());
         assert!(
-            run(gpu, dir.path(), &[1; 8], |_, _| {}, &stop)
+            run(
+                gpu.clone(),
+                dir.path(),
+                &[1],
+                MergeKind::Hdr,
+                |_, _| {},
+                &stop
+            )
+            .is_err()
+        );
+        assert!(
+            run(gpu, dir.path(), &[1; 8], MergeKind::Hdr, |_, _| {}, &stop)
                 .unwrap_err()
                 .contains("at most")
         );

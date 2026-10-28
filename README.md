@@ -91,8 +91,10 @@ Edit in external editor (`Ctrl+E`): a 16-bit TIFF copy with the edits, beside th
 opened in the application you choose once (Photoshop, Affinity, …) and catalogued next to
 the original.
 
-Merge to HDR (`Ctrl+H`, Library → Merge): two to seven bracketed photos lined up and
+Merge to HDR (`Ctrl+H`, File → Merge): two to seven bracketed photos lined up and
 blended into one natural-looking 16-bit TIFF beside the first, catalogued and ready to edit.
+Merge to panorama (`Ctrl+M`): a row of up to twelve overlapping photos stitched into one
+wide photo (single row, left to right or right to left).
 
 Print (`Ctrl+P`): the selection laid out on A4, Letter, A3 or photo papers, one a page or a
 contact sheet, with captions; opened as a PDF to print, or saved for a lab.
@@ -127,6 +129,7 @@ and the tool keys work only in Develop.
 | `Ctrl+E` | Edit in external editor… |
 | `Ctrl+P` | Print… |
 | `Ctrl+H` | Merge to HDR… |
+| `Ctrl+M` | Merge to panorama… |
 | `R` | Crop and straighten |
 | `Q` | Heal and clone spots |
 | `W` | White balance eyedropper (click something grey or white) |

@@ -46,6 +46,8 @@ pub enum Action {
     EditIn,
     /// Blend an exposure bracket (the selected photos) into one photo.
     MergeHdr,
+    /// Stitch a row of photos (the selected ones, in the grid's order) into a panorama.
+    MergePanorama,
     AddVersion,
     ResetAll,
     /// Exposure and the tone sliders from the photo.
@@ -108,6 +110,7 @@ impl Action {
             Action::MatchReference => "Match a reference…",
             Action::EditIn => "Edit in external editor…",
             Action::MergeHdr => "Merge to HDR…",
+            Action::MergePanorama => "Merge to panorama…",
             Action::AddVersion => "Add version…",
             Action::ResetAll => "Reset all edits",
             Action::AutoTone => "Auto tone",
@@ -190,6 +193,7 @@ pub const MAP: Map = Map(&[
     (Action::EditIn, cmd(Key::E)),
     (Action::Print, cmd(Key::P)),
     (Action::MergeHdr, cmd(Key::H)),
+    (Action::MergePanorama, cmd(Key::M)),
     (Action::CropTool, key(Key::R)),
     (Action::SpotTool, key(Key::Q)),
     (Action::WhiteBalanceTool, key(Key::W)),
@@ -349,6 +353,7 @@ mod tests {
             (Action::EditIn, cmd(Key::E)),
             (Action::Print, cmd(Key::P)),
             (Action::MergeHdr, cmd(Key::H)),
+            (Action::MergePanorama, cmd(Key::M)),
             (Action::CropTool, key(Key::R)),
             (Action::SpotTool, key(Key::Q)),
             (Action::WhiteBalanceTool, key(Key::W)),
