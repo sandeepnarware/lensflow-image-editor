@@ -32,6 +32,7 @@ pub mod session;
 pub mod session_flow;
 pub mod shortcuts;
 pub mod single_instance;
+pub mod stack_job;
 pub mod startup;
 pub mod theme;
 pub mod thumbs_ui;

@@ -164,6 +164,13 @@ triangle (hover says why); the filter bar's "Possible rejects", "Blurry", "Eyes 
 "Sharp, eyes open" choices and the Sharpness sort use the scores. A photo is scored once,
 until its file changes.
 
+Stacks (Home → Stacks): Group into stack (`Ctrl+G`) gathers the selected photos under the
+active one; Unstack (`Ctrl+Shift+G`) takes them apart; Expand (`Shift+S`) opens or closes a
+stack. A collapsed stack shows its top photo with how many it holds. Auto-stack… finds
+bursts (frames taken within a set gap that look alike) and, if asked, duplicates anywhere in
+the folder, and stacks them with the sharpest photo on top when Assisted culling has scored
+them.
+
 The window needs a graphics adapter. With no driver it runs on a software
 adapter (WARP on Windows, lavapipe on Linux) and says "No graphics driver found:
 previews will be slow."

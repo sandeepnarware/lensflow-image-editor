@@ -7,6 +7,7 @@ use crate::cull::{Flag, Label, MAX_RATING};
 use crate::meta::Meta;
 use crate::model::{NewPhoto, now, ts};
 use crate::scores::Scores;
+use crate::stacks::Stack;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
@@ -239,6 +240,22 @@ CREATE TABLE scores (
     faces INTEGER NOT NULL,
     eyes_closed INTEGER NOT NULL,
     eye_sharpness REAL
+);
+"#,
+    // Stacks (`crate::stacks`), and each photo's fingerprint for auto-stacking.
+    r#"
+CREATE TABLE stacks (
+    id INTEGER PRIMARY KEY,
+    top_photo_id INTEGER NOT NULL,
+    collapsed INTEGER NOT NULL DEFAULT 1
+);
+ALTER TABLE photos ADD COLUMN stack_id INTEGER REFERENCES stacks(id) ON DELETE SET NULL;
+CREATE INDEX photos_stack ON photos(stack_id);
+CREATE TABLE fingerprints (
+    photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+    file_size INTEGER NOT NULL,
+    mtime INTEGER NOT NULL,
+    dhash INTEGER NOT NULL
 );
 "#,
 ];
@@ -486,6 +503,8 @@ pub struct PhotoRow {
     pub gps: Option<(f64, f64)>,
     /// Assisted-culling scores for the file as it is now ([`crate::scores`]).
     pub scores: Option<Scores>,
+    /// The stack it is in ([`crate::stacks`]).
+    pub stack: Option<Stack>,
 }
 
 pub(crate) const PHOTO_COLUMNS: &str =
@@ -500,7 +519,11 @@ pub(crate) const PHOTO_COLUMNS: &str =
          AND s.mtime = p.mtime),
      (SELECT s.faces FROM scores s WHERE s.photo_id = p.id),
      (SELECT s.eyes_closed FROM scores s WHERE s.photo_id = p.id),
-     (SELECT s.eye_sharpness FROM scores s WHERE s.photo_id = p.id)";
+     (SELECT s.eye_sharpness FROM scores s WHERE s.photo_id = p.id),
+     p.stack_id,
+     (SELECT k.top_photo_id FROM stacks k WHERE k.id = p.stack_id),
+     (SELECT COUNT(*) FROM photos q WHERE q.stack_id = p.stack_id),
+     (SELECT k.collapsed FROM stacks k WHERE k.id = p.stack_id)";
 
 pub(crate) fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
     Ok(PhotoRow {
@@ -551,6 +574,15 @@ pub(crate) fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
                 })
             })
             .transpose()?,
+        stack: match (r.get::<_, Option<i64>>(28)?, r.get::<_, Option<i64>>(29)?) {
+            (Some(id), Some(top)) => Some(Stack {
+                id,
+                top,
+                size: r.get::<_, i64>(30)?.max(0) as u32,
+                collapsed: r.get::<_, Option<bool>>(31)?.unwrap_or(true),
+            }),
+            _ => None,
+        },
     })
 }
 

@@ -221,6 +221,16 @@ pub enum Msg {
         id: i64,
         result: Result<Box<crate::library::compare::Pixels>, String>,
     },
+    /// A stack change was saved (with a message to show), or why not; auto-stacking ends
+    /// with one too.
+    Stacked {
+        root: PathBuf,
+        /// From auto-stacking (its dialog closes).
+        auto: bool,
+        result: Result<Option<String>, String>,
+    },
+    /// Auto-stacking read `done` of `total` photos.
+    StackProgress { done: usize, total: usize },
     /// An AI tool moved on.
     AiProgress(crate::ai_job::Step),
     /// An AI tool finished: what it made, or why it stopped.
@@ -787,6 +797,8 @@ pub(crate) mod owners {
             | Msg::LensProfile { .. }
             | Msg::PlacesRead { .. }
             | Msg::AiDone(..)
+            | Msg::Stacked { .. }
+            | Msg::StackProgress { .. }
             | Msg::AlbumPhotos { .. }
             | Msg::AlbumChanged { .. } => Owner::Library,
             Msg::DeviceReset(..) => Owner::App,
@@ -902,6 +914,12 @@ pub(crate) mod owners {
             Msg::MergeDone(Err("no".into())),
             Msg::AiProgress(crate::ai_job::Step::Download { done: 1, total: 2 }),
             Msg::AiDone(Err("no".into())),
+            Msg::Stacked {
+                root: dir.join("elsewhere"),
+                auto: true,
+                result: Err("no".into()),
+            },
+            Msg::StackProgress { done: 1, total: 2 },
             Msg::LensProfile {
                 photo_id: 1,
                 result: Err("no".into()),

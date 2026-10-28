@@ -128,6 +128,13 @@ pub fn describe(row: &PhotoRow) -> Option<String> {
     if let Some(label) = row.label {
         parts.push(format!("{} label", label.name()));
     }
+    if let Some(s) = row.stack {
+        parts.push(if s.top == row.id {
+            format!("Top of a stack of {}", s.size)
+        } else {
+            format!("In a stack of {}", s.size)
+        });
+    }
     if let Some(issue) = row.scores.and_then(|s| s.describe()) {
         parts.push(issue);
     }
@@ -200,6 +207,44 @@ pub fn paint_issue(painter: &egui::Painter, left_top: Pos2, row: &PhotoRow, size
         s,
     );
     painter.circle_filled(Pos2::new(x, a.top() + size * 0.84), 1.0, theme::BG);
+}
+
+/// A stack's count on its top photo's cell (from `left_top`): filled while the stack is
+/// collapsed, outlined while it is open, so the grid says which photos stand for several.
+pub fn paint_stack(painter: &egui::Painter, left_top: Pos2, row: &PhotoRow, size: f32) {
+    let Some(stack) = row.stack.filter(|s| s.top == row.id || s.collapsed) else {
+        return;
+    };
+    let text = stack.size.to_string();
+    let font = egui::FontId::proportional(size * 0.85);
+    let galley = painter.layout_no_wrap(text, font, theme::BG);
+    let w = galley.size().x + size * 0.7;
+    let rect = Rect::from_min_size(left_top, egui::vec2(w.max(size * 1.4), size * 1.25));
+    // A second card behind, as a stack of prints.
+    painter.rect_stroke(
+        rect.translate(egui::vec2(2.0, -2.0)),
+        3.0,
+        Stroke::new(1.0, theme::INK),
+        egui::StrokeKind::Inside,
+    );
+    if stack.collapsed {
+        painter.rect_filled(rect, 3.0, theme::INK);
+        painter.galley(rect.center() - galley.size() / 2.0, galley, theme::BG);
+    } else {
+        painter.rect_filled(rect, 3.0, theme::BG);
+        painter.rect_stroke(
+            rect,
+            3.0,
+            Stroke::new(1.0, theme::INK),
+            egui::StrokeKind::Inside,
+        );
+        let galley = painter.layout_no_wrap(
+            stack.size.to_string(),
+            egui::FontId::proportional(size * 0.85),
+            theme::INK,
+        );
+        painter.galley(rect.center() - galley.size() / 2.0, galley, theme::INK);
+    }
 }
 
 /// The flag and label in a cell's top-right corner, right to left from `right_top`.

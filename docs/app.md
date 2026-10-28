@@ -678,6 +678,18 @@ eyes below 0.3; any face with both eyes closed). The dialog says what it found a
 `Flag::Rejected`). The grid paints `cull_ui::paint_issue`; `Sort::Sharpness` puts the
 sharpest first.
 
+Stacks (`lf_catalog::stacks`, schema v11: `stacks`, `photos.stack_id` with `ON DELETE SET
+NULL`, `fingerprints`) come back in `PhotoRow::stack` (id, top, size, collapsed).
+`Filter::arrange` shows a collapsed stack's top alone (its first shown photo when the filter
+hides the top). `library/stacks_ui.rs` saves changes on the `Io` lane (`Msg::Stacked`, then
+the rows are read again); Expand / collapse changes the rows on screen first. Auto-stack…
+(`dialogs/auto_stack.rs`, `stack_job::run` on `Long`, `Msg::StackProgress`) renders photos
+without a fresh fingerprint at 256 px as shot and stores a 64-bit difference hash, then
+`stacks::group` joins neighbours in capture order within the burst gap and 16 bits, and (if
+asked) any two photos within 4 bits, through union-find; the top is the sharpest scored
+photo, else the first taken. Photos already in a stack are left alone; a stack is never
+left with fewer than two photos.
+
 `crates/lf-ai/tests/models.rs` runs the real models when `LF_AI_DIR` names a folder holding
 them (`LF_AI_DOWNLOAD=1` fetches them there); otherwise those tests return at once.
 

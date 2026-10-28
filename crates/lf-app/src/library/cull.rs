@@ -200,9 +200,25 @@ impl Filter {
             && matches_text(row, &self.text)
     }
 
-    /// The ids the grid shows, in its order. `rows` come in capture order.
+    /// The ids the grid shows, in its order. `rows` come in capture order. A collapsed
+    /// stack shows only its top (or, when the filter hides the top, its first photo shown).
     pub fn arrange(&self, rows: &[PhotoRow]) -> Vec<i64> {
         let mut kept: Vec<&PhotoRow> = rows.iter().filter(|r| self.keeps(r)).collect();
+        let tops: std::collections::HashSet<i64> = kept
+            .iter()
+            .filter_map(|r| r.stack.filter(|s| s.top == r.id).map(|s| s.id))
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        kept.retain(|r| match r.stack {
+            Some(s) if s.collapsed => {
+                if tops.contains(&s.id) {
+                    r.id == s.top
+                } else {
+                    seen.insert(s.id)
+                }
+            }
+            _ => true,
+        });
         match self.sort {
             Sort::CaptureTime => {}
             Sort::FileName => kept.sort_by_cached_key(|r| {
@@ -376,6 +392,50 @@ mod tests {
         }
         .arrange(&rows);
         assert_eq!(sorted, [1, 3, 2, 4]);
+    }
+
+    #[test]
+    fn a_collapsed_stack_shows_its_top() {
+        use lf_catalog::stacks::Stack;
+        let mut rows = rows();
+        let stack = |collapsed| {
+            Some(Stack {
+                id: 7,
+                top: 3,
+                size: 3,
+                collapsed,
+            })
+        };
+        for r in &mut rows[1..] {
+            r.stack = stack(true);
+        }
+        assert_eq!(Filter::default().arrange(&rows), [1, 3]);
+        // Open: all of them.
+        for r in &mut rows[1..] {
+            r.stack = stack(false);
+        }
+        assert_eq!(Filter::default().arrange(&rows), [1, 2, 3, 4]);
+        // The filter hides the top: the first photo shown stands for the stack.
+        for r in &mut rows[1..] {
+            r.stack = stack(true);
+        }
+        let not_five = Filter {
+            min_rating: 0,
+            flag: FlagFilter::NotRejected,
+            ..Filter::default()
+        };
+        assert_eq!(not_five.arrange(&rows), [1, 3]);
+        let rejected = Filter {
+            flag: FlagFilter::Rejected,
+            ..Filter::default()
+        };
+        assert_eq!(rejected.arrange(&rows), [2]);
+        let three_stars = Filter {
+            min_rating: 3,
+            label: LabelFilter::None,
+            ..Filter::default()
+        };
+        assert_eq!(three_stars.arrange(&rows), [4]);
     }
 
     #[test]

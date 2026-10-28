@@ -63,6 +63,15 @@ pub enum Action {
     AiRemoveObjects,
     /// Score photos for blur and closed eyes, and offer to reject the ones that look wrong.
     AssistedCulling,
+    // Stacks
+    /// Gather the selected photos into a stack under the active one.
+    Stack,
+    /// Take apart the stacks of the selected photos.
+    Unstack,
+    /// Open or close the active photo's stack.
+    ToggleStack,
+    /// Find bursts and duplicates and stack them.
+    AutoStack,
     // Albums
     /// Make an album (with the selected photos).
     NewAlbum,
@@ -152,6 +161,10 @@ impl Action {
             Action::AiCutout => "Remove background…",
             Action::AiRemoveObjects => "Remove objects…",
             Action::AssistedCulling => "Assisted culling…",
+            Action::Stack => "Group into stack",
+            Action::Unstack => "Unstack",
+            Action::ToggleStack => "Expand / collapse stack",
+            Action::AutoStack => "Auto-stack…",
             Action::NewAlbum => "New album…",
             Action::NewSmartAlbum => "New smart album…",
             Action::AddToAlbum => "Add to album…",
@@ -228,6 +241,10 @@ const fn cmd(k: Key) -> KeyboardShortcut {
     KeyboardShortcut::new(Modifiers::COMMAND, k)
 }
 
+const fn shift(k: Key) -> KeyboardShortcut {
+    KeyboardShortcut::new(Modifiers::SHIFT, k)
+}
+
 const fn cmd_shift(k: Key) -> KeyboardShortcut {
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), k)
 }
@@ -262,6 +279,9 @@ pub const MAP: Map = Map(&[
     (Action::CopySettings, cmd_shift(Key::C)),
     (Action::PasteSettings, cmd_shift(Key::V)),
     (Action::SelectAll, cmd(Key::A)),
+    (Action::Stack, cmd(Key::G)),
+    (Action::Unstack, cmd_shift(Key::G)),
+    (Action::ToggleStack, shift(Key::S)),
     (Action::Previous, key(Key::ArrowLeft)),
     (Action::Next, key(Key::ArrowRight)),
     (Action::Up, key(Key::ArrowUp)),

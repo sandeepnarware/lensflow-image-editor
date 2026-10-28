@@ -23,6 +23,7 @@ pub mod merge_ui;
 pub mod meta_ui;
 pub mod print_ui;
 pub mod selection;
+pub mod stacks_ui;
 
 use crate::app::THUMBS_STOPPED_BANNER;
 use crate::catalog_ext::{self, count};
@@ -123,6 +124,8 @@ pub struct Library {
     start_ai_now: bool,
     /// Remove objects' painting dialog, while open.
     remove: Option<crate::dialogs::remove::RemoveDialog>,
+    /// Auto-stack's dialog, while open or running.
+    auto_stack: Option<crate::dialogs::auto_stack::AutoStackDialog>,
     local_ai: bool,
     /// Compare, while open (it shows in place of the grid).
     compare: Option<compare::Compare>,
@@ -231,6 +234,7 @@ impl Library {
             ai: None,
             start_ai_now: false,
             remove: None,
+            auto_stack: None,
             local_ai: false,
             compare: None,
             map: None,
@@ -480,6 +484,7 @@ impl Library {
             merge.stop.store(true, Ordering::SeqCst);
         }
         self.stop_ai();
+        self.stop_auto_stack();
     }
 
     /// The folder a running export writes to (its unfinished files are removed on quit).
@@ -881,6 +886,13 @@ impl Library {
             Msg::AiProgress(step) => self.ai_progress(step),
             Msg::RemoveRendered { id, result } => self.remove_rendered(id, result),
             Msg::AiDone(result) => self.ai_done(result, env),
+            Msg::StackProgress { done, total } => self.stack_progress(done, total),
+            Msg::Stacked { root, auto, result } => {
+                if auto {
+                    self.auto_stack_done();
+                }
+                self.stacked(root, result, env);
+            }
             Msg::Tile { key, result } => self.tile_arrived(key, result),
             Msg::LensProfile { photo_id, result } => match result {
                 Ok((name, lens)) => {
@@ -1397,6 +1409,7 @@ impl Library {
         self.album_dialogs(ui.ctx(), env);
         self.ai_dialog(ui.ctx(), env);
         self.remove_dialog(ui.ctx());
+        self.auto_stack_dialog(ui.ctx(), env);
         self.reveal_active = false;
     }
 
@@ -1461,6 +1474,12 @@ impl Library {
             }
             Action::AiRemoveObjects => {
                 self.ai_ready() && self.remove.is_none() && self.ai_targets().len() == 1
+            }
+            Action::Stack => self.can_stack(),
+            Action::Unstack => self.can_unstack(),
+            Action::ToggleStack => self.active_stack().is_some(),
+            Action::AutoStack => {
+                !develop && self.auto_stack.is_none() && !self.photos.is_empty() && self.can_add()
             }
             Action::AssistedCulling => {
                 !develop
@@ -1554,6 +1573,10 @@ impl Library {
             Action::AiCutout => self.open_ai(crate::ai_job::AiTool::Cutout),
             Action::AiRemoveObjects => self.open_remove(env),
             Action::AssistedCulling => self.open_cull(),
+            Action::Stack => self.stack_selected(env),
+            Action::Unstack => self.unstack_selected(env),
+            Action::ToggleStack => self.toggle_stack(env),
+            Action::AutoStack => self.open_auto_stack(),
             Action::NewAlbum => self.open_album_dialog(crate::dialogs::album::Purpose::New),
             Action::NewSmartAlbum => {
                 self.open_album_dialog(crate::dialogs::album::Purpose::NewSmart)

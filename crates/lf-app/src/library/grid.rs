@@ -370,6 +370,17 @@ pub(super) fn paint_cell(
             photo,
             mark + 2.0,
         );
+        let after_issue = if photo.scores.is_some_and(|s| s.issue()) {
+            mark + 6.0
+        } else {
+            0.0
+        };
+        cull_ui::paint_stack(
+            &painter,
+            egui::pos2(rect.left() + pad + after_issue, rect.top() + pad + 2.0),
+            photo,
+            mark,
+        );
         if with_name {
             cull_ui::paint_stars(
                 &painter,
