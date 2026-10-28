@@ -79,7 +79,8 @@ pub enum Destination {
 
 /// A file-name pattern (without the extension): `{name}` the original stem, `{seq}` 1-based
 /// and zero-padded to the width of the count, `{date}` `YYYY-MM-DD` (capture date, else the
-/// file's modified date), `{camera}` make and model with spaces as `-` (or `unknown`).
+/// file's modified date), `{camera}` make and model with spaces as `-` (or `unknown`),
+/// `{title}` the catalogue title (or the original stem).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Pattern(pub String);
 
@@ -285,8 +286,17 @@ fn plan_one(
     let stem = Path::new(&row.path)
         .file_stem()
         .map_or_else(|| "photo".into(), |s| s.to_string_lossy().into_owned());
+    // `{title}`: the catalogue title (else the file name), filled in before the other tokens.
+    let title = row
+        .meta
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map_or_else(|| safe_stem(&stem), str::to_owned);
+    let pattern = spec.rename.0.replace("{title}", &title);
     let name = file_name(
-        &spec.rename.0,
+        &pattern,
         &safe_stem(&stem),
         seq,
         count,

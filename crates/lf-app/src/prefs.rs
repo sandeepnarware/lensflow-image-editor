@@ -86,6 +86,8 @@ pub struct Prefs {
     pub studio_slug: Option<String>,
     pub frame_cache_bytes: u64,
     pub last_export: Option<serde_json::Value>,
+    /// Export presets saved by name (the export dialog's Preset bar).
+    pub export_presets: Vec<crate::dialogs::export_presets::ExportPreset>,
     /// "Import from a card" as it was last filled in.
     pub last_ingest: Option<IngestPrefs>,
     /// The application "Edit in external editor" opens copies in.
@@ -101,6 +103,7 @@ impl Default for Prefs {
             studio_slug: None,
             frame_cache_bytes: 4 << 30,
             last_export: None,
+            export_presets: Vec::new(),
             last_ingest: None,
             external_editor: None,
             develop_quality: DevelopQuality::default(),
@@ -162,6 +165,10 @@ mod tests {
             studio_slug: Some("sharma-studio".into()),
             frame_cache_bytes: 1 << 30,
             last_export: Some(serde_json::json!({ "format": "jpeg", "quality": 90 })),
+            export_presets: vec![crate::dialogs::export_presets::ExportPreset {
+                name: "Client web".into(),
+                spec: serde_json::json!({ "format": "png" }),
+            }],
             last_ingest: Some(IngestPrefs {
                 destination: Some(PathBuf::from("D:/Photos")),
                 rename: true,

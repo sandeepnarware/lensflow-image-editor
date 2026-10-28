@@ -6,6 +6,7 @@ pub mod about;
 pub mod album;
 pub mod batch;
 pub mod export;
+pub mod export_presets;
 pub mod gallery_export;
 pub mod group_picker;
 pub mod ingest;

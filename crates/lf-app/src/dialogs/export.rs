@@ -25,7 +25,7 @@ pub const CHOOSE: &str = "Choose a folder…";
 pub const WAITING: &str = "Waiting for the folder picker…";
 pub const TYPE_PATH: &str = "Or type a folder path";
 pub const USE_FOLDER: &str = "Use this folder";
-pub const TOKENS: &str = "Tokens: {name} {seq} {date} {camera}";
+pub const TOKENS: &str = "Tokens: {name} {seq} {date} {camera} {title}";
 pub const KEEPS_RUNNING: &str = "Closing this window does not stop the export.";
 /// Validation: shown under the Export button.
 pub const NO_FOLDER: &str = "Choose a folder to export to.";
@@ -298,6 +298,8 @@ pub enum ExportAction {
     CheckTyped(u64, PathBuf),
     /// Open the folder holding this file.
     ShowFolder(PathBuf),
+    /// The studio's export presets changed: remember these.
+    SavePresets(Vec<super::export_presets::ExportPreset>),
     /// Hide the window (an export still running carries on).
     Close,
 }
@@ -324,6 +326,9 @@ pub struct ExportDialog {
     /// The logo picker's latest ticket, and whether it is open.
     logo_ticket: u64,
     picking_logo: bool,
+    /// The studio's export presets (`prefs.export_presets`) and the bar choosing them.
+    pub presets: Vec<super::export_presets::ExportPreset>,
+    preset_bar: super::export_presets::PresetBar,
 }
 
 impl ExportDialog {
@@ -343,6 +348,8 @@ impl ExportDialog {
             start_ready: false,
             logo_ticket: 0,
             picking_logo: false,
+            presets: Vec::new(),
+            preset_bar: super::export_presets::PresetBar::default(),
         }
     }
 
@@ -496,6 +503,11 @@ impl ExportDialog {
 
     fn form_ui(&mut self, ui: &mut egui::Ui) -> ExportAction {
         let mut action = ExportAction::None;
+        if let Some(list) = self.preset_bar.ui(ui, &self.presets, &mut self.form) {
+            self.presets.clone_from(&list);
+            action = ExportAction::SavePresets(list);
+        }
+        ui.add_space(6.0);
         let f = &mut self.form;
         egui::Grid::new("export-form")
             .num_columns(2)

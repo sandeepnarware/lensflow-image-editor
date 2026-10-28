@@ -380,13 +380,18 @@ resolution through the GPU pipeline.
   as wide as asked (a fraction of the photo's width), as opaque as asked, in a corner or
   the centre, 3 % of the short side in. A watermark logo that cannot be read, or empty
   text, fails the run before anything is written.
+- Presets: the export dialog's Preset bar applies a built-in preset (Web 2048 px
+  JPEG, Full size JPEG, Print 16-bit TIFF) or one of the studio's own, saved with
+  "Save as preset…" (`prefs.export_presets`); a preset saved without a folder
+  keeps the folder already chosen.
 - Size: `Original`, `LongEdge`, `ShortEdge`, `Megapixels`, `Percent`. Only
   `Percent` can enlarge; the others never upscale.
 - Size: a `Percent` that would exceed the device's largest texture edge is
   refused for that photo (`TooLarge`).
 - Rename pattern tokens: `{name}` (original stem), `{seq}` (1-based, padded to
   the count's width), `{date}` (`YYYY-MM-DD`, capture date else file date),
-  `{camera}` (make and model with `-`, or `unknown`). Path-illegal characters
+  `{camera}` (make and model with `-`, or `unknown`), `{title}` (the catalogue
+  title, else the original stem). Path-illegal characters
   become `-`, and Windows reserved names get a `_` (checked on the whole file
   name, so a pattern of just `CON` is safe too).
 - Collisions are refused before anything is rendered: two photos on one path

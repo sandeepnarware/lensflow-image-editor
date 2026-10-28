@@ -35,7 +35,9 @@ impl Library {
             return;
         }
         let form = ExportForm::from_prefs(env.prefs.last_export.as_ref());
-        self.export = Some(ExportDialog::new(ids, form));
+        let mut dialog = ExportDialog::new(ids, form);
+        dialog.presets = env.prefs.export_presets.clone();
+        self.export = Some(dialog);
     }
 
     pub(super) fn export_dialog(&mut self, ctx: &egui::Context, env: &mut Env) {
@@ -93,6 +95,10 @@ impl Library {
                         network: false,
                     }))
                 });
+            }
+            ExportAction::SavePresets(list) => {
+                env.prefs.export_presets = list;
+                env.save_prefs();
             }
             ExportAction::ShowFolder(file) => {
                 if let Err(e) = platform::show_in_folder(&file) {

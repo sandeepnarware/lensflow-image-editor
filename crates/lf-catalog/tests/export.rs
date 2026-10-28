@@ -917,7 +917,13 @@ fn a_jpeg_carries_the_catalogues_metadata_as_xmp_and_exif() {
     let out = tempfile::tempdir().unwrap();
     let mut sp = spec(Format::Jpeg { quality: 90 }, out.path());
     sp.metadata = Metadata::All;
+    sp.rename = lf_catalog::export::Pattern("{title}-{seq}".into());
     let done = export::run(gpu, &c, &ids, &sp, &mut |_, _| ControlFlow::Continue(())).unwrap();
+    // `{title}` names the file after the catalogue title.
+    assert_eq!(
+        done.exported[0].path.file_name().unwrap(),
+        "Mehndi night-1.jpg"
+    );
     let bytes = std::fs::read(&done.exported[0].path).unwrap();
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.contains("http://ns.adobe.com/xap/1.0/"));

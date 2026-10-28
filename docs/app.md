@@ -289,6 +289,16 @@ click. A drag that starts in the empty space below or beside the cells draws a b
 too. Only the cells on screen are found by a box, and a box that stays in the gaps
 between cells selects nothing until it reaches one.
 
+### Export presets
+
+The export form's Preset bar (`dialogs/export_presets.rs`) lists three built-in presets and the
+studio's own (`prefs.export_presets`: a name and the `ExportSpec` JSON). Choosing one fills the
+form (`export_presets::apply`); a preset whose folder is empty keeps the folder already chosen,
+so "Client web 2048 px + watermark" can be saved before any folder is. "Save as preset…" names
+the current form (a same-named preset is replaced, case ignored) and "Delete preset" removes the
+chosen one of the studio's; both answer `ExportAction::SavePresets` and the library saves prefs.
+The file-name pattern also takes `{title}` (the catalogue title, else the original stem).
+
 ### Export to a gallery
 
 File → Export to gallery (or the Library tab's Export group) uploads the selected photos
