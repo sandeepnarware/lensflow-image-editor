@@ -104,6 +104,8 @@ blended into one natural-looking 16-bit TIFF beside the first, catalogued and re
 the middle photo, instead of as a faint double.
 Merge to panorama (`Ctrl+M`): a row of up to twelve overlapping photos stitched into one
 wide photo (single row, left to right or right to left).
+Focus stack (File → Merge): up to thirty photos of one subject focused at different depths,
+lined up and blended so each part comes from the photo where it is sharp.
 
 Print (`Ctrl+P`): the selection laid out on A4, Letter, A3 or photo papers, one a page or a
 contact sheet, with captions; opened as a PDF to print, or saved for a lab.

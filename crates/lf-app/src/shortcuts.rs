@@ -76,6 +76,8 @@ pub enum Action {
     MergeHdr,
     /// Stitch a row of photos (the selected ones, in the grid's order) into a panorama.
     MergePanorama,
+    /// Stack the selected photos (focused at different depths) into one sharp throughout.
+    MergeFocus,
     AddVersion,
     ResetAll,
     /// Exposure and the tone sliders from the photo.
@@ -152,6 +154,7 @@ impl Action {
             Action::EditIn => "Edit in external editor…",
             Action::MergeHdr => "Merge to HDR…",
             Action::MergePanorama => "Merge to panorama…",
+            Action::MergeFocus => "Focus stack…",
             Action::AddVersion => "Add version…",
             Action::ResetAll => "Reset all edits",
             Action::AutoTone => "Auto tone",

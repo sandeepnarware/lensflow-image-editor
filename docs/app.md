@@ -734,6 +734,15 @@ differs by more than about 40 % (|ln| > 0.35, clipped pixels not judged) its wei
 away through a grown and softened ghost map (`ghost_map`), so a moving subject comes from the
 reference alone. The reference keeps a small weight everywhere, so no pixel is left with none.
 
+### Focus stack
+
+File → Merge → Focus stack (`Action::MergeFocus`, `MergeKind::Focus`: 2 to 30 frames, worked at
+4000 px, `-Focus.tif`) lines every frame up with the middle one (`lf_merge::align`) and blends
+them with `lf_merge::stack_focus`: the same Laplacian-pyramid blend as exposure fusion, with
+each frame's weight its local sharpness (|Laplacian| of the grey image, box-averaged over about
+1/150 of the frame, to the fourth power, so the sharpest frame clearly wins). Lining up is
+translation only: a lens whose framing breathes with focus may leave soft edges.
+
 ### Merge to panorama
 
 `Ctrl+M` (File → Merge; `Action::MergePanorama`) stitches two to twelve selected photos,

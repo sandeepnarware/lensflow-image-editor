@@ -419,9 +419,70 @@ pub fn ghost_map(reference: &[f32], other: &[f32], w: usize, h: usize) -> Vec<f3
     pass(&pass(&grown, true, false), false, false)
 }
 
+/// Focus stacking: frames of one subject focused at different depths, already lined up, made
+/// into one sharp throughout. Each pixel is taken from the frames where it is in focus: the
+/// weight is the local sharpness (the grey image's Laplacian, averaged over a small window and
+/// raised to a power so the sharpest frame clearly wins), blended through the same Laplacian
+/// pyramids as [`fuse`], so the joins do not show.
+pub fn stack_focus(count: usize, frame: impl FnMut(usize) -> Rgb) -> Result<Rgb, MergeError> {
+    fuse_inner(count, None, sharpness, frame)
+}
+
+/// Each pixel's sharpness: |Laplacian| of the grey image, box-averaged over a window about
+/// 1/150 of the frame wide, to the fourth power.
+fn sharpness(img: &Rgb) -> Vec<f32> {
+    let g = grey(img);
+    let (w, h) = (img.w, img.h);
+    let mut lap = vec![0.0f32; w * h];
+    lap.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        for (x, cell) in row.iter_mut().enumerate() {
+            let at = |dx: i32, dy: i32| {
+                let xx = (x as i32 + dx).clamp(0, w as i32 - 1) as usize;
+                let yy = (y as i32 + dy).clamp(0, h as i32 - 1) as usize;
+                g.data[yy * w + xx]
+            };
+            *cell = (at(-1, 0) + at(1, 0) + at(0, -1) + at(0, 1) - 4.0 * at(0, 0)).abs();
+        }
+    });
+    let r = (w.max(h) / 150).max(2);
+    let pass = |src: &[f32], horizontal: bool| -> Vec<f32> {
+        let mut out = vec![0.0f32; w * h];
+        out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+            for (x, cell) in row.iter_mut().enumerate() {
+                let mut s = 0.0f32;
+                for k in 0..=2 * r {
+                    let (sx, sy) = if horizontal {
+                        ((x + k).saturating_sub(r).min(w - 1), y)
+                    } else {
+                        (x, (y + k).saturating_sub(r).min(h - 1))
+                    };
+                    s += src[sy * w + sx];
+                }
+                *cell = s / (2 * r + 1) as f32;
+            }
+        });
+        out
+    };
+    pass(&pass(&lap, true), false)
+        .into_iter()
+        .map(|v| (v * 20.0).powi(4) + 1e-12)
+        .collect()
+}
+
 fn fuse_with(
     count: usize,
     reference: Option<usize>,
+    frame: impl FnMut(usize) -> Rgb,
+) -> Result<Rgb, MergeError> {
+    fuse_inner(count, reference, weights, frame)
+}
+
+/// Blends `count` frames through Laplacian pyramids by the weights `weigh` gives each, with
+/// ghosts against `reference` left out when one is given.
+fn fuse_inner(
+    count: usize,
+    reference: Option<usize>,
+    weigh: fn(&Rgb) -> Vec<f32>,
     mut frame: impl FnMut(usize) -> Rgb,
 ) -> Result<Rgb, MergeError> {
     if count < 2 {
@@ -437,7 +498,7 @@ fn fuse_with(
         } else if (img.w, img.h) != (w, h) {
             return Err(MergeError::SizesDiffer);
         }
-        all.push(weights(&img));
+        all.push(weigh(&img));
     }
     if let Some(r) = reference {
         let base = lumas(&frame(r));
@@ -677,5 +738,47 @@ mod ghost_tests {
         let a = lumas(&shot(1.0, None));
         let b = lumas(&shot(0.5, None));
         assert!(ghost_map(&a, &b, 96, 64).iter().all(|&g| g < 1e-6));
+    }
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+
+    /// A fine checker over the whole frame, sharp where `sharp(x)` says and blurred elsewhere.
+    fn shot(sharp: impl Fn(usize) -> bool) -> Rgb {
+        let (w, h) = (120, 60);
+        let mut img = Rgb::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let v = if sharp(x) {
+                    if (x / 2 + y / 2) % 2 == 0 { 0.8 } else { 0.2 }
+                } else {
+                    0.5
+                };
+                img.data[(y * w + x) * 3..(y * w + x) * 3 + 3].copy_from_slice(&[v, v, v]);
+            }
+        }
+        img
+    }
+
+    /// How much detail there is around `x` (the spread of a row's values).
+    fn detail(img: &Rgb, x0: usize) -> f32 {
+        let row: Vec<f32> = (x0..x0 + 10)
+            .map(|x| img.data[(30 * img.w + x) * 3])
+            .collect();
+        row.iter().copied().fold(0.0, f32::max) - row.iter().copied().fold(1.0, f32::min)
+    }
+
+    #[test]
+    fn each_part_comes_from_the_frame_where_it_is_sharp() {
+        // Near half sharp in one frame, far half sharp in the other.
+        let frames = [shot(|x| x < 60), shot(|x| x >= 60)];
+        let out = stack_focus(2, |i| frames[i].clone()).unwrap();
+        assert!(detail(&out, 15) > 0.5, "left {}", detail(&out, 15));
+        assert!(detail(&out, 95) > 0.5, "right {}", detail(&out, 95));
+        // An average would have halved it.
+        let avg = fuse(2, |i| frames[i].clone()).unwrap();
+        assert!(detail(&out, 15) > detail(&avg, 15));
     }
 }

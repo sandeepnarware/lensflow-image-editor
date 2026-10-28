@@ -16,12 +16,14 @@ pub const STOP: &str = "Stop";
 pub const DEGHOST: &str = "Remove ghosts (people or branches that moved)";
 pub const ABOUT_HDR: &str = "The photos are lined up and blended, each part taken from the frames where it is best exposed. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
 pub const ABOUT_PANORAMA: &str = "The photos are stitched in their order in the grid, left to right or right to left, one row. Neighbours should overlap by a third or so. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
+pub const ABOUT_FOCUS: &str = "The photos (one subject, focused at different depths) are lined up and each part is taken from the photo where it is sharp. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
 
 /// "Merge 3 photos to HDR", "Merge 5 photos to a panorama".
 pub fn title(kind: MergeKind, n: usize) -> String {
     match kind {
         MergeKind::Hdr => format!("Merge {} photos to HDR", count(n)),
         MergeKind::Panorama => format!("Merge {} photos to a panorama", count(n)),
+        MergeKind::Focus => format!("Stack {} photos for focus", count(n)),
     }
 }
 
@@ -88,6 +90,7 @@ impl MergeDialog {
                     let about = match self.kind {
                         MergeKind::Hdr => ABOUT_HDR,
                         MergeKind::Panorama => ABOUT_PANORAMA,
+                        MergeKind::Focus => ABOUT_FOCUS,
                     };
                     ui.label(RichText::new(about).color(theme::MUTED));
                     if self.kind == MergeKind::Hdr {

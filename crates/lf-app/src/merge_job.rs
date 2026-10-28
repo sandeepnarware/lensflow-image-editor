@@ -25,6 +25,8 @@ use lf_settings::{DevelopSettings, EditSettings};
 pub enum MergeKind {
     Hdr,
     Panorama,
+    /// Focus stacking: one subject focused at different depths.
+    Focus,
 }
 
 impl MergeKind {
@@ -33,6 +35,7 @@ impl MergeKind {
         match self {
             MergeKind::Hdr => 7,
             MergeKind::Panorama => 12,
+            MergeKind::Focus => 30,
         }
     }
 
@@ -41,6 +44,7 @@ impl MergeKind {
         match self {
             MergeKind::Hdr => 5000,
             MergeKind::Panorama => 3000,
+            MergeKind::Focus => 4000,
         }
     }
 
@@ -49,6 +53,7 @@ impl MergeKind {
         match self {
             MergeKind::Hdr => "HDR",
             MergeKind::Panorama => "Pano",
+            MergeKind::Focus => "Focus",
         }
     }
 }
@@ -165,6 +170,7 @@ pub fn run(
     }
     let merged = match kind {
         MergeKind::Hdr => fuse_bracket(frames, deghost)?,
+        MergeKind::Focus => stack(frames)?,
         MergeKind::Panorama => {
             let rgb: Vec<Rgb> = frames.iter().map(Held::rgb).collect();
             drop(frames);
@@ -195,6 +201,21 @@ fn fuse_bracket(mut frames: Vec<Held>, deghost: bool) -> Result<Rgb, String> {
         lf_merge::fuse(frames.len(), |i| frames[i].rgb())
     }
     .map_err(|e| e.to_string())
+}
+
+/// A focus stack: every frame lined up with the middle one, then each part taken from the
+/// frame where it is sharp.
+fn stack(mut frames: Vec<Held>) -> Result<Rgb, String> {
+    let middle = frames.len() / 2;
+    let reference = frames[middle].rgb();
+    for (i, frame) in frames.iter_mut().enumerate() {
+        if i != middle {
+            frame.shift = lf_merge::align(&reference, &frame.rgb(), 6);
+            log::info!("focus frame {i} moved by {:?}", frame.shift);
+        }
+    }
+    drop(reference);
+    lf_merge::stack_focus(frames.len(), |i| frames[i].rgb()).map_err(|e| e.to_string())
 }
 
 /// Writes `merged` as a 16-bit TIFF with the sRGB profile beside `first`, through a
