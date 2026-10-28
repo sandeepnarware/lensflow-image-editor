@@ -167,6 +167,8 @@ cargo test --workspace                   # includes the 228-render parity suite
   Export finishing: sharpening, watermark, sRGB profile, WebP, EXIF in PNG/WebP
   (`lf_catalog::finish`). White balance eyedropper, Auto WB and Auto tone (`develop/auto.rs`, `ToolKind::WhiteBalance`,
   `lf_settings::shader_values::{wb_gains, neutral_wb}`).
+- Feature gaps against Lightroom, Capture One, DxO and Luminar, with a recommended order:
+  `docs/competitor-analysis.md`.
 - Part 2d plan: `docs/plans/2026-10-26-packaging-and-release.md`; progress ledger in
   `.superpowers/sdd/2026-10-26-packaging-and-release/progress.md`.
 - Merged: Task 1 app release plumbing (PR #59), Task 2 packaging inputs (PR #58).
