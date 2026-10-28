@@ -191,6 +191,12 @@ pub enum Msg {
     IngestDone(Result<(PathBuf, lf_catalog::ingest::IngestOutcome), String>),
     /// A `.cube` LUT was copied into the catalogue and loaded (its name), or why not.
     LutImported(Result<String, String>),
+    /// "Edit in external editor" made its copy and opened it: the copy and why the editor did not start (if it did not), or why no copy was made.
+    EditInDone(Result<(PathBuf, Option<String>), String>),
+    /// Printing moved on.
+    PrintProgress { done: usize, total: usize },
+    /// The PDF was written (its path, and whether it was opened to print), or why not.
+    PrintDone(Result<(PathBuf, bool), String>),
 
     #[cfg(test)]
     Probe(&'static str),
@@ -716,7 +722,10 @@ pub(crate) mod owners {
             | Msg::IngestPlanned(..)
             | Msg::IngestProgress { .. }
             | Msg::IngestDone(..)
-            | Msg::LutImported(..) => Owner::Library,
+            | Msg::LutImported(..)
+            | Msg::EditInDone(..)
+            | Msg::PrintProgress { .. }
+            | Msg::PrintDone(..) => Owner::Library,
             Msg::DeviceReset(..) => Owner::App,
             Msg::Probe(..) => Owner::Test,
         }
@@ -823,6 +832,9 @@ pub(crate) mod owners {
             Msg::IngestProgress { done: 1, total: 2 },
             Msg::IngestDone(Err("no".into())),
             Msg::LutImported(Err("no".into())),
+            Msg::EditInDone(Err("no".into())),
+            Msg::PrintProgress { done: 1, total: 2 },
+            Msg::PrintDone(Err("no".into())),
             Msg::DeviceReset(device_reset::Choice::Quit),
             Msg::Probe("probe"),
         ]

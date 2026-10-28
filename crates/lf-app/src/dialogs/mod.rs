@@ -11,6 +11,7 @@ pub mod ingest;
 pub mod keys;
 pub mod match_reference;
 pub mod preferences;
+pub mod print;
 pub mod quit;
 pub mod save_preset;
 

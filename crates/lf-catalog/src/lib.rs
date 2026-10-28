@@ -12,6 +12,7 @@ pub mod ingest;
 pub mod meta;
 pub mod model;
 pub mod presets;
+pub mod print;
 pub mod sidecar;
 pub mod thumbs;
 pub mod versions;

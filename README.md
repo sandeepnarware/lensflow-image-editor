@@ -87,6 +87,13 @@ The bar over the grid shows only some flags, ratings or labels and sorts by
 capture time, file name or rating. Marks live in the catalogue, not in the edit
 files. See [docs/app.md](docs/app.md).
 
+Edit in external editor (`Ctrl+E`): a 16-bit TIFF copy with the edits, beside the photo,
+opened in the application you choose once (Photoshop, Affinity, …) and catalogued next to
+the original.
+
+Print (`Ctrl+P`): the selection laid out on A4, Letter, A3 or photo papers, one a page or a
+contact sheet, with captions; opened as a PDF to print, or saved for a lab.
+
 LUT looks (Develop → LUT look): `.cube` 3D LUTs imported into the catalogue, applied to
 the finished colour with an amount; desktop only (`desktop.lut`).
 
@@ -114,6 +121,8 @@ and the tool keys work only in Develop.
 |-----|--------|
 | `G` / `D` | Library / Develop |
 | `Ctrl+Shift+E` | Export… |
+| `Ctrl+E` | Edit in external editor… |
+| `Ctrl+P` | Print… |
 | `R` | Crop and straighten |
 | `Q` | Heal and clone spots |
 | `W` | White balance eyedropper (click something grey or white) |

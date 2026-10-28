@@ -88,6 +88,8 @@ pub struct Prefs {
     pub last_export: Option<serde_json::Value>,
     /// "Import from a card" as it was last filled in.
     pub last_ingest: Option<IngestPrefs>,
+    /// The application "Edit in external editor" opens copies in.
+    pub external_editor: Option<PathBuf>,
     pub develop_quality: DevelopQuality,
 }
 
@@ -100,6 +102,7 @@ impl Default for Prefs {
             frame_cache_bytes: 4 << 30,
             last_export: None,
             last_ingest: None,
+            external_editor: None,
             develop_quality: DevelopQuality::default(),
         }
     }
@@ -166,6 +169,7 @@ mod tests {
                 backup: None,
                 skip_duplicates: false,
             }),
+            external_editor: Some(PathBuf::from("C:/Apps/Editor.exe")),
             develop_quality: DevelopQuality::Fast,
         };
         prefs.save(&config).unwrap();

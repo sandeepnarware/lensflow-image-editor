@@ -1,6 +1,6 @@
 //! File → Preferences: the catalogue folder (shown, with "Change…", which restarts the
 //! library on another one), the frame cache's size, how carefully RAW photos are decoded for
-//! Develop, and where the log is. Each change is saved at once.
+//! Develop, the external editor (shown, with "Forget"), and where the log is. Each change is saved at once.
 
 use crate::prefs::{DevelopQuality, Prefs};
 use crate::theme;
@@ -19,6 +19,10 @@ pub const BEST: &str = "Best";
 pub const FAST: &str = "Fast";
 pub const QUALITY_NOTE: &str =
     "Fast opens RAW photos sooner, with a little less detail. Photos opened from now on use it.";
+pub const EDITOR: &str = "External editor";
+pub const NO_EDITOR: &str = "None chosen yet.";
+pub const FORGET: &str = "Forget";
+pub const EDITOR_NOTE: &str = "Edit in external editor (Ctrl+E) opens a TIFF copy in this application. Forget it to choose another the next time.";
 pub const LOGS: &str = "Log folder";
 pub const SHOW_LOGS: &str = "Show";
 
@@ -105,6 +109,21 @@ pub fn show(ctx: &egui::Context, prefs: &mut Prefs, view: &PrefsView) -> Option<
             }
         });
         ui.label(RichText::new(QUALITY_NOTE).small());
+        ui.add_space(12.0);
+
+        ui.label(RichText::new(EDITOR).strong());
+        ui.horizontal(|ui| {
+            let shown = prefs
+                .external_editor
+                .as_ref()
+                .map_or_else(|| NO_EDITOR.to_owned(), |p| p.display().to_string());
+            ui.label(RichText::new(shown).color(theme::MUTED));
+            if prefs.external_editor.is_some() && ui.button(FORGET).clicked() {
+                prefs.external_editor = None;
+                action = Some(PrefsAction::Changed);
+            }
+        });
+        ui.label(RichText::new(EDITOR_NOTE).small());
         ui.add_space(12.0);
 
         ui.label(RichText::new(LOGS).strong());

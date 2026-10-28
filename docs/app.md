@@ -424,6 +424,8 @@ even if the filter would hide it.
 | `G` | Library |
 | `D` | Develop (the active photo) |
 | `Ctrl+Shift+E` | Export… |
+| `Ctrl+E` | Edit in external editor… |
+| `Ctrl+P` | Print… |
 | `R` | Crop and straighten tool |
 | `Q` | Heal and clone spots tool |
 | `W` | White balance eyedropper (click something grey or white) |
@@ -520,3 +522,28 @@ before vignette and grain, each grid point at a texel centre) and mixes it in by
 `lut_amount` (the uniform that was the lens block's padding). A LUT that is not loaded (a
 sidecar from another machine) renders as none, and the panel says so. With no LUT,
 `lut_amount` is 0 and the pass is the web's: the parity gate is untouched.
+
+### Edit in external editor
+
+`Ctrl+E` (Develop → Edit in…; `Action::EditIn`) renders the photo open in Develop (or the
+active one) with its edits to a 16-bit TIFF beside it (`edit_in::render_copy`, through the
+disk export: `<name>-Edit.tif`, `-Edit-2`, … when taken), opens it in the external editor,
+and rescans the catalogue folder it lies in so the copy shows next to the original. The
+editor is chosen once with an application picker (an `.exe` on Windows, an `.app` on macOS)
+and kept in `prefs.external_editor`; Preferences shows it with "Forget". When the editor
+cannot be started the copy is still made and catalogued, and a toast says why. The original
+is never touched; the editor saves into the copy, and a rescan picks its changes up.
+
+### Print
+
+`Ctrl+P` (File → Print; `Action::Print`) opens the print dialog (`dialogs/print.rs`) for the
+selection or the photo open in Develop: paper (A4, Letter, A3, 4×6, 5×7, 8×10, 12×18 in),
+photos per page (1, 2, 4, or 9 and 20 for a contact sheet), orientation (automatic follows
+each page's first photo), margins and a caption (file name, or the catalogue's title).
+"Print…" writes a PDF into the app's cache (`print/`) and opens it in the system's viewer
+to print; "Save PDF…" asks where (for a lab). The run (`print_job::run`, `Long` lane, with
+Stop) renders each photo through the disk export as a JPEG sized for 300 dpi in its cell
+(`PrintSpec::render_edge`, at most 6000 px, standard output sharpening), and
+`lf_catalog::print::pdf` writes the pages: a small hand-written PDF 1.4 with the JPEGs placed
+as they are (`DCTDecode`, nothing compressed twice) and captions in the built-in Helvetica
+(characters outside WinAnsi print as `?`).

@@ -39,6 +39,10 @@ pub enum Purpose {
     Watermark,
     /// A `.cube` file for Develop's LUT look.
     LutFile,
+    /// The application "Edit in external editor" uses.
+    Editor,
+    /// Where Print's "Save PDF" writes.
+    PrintPdf,
     /// One of "Import from a card"'s folders; its own tickets.
     Ingest(crate::dialogs::ingest::Pick),
 }
@@ -202,6 +206,8 @@ impl Library {
             Purpose::Watermark => "Choose a logo for the watermark",
             Purpose::Ingest(_) => "Choose a folder",
             Purpose::LutFile => "Choose a .cube LUT",
+            Purpose::Editor => "Choose an application",
+            Purpose::PrintPdf => "Save the PDF",
         };
         on_own_thread(env.jobs.reporter(), purpose, ticket, move || {
             let picked = rfd::FileDialog::new().set_title(title).pick_folder();
@@ -239,6 +245,21 @@ impl Library {
         if purpose == Purpose::ExportTo {
             if let Some(dialog) = &mut self.export {
                 dialog.folder_chosen(ticket, result.map(|c| c.map(|c| c.path)));
+            }
+            return;
+        }
+        if purpose == Purpose::PrintPdf {
+            match result {
+                Ok(chosen) => self.print_save_chosen(chosen.map(|c| c.path), env),
+                Err(e) => env.toasts.push(Level::Warning, e),
+            }
+            return;
+        }
+        if purpose == Purpose::Editor {
+            match result {
+                Ok(Some(chosen)) => self.editor_chosen(chosen.path, env),
+                Ok(None) => {}
+                Err(e) => env.toasts.push(Level::Warning, e),
             }
             return;
         }
@@ -282,7 +303,12 @@ impl Library {
         match purpose {
             Purpose::Root if chosen.network => self.stage = Stage::NetworkWarning(chosen.path),
             Purpose::Root => self.use_root(chosen.path, env),
-            Purpose::ExportTo | Purpose::Watermark | Purpose::Ingest(_) | Purpose::LutFile => {}
+            Purpose::ExportTo
+            | Purpose::Watermark
+            | Purpose::Ingest(_)
+            | Purpose::LutFile
+            | Purpose::Editor
+            | Purpose::PrintPdf => {}
             Purpose::AddFolder => {
                 if self.adding {
                     self.adding = false;

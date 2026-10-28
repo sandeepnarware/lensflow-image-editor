@@ -2321,3 +2321,76 @@ fn an_imported_lut_goes_on_the_open_photo_and_stays_with_the_catalogue() {
             .exists()
     );
 }
+
+#[test]
+fn edit_in_makes_a_tiff_copy_beside_the_photo_and_catalogues_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 1);
+    import_folder(&mut h, &shoot, 1);
+    let id = h.state().lib.photos()[0].id;
+    h.state_mut().lib.selection.click(id);
+    // A stand-in "editor" that exists but is not an application: the copy is still made
+    // and catalogued, and the toast says the editor could not start.
+    let editor = dir.path().join("not-an-editor.txt");
+    std::fs::write(&editor, b"x").unwrap();
+    h.state_mut().prefs.external_editor = Some(editor);
+    assert!(run_action(&mut h, Action::EditIn));
+    step_until(&mut h, "the copy catalogued", |s| {
+        !s.lib.importing() && s.lib.photos().len() == 2
+    });
+    assert!(shoot.join("p0-Edit.tif").exists());
+    assert!(shoot.join("p0.png").exists(), "the original stays");
+}
+
+#[test]
+fn print_writes_a_pdf_of_the_selection() {
+    use lf_app::dialogs::print;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 3);
+    import_folder(&mut h, &shoot, 3);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    h.state_mut().lib.selection.select_all(&ids);
+    assert!(run_action(&mut h, Action::Print));
+    h.step();
+    h.step();
+    h.get_by_label("Print 3 photos");
+    h.get_by_role_and_label(Role::ComboBox, print::LAYOUT);
+    // "Save PDF…" with the picker's answer given directly.
+    let spec = h.state().lib.print().unwrap().spec();
+    let out = dir.path().join("proofs.pdf");
+    {
+        let s = h.state_mut();
+        let mut env = Env {
+            jobs: &s.jobs,
+            toasts: &mut s.toasts,
+            prefs: &mut s.prefs,
+            config_dir: &s.config,
+        };
+        s.lib.start_print(spec, out.clone(), false, &mut env);
+    }
+    step_until(&mut h, "the PDF written", |s| {
+        s.lib
+            .print()
+            .is_some_and(|d| matches!(d.stage, print::Stage::Done(..)))
+    });
+    let doc = std::fs::read(&out).unwrap();
+    assert!(doc.starts_with(b"%PDF"));
+    assert_eq!(
+        String::from_utf8_lossy(&doc)
+            .matches("/Type /Page ")
+            .count(),
+        3,
+        "one photo a page"
+    );
+    h.get_by_label(print::CLOSE).click();
+    h.step();
+    assert!(h.state().lib.print().is_none());
+}

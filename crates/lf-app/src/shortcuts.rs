@@ -19,6 +19,8 @@ pub enum Action {
     Export,
     /// Upload the selected photos to a LensFlow gallery (while the plan allows it).
     ExportToGallery,
+    /// Lay the selected photos out on pages and print them (through a PDF).
+    Print,
     Quit,
     // Edit
     Undo,
@@ -40,6 +42,8 @@ pub enum Action {
     Metadata,
     // Photo
     MatchReference,
+    /// Render the photo to a TIFF beside it and open it in the studio's external editor.
+    EditIn,
     AddVersion,
     ResetAll,
     /// Exposure and the tone sliders from the photo.
@@ -83,6 +87,7 @@ impl Action {
             Action::ImportFromCard => "Import from card…",
             Action::Export => "Export…",
             Action::ExportToGallery => "Export to gallery…",
+            Action::Print => "Print…",
             Action::Quit => "Quit",
             Action::Undo => "Undo",
             Action::Redo => "Redo",
@@ -99,6 +104,7 @@ impl Action {
             Action::ToggleZoom => "Fit / 100 %",
             Action::Metadata => "Metadata panel",
             Action::MatchReference => "Match a reference…",
+            Action::EditIn => "Edit in external editor…",
             Action::AddVersion => "Add version…",
             Action::ResetAll => "Reset all edits",
             Action::AutoTone => "Auto tone",
@@ -178,6 +184,8 @@ pub const MAP: Map = Map(&[
     (Action::Library, key(Key::G)),
     (Action::Develop, key(Key::D)),
     (Action::Export, cmd_shift(Key::E)),
+    (Action::EditIn, cmd(Key::E)),
+    (Action::Print, cmd(Key::P)),
     (Action::CropTool, key(Key::R)),
     (Action::SpotTool, key(Key::Q)),
     (Action::WhiteBalanceTool, key(Key::W)),
@@ -334,6 +342,8 @@ mod tests {
             (Action::Library, key(Key::G)),
             (Action::Develop, key(Key::D)),
             (Action::Export, cmd_shift(Key::E)),
+            (Action::EditIn, cmd(Key::E)),
+            (Action::Print, cmd(Key::P)),
             (Action::CropTool, key(Key::R)),
             (Action::SpotTool, key(Key::Q)),
             (Action::WhiteBalanceTool, key(Key::W)),

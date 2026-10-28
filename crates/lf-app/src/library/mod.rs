@@ -7,6 +7,7 @@
 
 pub mod cull;
 pub mod cull_ui;
+pub mod edit_in_ui;
 pub mod export_ui;
 pub mod filmstrip;
 pub mod gallery_ui;
@@ -15,6 +16,7 @@ pub mod import_ui;
 pub mod ingest_ui;
 pub mod lut_ui;
 pub mod meta_ui;
+pub mod print_ui;
 pub mod selection;
 
 use crate::app::THUMBS_STOPPED_BANNER;
@@ -123,6 +125,9 @@ pub struct Library {
     meta: meta_ui::MetaPanel,
     /// "Import from a card", while open or while its copy runs.
     ingest: Option<crate::dialogs::ingest::IngestDialog>,
+    /// File → Print, while open; and the layout waiting for the "Save PDF" answer.
+    print: Option<crate::dialogs::print::PrintDialog>,
+    print_pending: Option<lf_catalog::print::PrintSpec>,
     pub selection: Selection,
     /// The box being dragged over the grid, while the mouse button is down.
     pub marquee: Option<grid::Marquee>,
@@ -229,6 +234,8 @@ impl Library {
             gallery_link: None,
             meta: meta_ui::MetaPanel::default(),
             ingest: None,
+            print: None,
+            print_pending: None,
             keep: None,
             keys: Keys::default(),
         }
@@ -412,6 +419,9 @@ impl Library {
         }
         if let Some(ingest) = &self.ingest {
             ingest.stop.store(true, Ordering::SeqCst);
+        }
+        if let Some(print) = &self.print {
+            print.stop.store(true, Ordering::SeqCst);
         }
     }
 
@@ -794,6 +804,9 @@ impl Library {
             Msg::IngestPlanned(result) => self.ingest_planned(result),
             Msg::IngestProgress { done, total } => self.ingest_progress(done, total),
             Msg::IngestDone(result) => self.ingest_done(result, env),
+            Msg::EditInDone(result) => self.edit_in_done(result, env),
+            Msg::PrintProgress { done, total } => self.print_progress(done, total),
+            Msg::PrintDone(result) => self.print_done(result),
             Msg::LutImported(result) => match result {
                 Ok(name) => {
                     env.toasts
@@ -1235,6 +1248,7 @@ impl Library {
         self.export_dialog(ui.ctx(), env);
         self.gallery_dialog(ui.ctx(), env);
         self.ingest_dialog(ui.ctx(), env);
+        self.print_dialog(ui.ctx(), env);
         self.reveal_active = false;
     }
 
@@ -1249,6 +1263,7 @@ impl Library {
             || self.export.as_ref().is_some_and(|d| d.visible)
             || self.gallery.as_ref().is_some_and(|d| d.visible)
             || self.ingest.as_ref().is_some_and(|d| d.visible)
+            || self.print.is_some()
     }
 
     /// Whether `action` (a menu item or a key) is possible now in the library or Develop.
@@ -1269,6 +1284,8 @@ impl Library {
             Action::Redo => develop && self.develop.can_redo(),
             Action::CopySettings => self.copy_source().is_some(),
             Action::PasteSettings | Action::ApplyToSelected | Action::MatchReference => selected,
+            Action::EditIn => (develop || selected) && self.can_add(),
+            Action::Print => develop || selected,
             Action::SelectAll | Action::Previous | Action::Next => !self.order.is_empty(),
             Action::Metadata => !develop,
             Action::Library => develop,
@@ -1320,6 +1337,8 @@ impl Library {
             // The filmstrip in Develop too: the open photo stays the active one.
             Action::SelectAll => self.selection.select_all(&self.order),
             Action::MatchReference => self.open_match(),
+            Action::EditIn => self.edit_in(env),
+            Action::Print => self.open_print(),
             Action::Library => {
                 self.mode = Mode::Library;
                 if self.filter.narrows() {

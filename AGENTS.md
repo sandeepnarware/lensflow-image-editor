@@ -132,6 +132,9 @@ cargo test --workspace                   # includes the 228-render parity suite
   `Filter::text`).
   LUT looks: `lf_settings::lut` (`.cube` parser, `desktop.lut`), `lf_pipeline::lut` (process-wide
   registry, 3D texture at bindings 15–16, `lut_amount` uniform), `luts.rs` (`.lensflow/luts/`).
+  Edit in external editor: `edit_in.rs`, `library/edit_in_ui.rs`, `prefs.external_editor`.
+  Print to PDF: `lf_catalog::print` (hand-written PDF, JPEGs as DCTDecode), `print_job.rs`,
+  `dialogs/print.rs`, `library/print_ui.rs`.
   Import from card: copy, rename, backup, suspected duplicates (`lf_catalog::ingest`,
   `dialogs/ingest.rs`, `library/ingest_ui.rs`, `Action::ImportFromCard`).
   Export to a gallery: `lf_account::galleries` (upload sessions, chunked or direct), `gallery_job.rs`,
