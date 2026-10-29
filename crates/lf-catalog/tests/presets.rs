@@ -168,7 +168,7 @@ fn migration_6_keeps_existing_presets_under_no_studio() {
         .unwrap();
     }
     let c = Catalog::open(dir.path()).unwrap();
-    assert_eq!(c.schema_version().unwrap(), 11);
+    assert_eq!(c.schema_version().unwrap(), 12);
     let rows = presets::list(&c, 0).unwrap();
     assert_eq!(names(&rows), ["Old"]);
     assert_eq!(rows[0].remote_id, Some(4));

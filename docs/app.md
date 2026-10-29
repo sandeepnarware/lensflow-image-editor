@@ -692,6 +692,22 @@ asked) any two photos within 4 bits, through union-find; the top is the sharpest
 photo, else the first taken. Photos already in a stack are left alone; a stack is never
 left with fewer than two photos.
 
+People (AI → Find people, `AiTool::FindPeople`, `ai_job::find_people` on `Long`) renders
+photos without a fresh scan as shot at 2048 px and asks `lf_ai::identity::Identifier`: YuNet's
+faces with eyes at least 18 px apart are aligned to SFace's 112 × 112 template (a least-squares
+similarity fit of the five landmarks) and described as 128 unit-length numbers; a 96 px face
+picture is kept as a JPEG. `lf_catalog::people` (schema v12: `people`, `faces`, `face_scans`
+keyed to size and mtime) stores them, then `regroup_faces` runs: each face not named by hand
+goes to the named person whose faces' mean it is most like (cosine at least 0.42; never to a
+person it was taken from, `not_person_id`), and the rest are gathered greedily into suggested
+groups (same threshold, one reassignment pass). A group is offered only when it spans two
+photos, and is keyed by its first face's id so naming one group leaves the others' keys as
+the list read them. Naming confirms every face of the person; naming after an existing name
+merges. `library/people_ui.rs` lists people (`Msg::People`, pictures decoded on `Query`),
+shows a person's photos in place of a folder (`Msg::PersonPhotos`) and changes them on `Io`
+(`Msg::PeopleChanged`). `PhotoRow::people` carries the names, so the search box and smart
+albums' words find them.
+
 `crates/lf-ai/tests/models.rs` runs the real models when `LF_AI_DIR` names a folder holding
 them (`LF_AI_DOWNLOAD=1` fetches them there); otherwise those tests return at once.
 

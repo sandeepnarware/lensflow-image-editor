@@ -37,6 +37,9 @@ pub enum AiTool {
     Mask { target: Target },
     /// Sharpness, faces and closed eyes scored into the catalogue ([`lf_ai::cull`]).
     Cull,
+    /// Faces found, described and grouped into people in the catalogue
+    /// ([`lf_ai::identity`], [`lf_catalog::people`]).
+    FindPeople,
 }
 
 impl AiTool {
@@ -50,6 +53,7 @@ impl AiTool {
             AiTool::Remove => lf_ai::inpaint::INPAINT_MODELS.to_vec(),
             AiTool::Mask { target } => target.models().to_vec(),
             AiTool::Cull => lf_ai::cull::CULL_MODELS.to_vec(),
+            AiTool::FindPeople => lf_ai::identity::IDENTITY_MODELS.to_vec(),
         }
     }
 
@@ -71,6 +75,7 @@ impl AiTool {
                 Target::Clothes => "Select clothes",
             },
             AiTool::Cull => "Assisted culling",
+            AiTool::FindPeople => "Find people",
         }
     }
 
@@ -82,7 +87,7 @@ impl AiTool {
             AiTool::Retouch { .. } => ("Retouched".into(), "tif"),
             AiTool::Cutout => ("Cutout".into(), "png"),
             AiTool::Remove => ("Removed".into(), "tif"),
-            AiTool::Mask { .. } | AiTool::Cull => (String::new(), ""),
+            AiTool::Mask { .. } | AiTool::Cull | AiTool::FindPeople => (String::new(), ""),
         }
     }
 }
@@ -111,6 +116,20 @@ pub struct Report {
     pub masks: Vec<(i64, lf_settings::masks::Shape)>,
     /// Assisted culling: what the photos' scores say.
     pub culled: Option<Culled>,
+    /// Find people: what the scan found.
+    pub people: Option<PeopleFound>,
+}
+
+/// What Find people found.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PeopleFound {
+    /// Photos scanned by this run (the rest were scanned before).
+    pub scanned: usize,
+    /// Faces found in them.
+    pub faces: usize,
+    /// Named people and suggested groups in the catalogue now.
+    pub named: usize,
+    pub groups: usize,
 }
 
 /// What assisted culling found over the photos it was run on (scored now or before).
@@ -169,6 +188,9 @@ pub fn run(
     let catalog = Catalog::open(root).map_err(|e| e.to_string())?;
     if tool == AiTool::Cull {
         return cull(&gpu, engine, &catalog, ids, &mut progress, stop);
+    }
+    if tool == AiTool::FindPeople {
+        return find_people(&gpu, engine, &catalog, ids, &mut progress, stop);
     }
     let mut report = Report::default();
     let count = ids.len();
@@ -273,7 +295,9 @@ fn one(
             let done = lf_ai::faces::smooth_skin(&img, &faces, amount);
             write_tiff16(&out, &done)?;
         }
-        AiTool::Mask { .. } | AiTool::Cull => return Err("Not a file.".to_owned()),
+        AiTool::Mask { .. } | AiTool::Cull | AiTool::FindPeople => {
+            return Err("Not a file.".to_owned());
+        }
         AiTool::Remove => {
             let painted = painted.ok_or_else(|| "Nothing was painted.".to_owned())?;
             let mask = painted.resized(img.w, img.h);
@@ -416,6 +440,96 @@ fn cull(
     }
     report.culled = Some(culled);
     Ok(report)
+}
+
+/// Find people: scans the photos of `ids` not scanned as their files are now (as shot, at
+/// [`lf_ai::identity::SCAN_EDGE`]) for faces, records them, and regroups every face of the
+/// catalogue into people. A photo that cannot be read is reported and the others go on.
+fn find_people(
+    gpu: &Arc<Gpu>,
+    engine: &Engine,
+    catalog: &Catalog,
+    ids: &[i64],
+    progress: &mut impl FnMut(Step),
+    stop: &AtomicBool,
+) -> Result<Report, String> {
+    let mut identifier = lf_ai::identity::Identifier::new(engine).map_err(|e| e.to_string())?;
+    let todo = catalog
+        .unscanned_for_faces(ids)
+        .map_err(|e| e.to_string())?;
+    let mut report = Report::default();
+    let mut found = PeopleFound::default();
+    let count = todo.len();
+    let as_shot = EditSettings::default_settings();
+    for (index, (id, path)) in todo.iter().enumerate() {
+        if stop.load(Ordering::SeqCst) {
+            return Err(lf_ai::AiError::Stopped.to_string());
+        }
+        progress(Step::Photo {
+            index,
+            count,
+            done: 0,
+            total: 1,
+        });
+        let scanned = render_at(
+            gpu,
+            path,
+            &as_shot,
+            lf_ai::identity::SCAN_EDGE,
+            Quality::Preview,
+        )
+        .and_then(|img| {
+            let faces = identifier.find(&img).map_err(|e| e.to_string())?;
+            let (w, h) = (img.w as f32, img.h as f32);
+            faces
+                .into_iter()
+                .map(|f| {
+                    Ok(lf_catalog::people::NewFace {
+                        rect: [f.face.x / w, f.face.y / h, f.face.w / w, f.face.h / h]
+                            .map(|v| v.clamp(0.0, 1.0)),
+                        description: f.description,
+                        thumb: jpeg(&f.thumb)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })
+        .and_then(|faces| {
+            catalog.set_faces(*id, &faces).map_err(|e| e.to_string())?;
+            Ok(faces.len())
+        });
+        match scanned {
+            Ok(n) => {
+                found.scanned += 1;
+                found.faces += n;
+            }
+            Err(e) => {
+                let name = crate::develop::open::file_name(path);
+                log::warn!("finding people failed on {name}: {e}");
+                report.failed.push((name, e));
+            }
+        }
+    }
+    catalog.regroup_faces().map_err(|e| e.to_string())?;
+    let list = catalog.people().map_err(|e| e.to_string())?;
+    found.named = list.iter().filter(|p| p.name.is_some()).count();
+    found.groups = list.len() - found.named;
+    report.people = Some(found);
+    Ok(report)
+}
+
+/// `img` as a JPEG (a face's picture for the People list).
+fn jpeg(img: &Rgb) -> Result<Vec<u8>, String> {
+    let rgb = image::DynamicImage::ImageRgba8(img.to_rgba8()).to_rgb8();
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85)
+        .write_image(
+            rgb.as_raw(),
+            rgb.width(),
+            rgb.height(),
+            image::ExtendedColorType::Rgb8,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(out)
 }
 
 /// The photo at `path` with `settings`, at full size (`max_edge` at most), as f32 RGB.

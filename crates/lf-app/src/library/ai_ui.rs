@@ -74,6 +74,10 @@ impl Library {
                 }
             }
             AiAction::Start(tool) => self.start_ai(tool, env),
+            AiAction::ShowPeople => {
+                self.ai = None;
+                self.show_people(env);
+            }
             AiAction::ShowIssues => {
                 self.ai = None;
                 self.set_filter(super::cull::Filter {
@@ -177,6 +181,14 @@ impl Library {
                 ..
             })
         ) {
+            self.reload_photos(env);
+        }
+        // New faces: the People list (and the rows' names) are read again.
+        if let Ok(Report {
+            people: Some(_), ..
+        }) = &result
+        {
+            self.refresh_people(env);
             self.reload_photos(env);
         }
         if let Ok(report) = &result {

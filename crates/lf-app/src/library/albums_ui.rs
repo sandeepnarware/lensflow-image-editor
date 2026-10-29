@@ -144,7 +144,7 @@ impl Library {
     pub(super) fn show_album(&mut self, id: i64, env: &mut Env) {
         self.compare = None;
         self.map = None;
-        if self.current_album != Some(id) {
+        if self.current_album != Some(id) || self.people.current.is_some() {
             self.selection = Selection::default();
             self.photos.clear();
             self.rows.clear();
@@ -154,6 +154,7 @@ impl Library {
             self.reveal_active = true;
         }
         self.current_folder = None;
+        self.people.current = None;
         self.current_album = Some(id);
         self.load_album(env);
     }

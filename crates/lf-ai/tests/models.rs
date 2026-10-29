@@ -177,3 +177,42 @@ fn people_masks_are_sized_as_asked_and_empty_in_a_landscape() {
         assert!(mean < 0.2, "{target:?}: {mean}");
     }
 }
+
+#[test]
+fn faces_are_described_as_unit_vectors_that_tell_pictures_apart() {
+    let Some(engine) = engine(&lf_ai::identity::IDENTITY_MODELS) else {
+        return;
+    };
+    let mut id = lf_ai::identity::Identifier::new(&engine).expect("identifier");
+    let img = noisy(&scene(640, 480));
+    assert!(
+        id.find(&img).expect("find").is_empty(),
+        "a landscape has no one in it"
+    );
+    // A made-up face box (the eyes 40 px apart) at two places in the scene.
+    let face_at = |x: f32, y: f32| lf_ai::faces::Face {
+        x,
+        y,
+        w: 100.0,
+        h: 120.0,
+        score: 0.9,
+        landmarks: [
+            [x + 30.0, y + 50.0],
+            [x + 70.0, y + 50.0],
+            [x + 50.0, y + 70.0],
+            [x + 35.0, y + 90.0],
+            [x + 65.0, y + 90.0],
+        ],
+    };
+    let a = id.describe(&img, &face_at(100.0, 100.0)).expect("describe");
+    assert_eq!(a.len(), lf_ai::identity::LENGTH);
+    let norm = a.iter().map(|v| v * v).sum::<f32>().sqrt();
+    assert!((norm - 1.0).abs() < 1e-4, "unit length: {norm}");
+    let again = id.describe(&img, &face_at(100.0, 100.0)).expect("describe");
+    assert!(
+        lf_ai::identity::cosine(&a, &again) > 0.9999,
+        "the same input"
+    );
+    let other = id.describe(&img, &face_at(400.0, 300.0)).expect("describe");
+    assert!(lf_ai::identity::cosine(&a, &other) < 0.99, "another place");
+}

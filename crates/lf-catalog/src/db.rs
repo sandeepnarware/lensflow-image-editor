@@ -258,6 +258,38 @@ CREATE TABLE fingerprints (
     dhash INTEGER NOT NULL
 );
 "#,
+    // People (`crate::people`): each face found, its description and a small picture of it,
+    // the person it was named as (by hand, or matched to one), and its suggested group; and
+    // which files have been scanned for faces.
+    r#"
+CREATE TABLE people (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE faces (
+    id INTEGER PRIMARY KEY,
+    photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    w REAL NOT NULL,
+    h REAL NOT NULL,
+    description BLOB NOT NULL,
+    thumb BLOB NOT NULL,
+    person_id INTEGER REFERENCES people(id) ON DELETE SET NULL,
+    confirmed INTEGER NOT NULL DEFAULT 0,
+    not_person_id INTEGER,
+    grp INTEGER
+);
+CREATE INDEX faces_photo ON faces(photo_id);
+CREATE INDEX faces_person ON faces(person_id);
+CREATE INDEX faces_grp ON faces(grp);
+CREATE TABLE face_scans (
+    photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+    file_size INTEGER NOT NULL,
+    mtime INTEGER NOT NULL
+);
+"#,
 ];
 
 pub struct Catalog {
@@ -505,6 +537,8 @@ pub struct PhotoRow {
     pub scores: Option<Scores>,
     /// The stack it is in ([`crate::stacks`]).
     pub stack: Option<Stack>,
+    /// The named people in it, by name ([`crate::people`]).
+    pub people: Vec<String>,
 }
 
 pub(crate) const PHOTO_COLUMNS: &str =
@@ -523,7 +557,10 @@ pub(crate) const PHOTO_COLUMNS: &str =
      p.stack_id,
      (SELECT k.top_photo_id FROM stacks k WHERE k.id = p.stack_id),
      (SELECT COUNT(*) FROM photos q WHERE q.stack_id = p.stack_id),
-     (SELECT k.collapsed FROM stacks k WHERE k.id = p.stack_id)";
+     (SELECT k.collapsed FROM stacks k WHERE k.id = p.stack_id),
+     (SELECT group_concat(name, char(31)) FROM
+         (SELECT DISTINCT n.name FROM faces f JOIN people n ON n.id = f.person_id
+          WHERE f.photo_id = p.id ORDER BY n.name))";
 
 pub(crate) fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
     Ok(PhotoRow {
@@ -583,6 +620,10 @@ pub(crate) fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
             }),
             _ => None,
         },
+        people: r
+            .get::<_, Option<String>>(32)?
+            .map(|k| k.split('\u{1f}').map(str::to_owned).collect())
+            .unwrap_or_default(),
     })
 }
 

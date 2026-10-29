@@ -21,6 +21,7 @@ pub mod lut_ui;
 pub mod map;
 pub mod merge_ui;
 pub mod meta_ui;
+pub mod people_ui;
 pub mod print_ui;
 pub mod selection;
 pub mod stacks_ui;
@@ -118,6 +119,8 @@ pub struct Library {
     current_folder: Option<i64>,
     /// The album shown in place of a folder ([`albums_ui`]); never both.
     current_album: Option<i64>,
+    /// People, and the person shown in place of a folder or album ([`people_ui`]).
+    people: people_ui::PeopleState,
     /// An AI tool's dialog, while open or running; and whether the gate allows the tools.
     ai: Option<crate::dialogs::ai::AiDialog>,
     /// A mask with nothing to download starts on the next frame.
@@ -231,6 +234,7 @@ impl Library {
             folders: Vec::new(),
             current_folder: None,
             current_album: None,
+            people: people_ui::PeopleState::default(),
             ai: None,
             start_ai_now: false,
             remove: None,
@@ -750,6 +754,8 @@ impl Library {
                     | Msg::MetaSaved { .. }
                     | Msg::AlbumPhotos { .. }
                     | Msg::AlbumChanged { .. }
+                    | Msg::PersonPhotos { .. }
+                    | Msg::PeopleChanged { .. }
                     | Msg::PoolReady(..)
             )
         {
@@ -823,9 +829,11 @@ impl Library {
                         self.show_folder(None, env);
                     }
                     self.refresh_folders(env);
-                    // Its photos left every album.
+                    // Its photos left every album, and their faces every person.
                     self.refresh_albums(env);
                     self.load_album(env);
+                    self.refresh_people(env);
+                    self.load_person(env);
                 }
                 Err(e) => env.toasts.push(
                     Level::Error,
@@ -915,6 +923,13 @@ impl Library {
                 result,
             } => self.album_photos_loaded(root, album_id, result, env),
             Msg::AlbumChanged { root, result } => self.album_changed(root, result, env),
+            Msg::People { root, result } => self.people_loaded(root, result),
+            Msg::PersonPhotos {
+                root,
+                group,
+                result,
+            } => self.person_photos_loaded(root, group, result, env),
+            Msg::PeopleChanged { root, result } => self.people_changed(root, result, env),
             Msg::LutImported(result) => match result {
                 Ok(name) => {
                     env.toasts
@@ -1004,6 +1019,7 @@ impl Library {
                 self.stage = Stage::Ready;
                 self.folders_loaded(opened.folders, env);
                 self.refresh_albums(env);
+                self.refresh_people(env);
             }
             Err(e) => {
                 log::error!("could not open the catalogue at {}: {e}", root.display());
@@ -1147,6 +1163,10 @@ impl Library {
             self.load_album(env);
             return;
         }
+        if self.people.current.is_some() {
+            self.load_person(env);
+            return;
+        }
         if let (Some(folder_id), Some(root)) = (self.current_folder, self.root.clone()) {
             env.jobs.spawn(Lane::Query, "photos", move || {
                 let result = catalog_ext::photos_in(&root, folder_id);
@@ -1163,7 +1183,10 @@ impl Library {
     fn show_folder(&mut self, folder: Option<i64>, env: &mut Env) {
         self.compare = None;
         self.map = None;
-        if self.current_folder != folder || self.current_album.is_some() {
+        if self.current_folder != folder
+            || self.current_album.is_some()
+            || self.people.current.is_some()
+        {
             self.selection = Selection::default();
             self.photos.clear();
             self.rows.clear();
@@ -1174,6 +1197,7 @@ impl Library {
         }
         self.current_folder = folder;
         self.current_album = None;
+        self.people.current = None;
         self.loading = folder;
         self.revive_thumbs(env);
         if let (Some(folder_id), Some(root)) = (folder, self.root.clone()) {
@@ -1407,6 +1431,7 @@ impl Library {
         self.print_dialog(ui.ctx(), env);
         self.merge_dialog(ui.ctx(), env);
         self.album_dialogs(ui.ctx(), env);
+        self.people_dialogs(ui.ctx(), env);
         self.ai_dialog(ui.ctx(), env);
         self.remove_dialog(ui.ctx());
         self.auto_stack_dialog(ui.ctx(), env);
@@ -1427,6 +1452,7 @@ impl Library {
             || self.print.is_some()
             || self.merge.is_some()
             || self.album_dialog_open()
+            || self.people_dialog_open()
             || self.ai.is_some()
             || self.remove.is_some()
     }
@@ -1481,7 +1507,7 @@ impl Library {
             Action::AutoStack => {
                 !develop && self.auto_stack.is_none() && !self.photos.is_empty() && self.can_add()
             }
-            Action::AssistedCulling => {
+            Action::AssistedCulling | Action::FindPeople => {
                 !develop
                     && self.local_ai
                     && self.ai.is_none()
@@ -1573,6 +1599,7 @@ impl Library {
             Action::AiCutout => self.open_ai(crate::ai_job::AiTool::Cutout),
             Action::AiRemoveObjects => self.open_remove(env),
             Action::AssistedCulling => self.open_cull(),
+            Action::FindPeople => self.open_find_people(),
             Action::Stack => self.stack_selected(env),
             Action::Unstack => self.unstack_selected(env),
             Action::ToggleStack => self.toggle_stack(env),
@@ -1765,7 +1792,10 @@ impl Library {
         }
         egui::ScrollArea::vertical()
             .id_salt("album-list")
-            .show(ui, |ui| self.albums_sidebar(ui, env));
+            .show(ui, |ui| {
+                self.albums_sidebar(ui, env);
+                self.people_sidebar(ui, env);
+            });
     }
 
     fn confirm_remove_dialog(&mut self, ctx: &egui::Context, env: &mut Env) {
@@ -1841,6 +1871,8 @@ impl Library {
                 ui.add_space(ui.available_height() / 3.0);
                 let empty = if self.current_album.is_some() {
                     "No photos in this album."
+                } else if self.people.current.is_some() {
+                    people_ui::NO_PHOTOS_OF_PERSON
                 } else {
                     "No photos in this folder."
                 };

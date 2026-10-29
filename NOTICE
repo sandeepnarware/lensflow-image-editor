@@ -618,8 +618,8 @@ release, downloaded on first use and checked by SHA-256; it is not linked or shi
 models are downloaded the same way and run on this computer: IS-Net general use (Apache-2.0),
 SkySeg (MIT), SCUNet (Apache-2.0), Real-ESRGAN general x4v3 (BSD-3-Clause), LaMa
 (Apache-2.0), YuNet (MIT), Google's MediaPipe selfie multiclass segmenter (Apache-2.0,
-converted from TFLite to ONNX with its weights unchanged) and Intel's open-closed-eye-0001 from the Open Model Zoo
-(Apache-2.0).
+converted from TFLite to ONNX with its weights unchanged), Intel's open-closed-eye-0001 from the Open Model Zoo
+(Apache-2.0) and SFace face recognition from the OpenCV model zoo (Apache-2.0).
 libwebp-sys builds Google's libwebp (BSD-3-Clause) from source into the program for lossy
 WebP export; AVIF export uses rav1e and ravif (BSD-2-Clause / BSD-3-Clause), pure Rust.
 lcms2-sys builds Little CMS (MIT) from source into the program for colour-space exports

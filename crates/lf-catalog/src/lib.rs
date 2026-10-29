@@ -14,6 +14,7 @@ pub mod import;
 pub mod ingest;
 pub mod meta;
 pub mod model;
+pub mod people;
 pub mod places;
 pub mod presets;
 pub mod print;

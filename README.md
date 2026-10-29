@@ -173,6 +173,14 @@ bursts (frames taken within a set gap that look alike) and, if asked, duplicates
 the folder, and stacks them with the sharpest photo on top when Assisted culling has scored
 them.
 
+People (AI → Find people): finds the faces in the selected photos (or every photo shown)
+and groups the ones that look like the same person under People in the sidebar. Name a
+group to see every photo of that person; later scans match new photos of them by
+themselves. Typing a name that is already taken merges the two; "Not <name>" on selected
+photos takes them out (they are never matched to that person again); Forget drops a name
+and leaves the faces to be named again. Names are found by the search box. A photo is
+scanned once, until its file changes; nothing leaves the computer.
+
 The window needs a graphics adapter. With no driver it runs on a software
 adapter (WARP on Windows, lavapipe on Linux) and says "No graphics driver found:
 previews will be slow."

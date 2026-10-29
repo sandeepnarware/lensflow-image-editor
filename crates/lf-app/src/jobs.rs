@@ -252,6 +252,23 @@ pub enum Msg {
         album_id: i64,
         result: Result<Vec<PhotoRow>, String>,
     },
+    /// The People list, face pictures decoded (`root`: the catalogue asked).
+    People {
+        root: PathBuf,
+        result: Result<Vec<crate::library::people_ui::Listed>, String>,
+    },
+    /// A person's (or a suggested group's) photos.
+    PersonPhotos {
+        root: PathBuf,
+        group: lf_catalog::people::Group,
+        result: Result<Vec<PhotoRow>, String>,
+    },
+    /// A person was named, renamed, merged, forgotten or had photos taken out: what to say,
+    /// and the person to show, or why not.
+    PeopleChanged {
+        root: PathBuf,
+        result: Result<(String, Option<lf_catalog::people::Group>), String>,
+    },
     /// An album was made, changed, filled or emptied: what to say, and the album to show
     /// (a new one), or why not.
     AlbumChanged {
@@ -800,7 +817,10 @@ pub(crate) mod owners {
             | Msg::Stacked { .. }
             | Msg::StackProgress { .. }
             | Msg::AlbumPhotos { .. }
-            | Msg::AlbumChanged { .. } => Owner::Library,
+            | Msg::AlbumChanged { .. }
+            | Msg::People { .. }
+            | Msg::PersonPhotos { .. }
+            | Msg::PeopleChanged { .. } => Owner::Library,
             Msg::DeviceReset(..) => Owner::App,
             Msg::Probe(..) => Owner::Test,
         }
@@ -951,6 +971,19 @@ pub(crate) mod owners {
                 result: Ok(Vec::new()),
             },
             Msg::AlbumChanged {
+                root: dir.to_path_buf(),
+                result: Err("no".into()),
+            },
+            Msg::People {
+                root: dir.to_path_buf(),
+                result: Ok(Vec::new()),
+            },
+            Msg::PersonPhotos {
+                root: dir.to_path_buf(),
+                group: lf_catalog::people::Group::Person(1),
+                result: Ok(Vec::new()),
+            },
+            Msg::PeopleChanged {
                 root: dir.to_path_buf(),
                 result: Err("no".into()),
             },

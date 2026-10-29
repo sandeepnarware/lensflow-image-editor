@@ -26,6 +26,8 @@ pub const ABOUT_SUBJECT: &str =
 pub const ABOUT_PEOPLE: &str = "Finds the people in the photo (or their hair, skin or clothes) and adds them as a mask, ready for their own adjustments. Works best on people who fill a good part of the frame.";
 pub const ABOUT_SKY: &str = "Finds the sky and adds it as a mask, ready for its own adjustments.";
 pub const ABOUT_CULL: &str = "Checks each photo for blur, missed focus on the eyes and closed eyes, so the likely rejects can be found at once. Nothing is flagged until you say so.";
+pub const ABOUT_FIND_PEOPLE: &str = "Finds the faces in each photo and groups the ones that look like the same person. Name a group under People to find that person in every photo; new photos of them are matched as they are scanned.";
+pub const SHOW_PEOPLE: &str = "Show people";
 pub const REJECT_THEM: &str = "Reject them";
 pub const SHOW_THEM: &str = "Show them";
 pub const ABOUT_REMOVE: &str = "Fills what was painted from its surroundings and saves the photo beside the original as a new 16-bit TIFF.";
@@ -65,6 +67,8 @@ pub enum AiAction {
     RejectIssues,
     /// Assisted culling: filter the grid to the photos that look wrong.
     ShowIssues,
+    /// Find people: the People list, to name the groups found.
+    ShowPeople,
 }
 
 pub struct AiDialog {
@@ -123,7 +127,16 @@ impl AiDialog {
                         }) => c.issues.len(),
                         _ => 0,
                     };
+                    let people = matches!(
+                        &result,
+                        Ok(Report {
+                            people: Some(p), ..
+                        }) if p.named + p.groups > 0
+                    );
                     ui.horizontal(|ui| {
+                        if people && ui.button(SHOW_PEOPLE).clicked() {
+                            action = AiAction::ShowPeople;
+                        }
                         if issues > 0 {
                             if ui.button(SHOW_THEM).clicked() {
                                 action = AiAction::ShowIssues;
@@ -157,6 +170,7 @@ impl AiDialog {
             } => ABOUT_SKY,
             AiTool::Mask { .. } => ABOUT_PEOPLE,
             AiTool::Cull => ABOUT_CULL,
+            AiTool::FindPeople => ABOUT_FIND_PEOPLE,
         };
         ui.label(RichText::new(about).color(theme::MUTED));
         ui.add_space(8.0);
@@ -181,7 +195,11 @@ impl AiDialog {
                     .labelled_by(label.id);
                 *amount = pct / 100.0;
             }
-            AiTool::Cutout | AiTool::Mask { .. } | AiTool::Remove | AiTool::Cull => {}
+            AiTool::Cutout
+            | AiTool::Mask { .. }
+            | AiTool::Remove
+            | AiTool::Cull
+            | AiTool::FindPeople => {}
         }
         ui.add_space(8.0);
         if let Some(text) = download_text(self.download) {
@@ -246,6 +264,16 @@ fn done_ui(ui: &mut egui::Ui, result: &Result<Report, String>) {
                 ui.label(RichText::new(format!("{name}: {why}")).color(theme::WARNING));
             }
         }
+        Ok(Report {
+            people: Some(p),
+            failed,
+            ..
+        }) => {
+            ui.label(people_text(p));
+            for (name, why) in failed {
+                ui.label(RichText::new(format!("{name}: {why}")).color(theme::WARNING));
+            }
+        }
         Ok(report) => {
             let n = report.written.len();
             ui.label(match n {
@@ -301,6 +329,26 @@ pub fn culled_text(c: &crate::ai_job::Culled) -> String {
     }
 }
 
+/// What Find people found, in a sentence or two.
+pub fn people_text(p: &crate::ai_job::PeopleFound) -> String {
+    let scanned = match (p.scanned, p.faces) {
+        (0, _) => "Every photo was already scanned.".to_owned(),
+        (1, 1) => "Found 1 face in 1 photo.".to_owned(),
+        (1, f) => format!("Found {} faces in 1 photo.", count(f)),
+        (n, 1) => format!("Found 1 face in {} photos.", count(n)),
+        (n, f) => format!("Found {} faces in {} photos.", count(f), count(n)),
+    };
+    let groups = match p.groups {
+        0 => String::new(),
+        1 => " 1 group of faces is waiting for a name under People.".to_owned(),
+        n => format!(
+            " {} groups of faces are waiting for names under People.",
+            count(n)
+        ),
+    };
+    format!("{scanned}{groups}")
+}
+
 fn capitalised(s: &str) -> String {
     let mut c = s.chars();
     c.next()
@@ -332,6 +380,30 @@ mod tests {
         assert_eq!(
             culled_text(&some),
             "2 look blurry and 1 has closed eyes: 3 photos to check."
+        );
+    }
+
+    #[test]
+    fn finding_people_says_what_it_found() {
+        use crate::ai_job::PeopleFound;
+        let p = PeopleFound {
+            scanned: 12,
+            faces: 30,
+            named: 1,
+            groups: 4,
+        };
+        assert_eq!(
+            people_text(&p),
+            "Found 30 faces in 12 photos. 4 groups of faces are waiting for names under People."
+        );
+        let p = PeopleFound {
+            scanned: 0,
+            groups: 1,
+            ..PeopleFound::default()
+        };
+        assert_eq!(
+            people_text(&p),
+            "Every photo was already scanned. 1 group of faces is waiting for a name under People."
         );
     }
 

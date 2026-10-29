@@ -44,7 +44,7 @@ impl Meta {
 }
 
 /// Whether every word of `text` is somewhere in `row`: its file name, camera, lens, or its
-/// title, caption, creator and keywords (case ignored). No words keeps every row. The
+/// title, caption, creator, keywords and the people named in it (case ignored). No words keeps every row. The
 /// library's search box and smart albums ([`crate::albums`]) both ask this.
 pub fn row_matches(row: &crate::db::PhotoRow, text: &str) -> bool {
     if text.trim().is_empty() {
@@ -66,6 +66,7 @@ pub fn row_matches(row: &crate::db::PhotoRow, text: &str) -> bool {
     .into_iter()
     .flatten()
     .chain(&m.keywords)
+    .chain(&row.people)
     .map(|s| s.to_lowercase())
     .collect();
     text.split_whitespace()

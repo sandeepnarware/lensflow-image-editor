@@ -63,6 +63,8 @@ pub enum Action {
     AiRemoveObjects,
     /// Score photos for blur and closed eyes, and offer to reject the ones that look wrong.
     AssistedCulling,
+    /// Find the faces in photos and group them into people to name.
+    FindPeople,
     // Stacks
     /// Gather the selected photos into a stack under the active one.
     Stack,
@@ -161,6 +163,7 @@ impl Action {
             Action::AiCutout => "Remove background…",
             Action::AiRemoveObjects => "Remove objects…",
             Action::AssistedCulling => "Assisted culling…",
+            Action::FindPeople => "Find people…",
             Action::Stack => "Group into stack",
             Action::Unstack => "Unstack",
             Action::ToggleStack => "Expand / collapse stack",

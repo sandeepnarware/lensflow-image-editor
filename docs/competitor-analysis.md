@@ -28,7 +28,7 @@ close or competitors ship new features.
 | ~~Duplicate and similar photos grouped into stacks~~ (done: Home → Stacks, Auto-stack; sharpest on top) | Lightroom 15.5 | We have no stacks at all, which also hurts burst shooting. |
 | People masks: ~~face skin, body skin, hair, clothes, whole people~~ (done: Masks → People); eyes, lips, teeth still open | Lightroom, PhotoLab 9 | Portrait edits are aimed at these; we only have subject and sky. |
 | Object and background AI masks (click or box an object) | Lightroom | Masks any object, not just subject or sky. |
-| Faces view: find a person across the catalogue | Lightroom | Pull every shot of the bride, for example. |
+| ~~Faces view: find a person across the catalogue~~ (done: AI → Find people, People in the sidebar) | Lightroom | Pull every shot of the bride, for example. |
 | AI keywording and search ("beach", "cake") | Lightroom, Luminar | Searchable catalogue without typing keywords. |
 
 ### Tier 2: professional-quality gaps
