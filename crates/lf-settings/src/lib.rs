@@ -7,6 +7,7 @@
 //! `rotate`, is an error) and is only for JSON that is already normal, such as our own
 //! [`EditSettings::to_value`] output.
 
+pub mod amount;
 pub mod curve;
 pub mod geometry;
 pub mod groups;

@@ -160,6 +160,8 @@ cargo test --workspace                   # includes the 228-render parity suite
   Merge to HDR: `lf-merge` (align + fuse), `merge_job.rs` (16-bit TIFF beside the first frame),
   `dialogs/merge.rs`, `library/merge_ui.rs`, `Action::MergeHdr` (`Ctrl+H`). Panorama: `lf_merge::panorama`,
   `MergeKind::Panorama`, `Action::MergePanorama` (`Ctrl+M`).
+  Preset Amount: `lf_settings::amount::blend` (0–200 %), `develop::extras::Applied` (the look or preset
+  applied last; one history step per drag).
   Edit in external editor: `edit_in.rs`, `library/edit_in_ui.rs`, `prefs.external_editor`.
   Print to PDF: `lf_catalog::print` (hand-written PDF, JPEGs as DCTDecode), `print_job.rs`,
   `dialogs/print.rs`, `library/print_ui.rs`.

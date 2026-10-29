@@ -1,6 +1,8 @@
 //! Develop's Looks and Studio presets sections, above the adjust panels, and their dialogs
 //! (the Versions section is in `versions_panel.rs`). Each change to the settings goes through
 //! [`Develop::replace_settings`] (the one "settings changed" entry point, then one commit).
+//! The look or preset applied last keeps an Amount slider (0–200 %, `lf_settings::amount`)
+//! until the photo is edited some other way; dragging it is one gesture (one history step).
 
 use super::panels::{looks, presets, versions};
 use super::{Develop, State};
@@ -27,10 +29,26 @@ pub struct PresetsUi {
     changed: bool,
 }
 
+/// The look or preset applied last, while its Amount can still change.
+#[derive(Debug, Clone)]
+pub struct Applied {
+    name: String,
+    photo_id: i64,
+    /// The photo's settings before it, and with it at 100 %.
+    before: EditSettings,
+    after: EditSettings,
+    amount: f32,
+    /// What the slider last made: any other change to the photo ends the slider.
+    last: EditSettings,
+}
+
+pub const AMOUNT: &str = "Amount";
+
 #[derive(Default)]
 pub struct Extras {
     pub presets: PresetsUi,
     pub versions: super::versions_panel::VersionsUi,
+    pub applied: Option<Applied>,
 }
 
 impl Develop {
@@ -189,17 +207,83 @@ impl Develop {
                     && let Some(edit) = self.session.edit()
                 {
                     let next = apply_look(&edit.settings, &LOOKS[i].settings);
-                    self.replace_settings(next, toasts);
+                    self.apply_with_amount(LOOKS[i].name.to_owned(), next, toasts);
                 }
             });
         egui::CollapsingHeader::new(presets::TITLE)
             .id_salt("presets-section")
             .show(ui, |ui| self.presets_ui(ui, toasts));
+        self.amount_ui(ui, toasts);
         egui::CollapsingHeader::new(versions::TITLE)
             .id_salt("versions-section")
             .show(ui, |ui| self.versions_ui(ui, toasts));
         self.extras_dialogs(ui.ctx(), toasts);
         ui.separator();
+    }
+
+    /// Applies a look or preset (`next`, at 100 %) and offers its Amount.
+    fn apply_with_amount(&mut self, name: String, next: EditSettings, toasts: &mut Toasts) {
+        let Some(edit) = self.session.edit() else {
+            return;
+        };
+        let (photo_id, before) = (edit.photo_id, edit.settings.clone());
+        self.replace_settings(next.clone(), toasts);
+        self.extras.applied = Some(Applied {
+            name,
+            photo_id,
+            before,
+            after: next.clone(),
+            amount: 1.0,
+            last: next,
+        });
+    }
+
+    /// The Amount slider of the look or preset applied last, while nothing else changed the
+    /// photo since.
+    fn amount_ui(&mut self, ui: &mut egui::Ui, toasts: &mut Toasts) {
+        let current = self
+            .session
+            .edit()
+            .map(|e| (e.photo_id, e.settings.clone()));
+        let Some(applied) = self.extras.applied.as_mut() else {
+            return;
+        };
+        if current
+            .as_ref()
+            .is_none_or(|(id, s)| *id != applied.photo_id || *s != applied.last)
+        {
+            self.extras.applied = None;
+            return;
+        }
+        let mut pct = applied.amount * 100.0;
+        let response = ui
+            .horizontal(|ui| {
+                let label = ui.label(AMOUNT).on_hover_text(&applied.name);
+                ui.add(
+                    egui::Slider::new(&mut pct, 0.0..=lf_settings::amount::MAX_AMOUNT * 100.0)
+                        .suffix(" %")
+                        .step_by(1.0),
+                )
+                .labelled_by(label.id)
+                .on_hover_text(format!("How much of {} to apply", applied.name))
+            })
+            .inner;
+        let mut commit = response.drag_stopped();
+        if response.changed() {
+            applied.amount = pct / 100.0;
+            let next = lf_settings::amount::blend(&applied.before, &applied.after, applied.amount);
+            applied.last = next.clone();
+            self.edit(|s| *s = next);
+            // A typed or keyed change is a whole gesture at once.
+            commit |= !response.dragged();
+        }
+        if commit {
+            self.commit(toasts);
+            // The committed settings are what the slider reads from now on.
+            if let (Some(a), Some(e)) = (self.extras.applied.as_mut(), self.session.edit()) {
+                a.last = e.settings.clone();
+            }
+        }
     }
 
     fn presets_ui(&mut self, ui: &mut egui::Ui, toasts: &mut Toasts) {
@@ -214,7 +298,7 @@ impl Develop {
                     // As the web: a preset is applied as a look (its geometry and spots never).
                     let next =
                         crate::clipboard::Recipe::Look(row.settings.clone()).apply(&edit.settings);
-                    self.replace_settings(next, toasts);
+                    self.apply_with_amount(row.name.clone(), next, toasts);
                 }
             }
             Some(presets::PresetAction::Save) => {

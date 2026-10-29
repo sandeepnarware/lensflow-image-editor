@@ -997,6 +997,28 @@ fn looks_presets_and_versions_from_the_side_panel() {
     assert!(settings(&h).bw, "the look applied");
     assert_eq!(history(&root, id), 2, "the photo before, and the look");
 
+    // Its Amount (100 % sits in the middle of 0–200 %): dragged towards half, one more
+    // history step, the switch kept and the numbers part-way.
+    let full = settings(&h);
+    let rect = h
+        .get_by_role_and_label(Role::Slider, lf_app::develop::extras::AMOUNT)
+        .rect();
+    let start = rect.center();
+    let dx = -rect.width() / 4.0;
+    h.drag_at(start);
+    h.step();
+    for i in 1..=4 {
+        h.hover_at(start + egui::vec2(dx * i as f32 / 4.0, 0.0));
+        h.step();
+    }
+    h.drop_at(start + egui::vec2(dx, 0.0));
+    h.step();
+    h.step();
+    let part = settings(&h);
+    assert!(part.bw, "a switch stays on above 0 %");
+    assert_ne!(part, full, "the numbers moved");
+    assert_eq!(history(&root, id), 3, "the whole drag is one step");
+
     // A preset: saved here for studio 7, listed, and a sync asked for.
     h.get_by_label(presets::TITLE).click();
     // The section opens over a few frames.
@@ -1050,6 +1072,11 @@ fn looks_presets_and_versions_from_the_side_panel() {
     h.step();
     assert!(settings(&h).bw, "the preset applied");
     let steps = history(&root, id);
+    // Done with looks and presets: closed, so the adjust panels below stay in view.
+    h.get_by_label(looks::TITLE).click();
+    h.run_steps(20);
+    h.get_by_label(presets::TITLE).click();
+    h.run_steps(20);
 
     // Versions: added (tagged current), its preview made once, used, deleted.
     h.get_by_label(versions::TITLE).click();
@@ -1104,6 +1131,8 @@ fn looks_presets_and_versions_from_the_side_panel() {
     assert!(h.query_by_label("Version 1").is_none());
 
     // Deleting the preset asks first and leaves a tombstone for the sync.
+    h.get_by_label(presets::TITLE).click();
+    h.run_steps(20);
     h.get_by_label(&presets::delete_label("Mono")).click();
     // A new dialog is laid out unseen on its first frame.
     h.step();
