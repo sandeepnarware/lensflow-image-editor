@@ -252,6 +252,9 @@ impl App {
             reference: self
                 .active_library()
                 .is_some_and(|lib| lib.reference_shown()),
+            second_window: self
+                .active_library()
+                .is_some_and(|lib| lib.second_window_open()),
             // The ribbon brings the view's own tab forward when the view changes.
             context: self
                 .active_library()

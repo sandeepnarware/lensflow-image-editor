@@ -183,6 +183,14 @@ impl Library {
         self.compare = Some(Compare::new(ids, generation));
     }
 
+    /// The loupe's photo, while it is open.
+    pub fn loupe_photo(&self) -> Option<i64> {
+        self.compare
+            .as_ref()
+            .filter(|c| c.loupe)
+            .and_then(|c| c.ids.first().copied())
+    }
+
     pub fn in_loupe(&self) -> bool {
         self.comparing() && self.compare.as_ref().is_some_and(|c| c.loupe)
     }

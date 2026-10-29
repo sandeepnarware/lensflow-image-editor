@@ -761,6 +761,14 @@ right-click "Use as reference" (`Library::reference_pick`), else the one open in
 before this one (`previous_developed`); with neither, a toast says how to pick one. It stays
 while other photos are opened, so a set can be matched to it one by one.
 
+Second window (View → 2nd window, `library/second_window.rs`) is an egui immediate viewport
+(its own OS window, for another monitor; embedded where the backend has one window only)
+showing the photo worked on, fitted on black with its name and marks: Develop's open photo,
+else the Library's active one. `Library::follow_second_window` runs each frame: a different
+photo, or a `take_edited` that names the one shown (Develop's quiet time, as for thumbnails),
+renders it again with `compare::render` on `Open` (`Msg::SecondWindowRendered`, by
+generation). Closing the window turns it off.
+
 Slideshow (View → Slideshow, `library/slideshow.rs`) covers the window on black with the
 selection (or the grid's photos), one at a time, each rendered with its edits on the `Open`
 lane as Compare renders (`Msg::SlideRendered`, by generation); the next one renders while

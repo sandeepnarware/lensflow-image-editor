@@ -159,6 +159,9 @@ Reference view (`Shift+R`, View → Reference view): in Develop, a reference pho
 the one being edited, to match a set by eye. Right-click a photo in the filmstrip and choose
 "Use as reference"; without a choice it is the photo you had open before.
 
+Second window (View → 2nd window): a window you can put on another monitor, showing the
+photo you are working on with its edits (updated a moment after each change).
+
 Loupe (`E`, Library → Loupe): the active photo alone at full size. Click to see that
 spot at 100 % (click again to fit); `←`/`→` step through the photos keeping the zoom.
 

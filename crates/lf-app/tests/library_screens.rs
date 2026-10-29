@@ -2775,3 +2775,88 @@ fn a_slideshow_steps_through_the_photos_and_esc_ends_it() {
     h.step();
     assert_eq!(h.state().lib.slideshow_position(), None);
 }
+
+/// Library → Loupe (`E`): the active photo alone; the arrows step through the grid's photos
+/// and Esc goes back.
+#[test]
+fn the_loupe_shows_one_photo_and_steps_through_the_grid() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 3);
+    import_folder(&mut h, &shoot, 3);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    h.state_mut().lib.selection.click(ids[0]);
+    h.key_press(Key::E);
+    h.step();
+    assert_eq!(h.state().lib.loupe_photo(), Some(ids[0]));
+    h.key_press(Key::ArrowRight);
+    h.step();
+    let next = h.state().lib.loupe_photo().unwrap();
+    assert_ne!(next, ids[0], "the next photo");
+    assert_eq!(h.state().lib.selection.active(), Some(next));
+    h.key_press(Key::Escape);
+    h.step();
+    assert_eq!(h.state().lib.loupe_photo(), None);
+}
+
+/// View → Reference view: the photo open before shows beside the one being edited.
+#[test]
+fn the_reference_view_shows_the_photo_open_before() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 2);
+    import_folder(&mut h, &shoot, 2);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    h.state_mut().lib.selection.click(ids[0]);
+    assert!(run_action(&mut h, Action::Develop));
+    step_until(&mut h, "the photo to open", |s| s.lib.develop().is_ready());
+    assert!(run_action(&mut h, Action::ReferenceView));
+    assert!(!h.state().lib.reference_shown(), "nothing to refer to yet");
+    assert!(run_action(&mut h, Action::Next));
+    step_until(&mut h, "the next photo to open", |s| {
+        s.lib.develop().is_ready() && s.lib.develop().photo_id() != Some(ids[0])
+    });
+    assert!(run_action(&mut h, Action::ReferenceView));
+    assert!(h.state().lib.reference_shown());
+    let first_name = h
+        .state()
+        .lib
+        .photos()
+        .iter()
+        .find(|p| p.id == ids[0])
+        .map(|p| p.path.file_name().unwrap().to_string_lossy().into_owned())
+        .unwrap();
+    step_until_label(&mut h, &format!("Reference: {first_name}"));
+    assert!(run_action(&mut h, Action::ReferenceView));
+    assert!(!h.state().lib.reference_shown());
+}
+
+/// View → Second window: shows the active photo, and follows the selection.
+#[test]
+fn the_second_window_follows_the_active_photo() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 2);
+    import_folder(&mut h, &shoot, 2);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    h.state_mut().lib.selection.click(ids[0]);
+    assert!(run_action(&mut h, Action::SecondWindow));
+    step_until(&mut h, "the first photo in the second window", |s| {
+        s.lib.second_window_shown() == Some(ids[0])
+    });
+    h.state_mut().lib.selection.click(ids[1]);
+    step_until(&mut h, "the second photo in the second window", |s| {
+        s.lib.second_window_shown() == Some(ids[1])
+    });
+    assert!(run_action(&mut h, Action::SecondWindow));
+    assert!(!h.state().lib.second_window_open());
+}

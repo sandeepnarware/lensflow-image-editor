@@ -208,7 +208,12 @@ pub const RIBBON: &[Tab] = &[
             group("Mode", &[Do(Action::Library), Do(Action::Develop)]),
             group(
                 "Panels",
-                &[Do(Action::Metadata), Do(Action::Map), Do(Action::Slideshow)],
+                &[
+                    Do(Action::Metadata),
+                    Do(Action::Map),
+                    Do(Action::Slideshow),
+                    Do(Action::SecondWindow),
+                ],
             ),
             group(
                 "Preview",
@@ -301,6 +306,7 @@ pub fn icon(action: Action) -> &'static str {
         Action::Clipping => "⚠",
         Action::FocusPeaking => "🎯",
         Action::Slideshow => "▶",
+        Action::SecondWindow => "🗗",
         Action::VisualizeSpots => "🔍",
         Action::SoftProof => "🖶",
         Action::ProofProfile => "🎨",
@@ -406,6 +412,7 @@ pub fn short_label(action: Action) -> &'static str {
         Action::Clipping => "Clipping",
         Action::FocusPeaking => "Peaking",
         Action::Slideshow => "Slideshow",
+        Action::SecondWindow => "2nd window",
         Action::VisualizeSpots => "Spots view",
         Action::SoftProof => "Soft proof",
         Action::ProofProfile => "Profile",
@@ -454,6 +461,7 @@ pub struct MenuState {
     pub spots_view: bool,
     pub proofing: bool,
     pub reference: bool,
+    pub second_window: bool,
     pub context: Option<&'static str>,
 }
 
@@ -584,7 +592,8 @@ fn group_ui(ui: &mut egui::Ui, g: &Group, state: &MenuState, clicked: &mut Optio
                             || (*action == Action::FocusPeaking && state.peaking)
                             || (*action == Action::VisualizeSpots && state.spots_view)
                             || (*action == Action::SoftProof && state.proofing)
-                            || (*action == Action::ReferenceView && state.reference);
+                            || (*action == Action::ReferenceView && state.reference)
+                            || (*action == Action::SecondWindow && state.second_window);
                         if button(ui, *action, enabled, on).clicked() {
                             *clicked = Some(*action);
                         }
@@ -812,6 +821,7 @@ mod tests {
             Action::FocusPeaking,
             Action::Slideshow,
             Action::Loupe,
+            Action::SecondWindow,
             Action::VisualizeSpots,
             Action::SoftProof,
             Action::ProofProfile,

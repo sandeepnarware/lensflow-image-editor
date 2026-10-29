@@ -24,6 +24,7 @@ pub mod meta_ui;
 pub mod people_ui;
 pub mod print_ui;
 pub mod reference;
+pub mod second_window;
 pub mod selection;
 pub mod slideshow;
 pub mod stacks_ui;
@@ -142,6 +143,8 @@ pub struct Library {
     map: Option<map::MapView>,
     /// View → Slideshow, while running (it covers the window).
     slideshow: Option<slideshow::Slideshow>,
+    /// View → Second window, while open.
+    second_window: Option<second_window::SecondWindow>,
     /// View → Reference: shown beside the photo in Develop.
     reference_on: bool,
     /// The reference's photo and picture (kept while hidden).
@@ -262,6 +265,7 @@ impl Library {
             local_ai: false,
             compare: None,
             slideshow: None,
+            second_window: None,
             reference_on: false,
             reference: None,
             reference_pick: None,
@@ -953,6 +957,11 @@ impl Library {
                 id,
                 result,
             } => self.reference_rendered(generation, id, result),
+            Msg::SecondWindowRendered {
+                generation,
+                id,
+                result,
+            } => self.second_window_rendered(generation, id, result),
             Msg::AlbumPhotos {
                 root,
                 album_id,
@@ -1405,6 +1414,7 @@ impl Library {
         self.sync_develop(env);
         self.develop.tick(ui.ctx(), env.jobs, env.toasts);
         let edited = self.develop.take_edited(Instant::now());
+        self.follow_second_window(&edited, env);
         if !edited.is_empty() {
             self.refresh_photos(&edited, env);
         }
@@ -1504,6 +1514,7 @@ impl Library {
         self.album_dialogs(ui.ctx(), env);
         self.rename_dialog(ui.ctx(), env);
         self.slideshow_ui(ui.ctx(), env);
+        self.second_window_ui(ui.ctx());
         self.people_dialogs(ui.ctx(), env);
         self.ai_dialog(ui.ctx(), env);
         self.remove_dialog(ui.ctx(), env);
@@ -1605,6 +1616,7 @@ impl Library {
             Action::Develop => !develop && self.selection.active().is_some(),
             Action::Up | Action::Down => !develop && !self.order.is_empty(),
             Action::ReferenceView => develop,
+            Action::SecondWindow => true,
             Action::BeforeAfter
             | Action::Clipping
             | Action::FocusPeaking
@@ -1741,6 +1753,7 @@ impl Library {
             Action::Down => self.step(Dir::Down, env),
             Action::BeforeAfter => self.develop.toggle_before(),
             Action::ReferenceView => self.toggle_reference(env),
+            Action::SecondWindow => self.toggle_second_window(),
             Action::Clipping => self.develop.toggle_clipping(),
             Action::FocusPeaking => self.develop.toggle_peaking(),
             Action::VisualizeSpots => self.develop.toggle_spots_view(),

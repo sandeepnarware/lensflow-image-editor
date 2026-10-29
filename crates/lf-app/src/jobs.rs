@@ -204,6 +204,12 @@ pub enum Msg {
         id: i64,
         result: Result<Box<crate::library::compare::Pixels>, String>,
     },
+    /// The second window's photo was rendered (`generation`: the request that asked).
+    SecondWindowRendered {
+        generation: u64,
+        id: i64,
+        result: Result<Box<crate::library::compare::Pixels>, String>,
+    },
     /// A slideshow's photo was rendered (`generation`: the show that asked).
     SlideRendered {
         generation: u64,
@@ -836,6 +842,7 @@ pub(crate) mod owners {
             | Msg::PeopleSelected { .. }
             | Msg::SlideRendered { .. }
             | Msg::ReferenceRendered { .. }
+            | Msg::SecondWindowRendered { .. }
             | Msg::Renamed { .. }
             | Msg::EditInDone(..)
             | Msg::PrintProgress { .. }
@@ -983,6 +990,11 @@ pub(crate) mod owners {
                 result: Err("no".into()),
             },
             Msg::ReferenceRendered {
+                generation: 1,
+                id: 1,
+                result: Err("no".into()),
+            },
+            Msg::SecondWindowRendered {
                 generation: 1,
                 id: 1,
                 result: Err("no".into()),

@@ -46,6 +46,8 @@ pub enum Action {
     FocusPeaking,
     /// The selected photos (or the grid's) one at a time over the whole window.
     Slideshow,
+    /// A window of its own (for a second monitor) showing the photo worked on.
+    SecondWindow,
     /// The preview as white edges on black, so dust spots show.
     VisualizeSpots,
     /// Show the photo as a printer and paper profile would print it.
@@ -174,6 +176,7 @@ impl Action {
             Action::Clipping => "Show clipping",
             Action::FocusPeaking => "Focus peaking",
             Action::Slideshow => "Slideshow",
+            Action::SecondWindow => "Second window",
             Action::VisualizeSpots => "Visualize spots",
             Action::SoftProof => "Soft proof",
             Action::ProofProfile => "Proof profile…",
