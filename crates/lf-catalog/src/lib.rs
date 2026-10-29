@@ -28,6 +28,7 @@ pub mod tags;
 pub mod thumbs;
 pub mod ultrahdr;
 pub mod versions;
+pub mod web_gallery;
 
 pub use db::{Catalog, CatalogError, Folder, PhotoRow};
 pub use model::{NewPhoto, Reconciled, Source, Version};

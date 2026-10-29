@@ -57,6 +57,8 @@ pub enum Purpose {
     AutoImportWatch,
     /// "Tag from GPX track"'s track file; the dialog's own tickets.
     GpxFile,
+    /// Web gallery's folder; the dialog's own tickets.
+    WebGalleryFolder,
 }
 
 /// A folder that exists and can be read.
@@ -219,6 +221,7 @@ impl Library {
             Purpose::ExportProfile => "Choose an ICC profile",
             Purpose::Ingest(_) | Purpose::AutoImportWatch => "Choose a folder",
             Purpose::GpxFile => "Choose a GPX track",
+            Purpose::WebGalleryFolder => "Choose a folder for the gallery",
             Purpose::LutFile => "Choose a .cube LUT",
             Purpose::DcpFile => "Choose a .dcp camera profile",
             Purpose::SkyFile => "Choose a photo of a sky",
@@ -320,6 +323,13 @@ impl Library {
             }
             return;
         }
+        if purpose == Purpose::WebGalleryFolder {
+            match result {
+                Ok(chosen) => self.web_gallery_folder_chosen(ticket, chosen.map(|c| c.path)),
+                Err(e) => env.toasts.push(Level::Warning, e),
+            }
+            return;
+        }
         if purpose == Purpose::GpxFile {
             match result {
                 Ok(chosen) => self.gpx_chosen(ticket, chosen.map(|c| c.path)),
@@ -378,6 +388,7 @@ impl Library {
             | Purpose::Ingest(_)
             | Purpose::AutoImportWatch
             | Purpose::GpxFile
+            | Purpose::WebGalleryFolder
             | Purpose::LutFile
             | Purpose::DcpFile
             | Purpose::SkyFile

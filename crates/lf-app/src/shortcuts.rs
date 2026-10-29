@@ -83,6 +83,8 @@ pub enum Action {
     Map,
     /// Photos placed from a GPX track by their capture times.
     GeotagGpx,
+    /// The selection as a website in a folder.
+    WebGallery,
     // AI (on this computer)
     /// Remove noise; a new photo beside each.
     AiDenoise,
@@ -217,6 +219,7 @@ impl Action {
             Action::Loupe => "Loupe",
             Action::Survey => "Survey",
             Action::GeotagGpx => "Tag from GPX track…",
+            Action::WebGallery => "Web gallery…",
             Action::QuickDevelop => "Quick develop",
             Action::Map => "Map",
             Action::AiDenoise => "AI Denoise…",

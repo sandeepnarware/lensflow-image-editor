@@ -276,6 +276,8 @@ pub enum Msg {
         auto: bool,
         result: Result<Option<String>, String>,
     },
+    /// Web gallery: the site's page, or why it could not be made.
+    WebGalleryDone(Result<PathBuf, String>),
     /// "Tag from GPX track": how many photos were placed, of how many.
     Geotagged {
         root: PathBuf,
@@ -884,6 +886,7 @@ pub(crate) mod owners {
             | Msg::Stacked { .. }
             | Msg::AutoImported { .. }
             | Msg::Geotagged { .. }
+            | Msg::WebGalleryDone(..)
             | Msg::StackProgress { .. }
             | Msg::AlbumPhotos { .. }
             | Msg::AlbumChanged { .. }
@@ -1055,6 +1058,7 @@ pub(crate) mod owners {
                 root: dir.join("elsewhere"),
                 result: Ok((0, 0)),
             },
+            Msg::WebGalleryDone(Err("no".into())),
             Msg::StackProgress { done: 1, total: 2 },
             Msg::LensProfile {
                 photo_id: 1,

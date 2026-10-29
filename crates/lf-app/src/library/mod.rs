@@ -32,6 +32,7 @@ pub mod second_window;
 pub mod selection;
 pub mod slideshow;
 pub mod stacks_ui;
+pub mod web_gallery_ui;
 
 use crate::app::THUMBS_STOPPED_BANNER;
 use crate::catalog_ext::{self, count};
@@ -145,6 +146,8 @@ pub struct Library {
     auto_import_dialog: Option<crate::dialogs::auto_import::AutoImportDialog>,
     /// "Tag from GPX track", while open.
     geotag: Option<crate::dialogs::geotag::GeotagDialog>,
+    /// "Web gallery…", while open or making.
+    web_gallery: Option<web_gallery_ui::WebGalleryDialog>,
     local_ai: bool,
     /// Compare, while open (it shows in place of the grid).
     compare: Option<compare::Compare>,
@@ -278,6 +281,7 @@ impl Library {
             auto_import: auto_import_ui::AutoImport::default(),
             auto_import_dialog: None,
             geotag: None,
+            web_gallery: None,
             local_ai: false,
             compare: None,
             slideshow: None,
@@ -949,6 +953,7 @@ impl Library {
                 result,
             } => self.auto_imported(root, folder, result, env),
             Msg::Geotagged { root, result } => self.geotagged(root, result, env),
+            Msg::WebGalleryDone(result) => self.web_gallery_done(result, env),
             Msg::Stacked { root, auto, result } => {
                 if auto {
                     self.auto_stack_done();
@@ -1548,6 +1553,7 @@ impl Library {
         self.auto_stack_dialog(ui.ctx(), env);
         self.auto_import_dialog(ui.ctx(), env);
         self.geotag_dialog(ui.ctx(), env);
+        self.web_gallery_dialog(ui.ctx(), env);
         if self.mode == Mode::Library {
             self.quick_develop_ui(ui.ctx(), env);
         }
@@ -1572,6 +1578,7 @@ impl Library {
             || self.rename.is_some()
             || self.auto_import_dialog.is_some()
             || self.geotag.is_some()
+            || self.web_gallery.is_some()
             || self.slideshow.is_some()
             || self.ai.is_some()
             || self.remove.is_some()
@@ -1605,6 +1612,7 @@ impl Library {
             Action::RenamePhotos => !develop && selected && self.rename.is_none() && self.can_add(),
             Action::EditIn => (develop || selected) && self.can_add(),
             Action::Print => develop || selected,
+            Action::WebGallery => !develop && selected && self.web_gallery.is_none(),
             Action::MergeHdr
             | Action::MergePanorama
             | Action::MergeFocus
@@ -1770,6 +1778,7 @@ impl Library {
             Action::Metadata => self.toggle_metadata(),
             Action::QuickDevelop => self.toggle_quick_develop(),
             Action::GeotagGpx => self.open_geotag(),
+            Action::WebGallery => self.open_web_gallery(),
             Action::Map if self.map.is_some() => self.map = None,
             Action::Map => self.open_map(env),
             Action::Survey if self.compare.is_some() => self.close_compare(),

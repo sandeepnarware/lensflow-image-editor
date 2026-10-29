@@ -244,6 +244,10 @@ Keyword list (the sidebar, under People): every keyword of the folder with how m
 have it, as a tree when written as paths ("Places > India > Goa"); click one to show only those
 photos (and any under it), again to show all.
 
+Web gallery (Home → Photos → Web gallery…): the selected photos as a website in a folder: a
+grid of thumbnails, each photo large on a click (arrow keys step, Esc closes), with their titles;
+works offline, uploads anywhere.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

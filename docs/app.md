@@ -936,6 +936,13 @@ click sets `Filter::keyword` (toggled), which keeps photos with that keyword or 
 case ignored (`keywords_ui::under`). Keywords are stored as typed, so a hierarchy is a naming
 habit, not a separate table.
 
+Web gallery (`Action::WebGallery`, `library/web_gallery_ui.rs`, `lf_catalog::web_gallery`) runs on
+`Long`: the selection exported through `export_job::run` (JPEG 85, 2048 px long edge, the photos'
+edits) into `<folder>/images`, then `web_gallery::write`: 480 px thumbnails in `thumbs/` and an
+`index.html` with inline CSS and a few lines of script (no outside files), captions the
+catalogue titles or file names, every text HTML-escaped and file names URL-encoded. The page is
+opened when it is done (`platform::open_file`).
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the
