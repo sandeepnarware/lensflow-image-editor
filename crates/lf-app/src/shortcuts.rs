@@ -57,6 +57,8 @@ pub enum Action {
     // AI (on this computer)
     /// Remove noise; a new photo beside each.
     AiDenoise,
+    /// A shallow depth of field from the photo's depth, as a new photo.
+    AiLensBlur,
     /// Enlarge 2× or 4×; a new photo beside each.
     AiUpscale,
     /// Smooth the skin of the faces found; a new photo beside each.
@@ -166,6 +168,7 @@ impl Action {
             Action::Compare => "Compare",
             Action::Map => "Map",
             Action::AiDenoise => "AI Denoise…",
+            Action::AiLensBlur => "Lens blur…",
             Action::AiUpscale => "AI Upscale…",
             Action::AiRetouch => "Retouch portrait…",
             Action::AiCutout => "Remove background…",

@@ -30,6 +30,9 @@ pub enum AiTool {
     Retouch { amount: f32 },
     /// The main subject on a transparent background.
     Cutout,
+    /// A shallow depth of field from the photo's depth ([`lf_ai::lens_blur`]): how much blur
+    /// and how deep the sharp zone is, each 0..1.
+    LensBlur { amount: f32, range: f32 },
     /// What a painted mask covers, filled from its surroundings (the mask comes with the run).
     Remove,
     /// A mask of the subject, the sky, the people or a part of them for the open photo,
@@ -55,6 +58,7 @@ impl AiTool {
             AiTool::Upscale { .. } => lf_ai::restore::UPSCALE_MODELS.to_vec(),
             AiTool::Retouch { .. } => lf_ai::faces::FACE_MODELS.to_vec(),
             AiTool::Cutout => lf_ai::segment::SUBJECT_MODELS.to_vec(),
+            AiTool::LensBlur { .. } => lf_ai::depth::DEPTH_MODELS.to_vec(),
             AiTool::Remove => lf_ai::inpaint::INPAINT_MODELS.to_vec(),
             AiTool::Mask { target } => target.models().to_vec(),
             AiTool::ObjectMask { .. } => lf_ai::objects::OBJECT_MODELS.to_vec(),
@@ -71,6 +75,7 @@ impl AiTool {
             AiTool::Upscale { .. } => "AI Upscale",
             AiTool::Retouch { .. } => "Retouch portrait",
             AiTool::Cutout => "Remove background",
+            AiTool::LensBlur { .. } => "Lens blur",
             AiTool::Remove => "Remove objects",
             AiTool::Mask { target } => match target {
                 Target::Subject => "Select subject",
@@ -99,6 +104,7 @@ impl AiTool {
             AiTool::Upscale { factor } => (format!("Upscaled-{factor}x"), "tif"),
             AiTool::Retouch { .. } => ("Retouched".into(), "tif"),
             AiTool::Cutout => ("Cutout".into(), "png"),
+            AiTool::LensBlur { .. } => ("LensBlur".into(), "tif"),
             AiTool::Remove => ("Removed".into(), "tif"),
             AiTool::Mask { .. }
             | AiTool::ObjectMask { .. }
@@ -305,6 +311,17 @@ fn one(
         AiTool::Denoise { strength } => {
             let done =
                 lf_ai::restore::denoise(engine, &img, strength, progress, stop).map_err(text)?;
+            write_tiff16(&out, &done)?;
+        }
+        AiTool::LensBlur { amount, range } => {
+            progress(0, 3);
+            let depth = lf_ai::depth::depth(engine, &img, img.w, img.h).map_err(text)?;
+            if stop.load(Ordering::SeqCst) {
+                return Err(lf_ai::AiError::Stopped.to_string());
+            }
+            progress(1, 3);
+            let done = lf_ai::lens_blur::lens_blur(&img, &depth, amount, range, None);
+            progress(2, 3);
             write_tiff16(&out, &done)?;
         }
         AiTool::Upscale { factor } => {

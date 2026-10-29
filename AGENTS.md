@@ -20,7 +20,7 @@ and 2d tasks 1–2 are built; packaging tasks 3–5 are in flight.
 | `lf-raw` | Magic-byte kind sniffing, rawler decode, demosaic (bilinear/AHD/X-Trans/preview bin), WB + colour (or a DNG camera profile, `dcp.rs`) + highlight handling, f16 headroom, EXIF, frame cache, `lf-render` example. | `src/open.rs`, `src/develop.rs` |
 | `lf-grade` | CPU maths for "Match a reference": measure, correct, calibrate (injected renderer), strength/exposure, contact sheet. | `src/lib.rs` |
 | `lf-merge` | CPU merging: exposure fusion (Mertens, with ghost removal), focus stacking through Laplacian pyramids, median-threshold-bitmap alignment; panoramas (`panorama.rs`: cylinder fit, NCC registration, gain and feather blending). No GPU, no catalogue. | `src/lib.rs` |
-| `lf-ai` | Local AI through ONNX Runtime (loaded at run time, never linked): pinned downloads (`assets.rs`), tiles, denoise and upscale (`restore.rs`), subject and sky masks (`segment.rs`), removal (`inpaint.rs`), faces and skin retouch (`faces.rs`), telling people apart (`identity.rs`), keywords (`keywords.rs`, CLIP + `data/keywords.{txt,f16}`), click-to-mask (`objects.rs`, MobileSAM), eyes/irises/lips/teeth (`features.rs`, Face Mesh V2). | `src/lib.rs`, `src/assets.rs` |
+| `lf-ai` | Local AI through ONNX Runtime (loaded at run time, never linked): pinned downloads (`assets.rs`), tiles, denoise and upscale (`restore.rs`), subject and sky masks (`segment.rs`), removal (`inpaint.rs`), faces and skin retouch (`faces.rs`), telling people apart (`identity.rs`), keywords (`keywords.rs`, CLIP + `data/keywords.{txt,f16}`), click-to-mask (`objects.rs`, MobileSAM), eyes/irises/lips/teeth (`features.rs`, Face Mesh V2), depth and lens blur (`depth.rs`, `lens_blur.rs`). | `src/lib.rs`, `src/assets.rs` |
 | `lf-account` | Blocking reqwest/rustls LensFlow client: sign-in + 2FA, token store, entitlement gate/offline grace, desktop grade, presets sync, download link. | `src/client.rs`, `src/entitlement.rs` |
 | `lf-catalog` | SQLite catalogue (bundled, WAL, schema v13), sidecars, edit history (cap 50), versions, import, thumbnails, export, presets. Never touches pixels directly. | `src/db.rs`, `src/edits.rs`, `src/export.rs` |
 | `lf-fixtures` | Loads `tests/fixtures` goldens and applies the parity thresholds. | `src/lib.rs` |
@@ -169,6 +169,9 @@ cargo test --workspace                   # includes the 228-render parity suite
   Merge to HDR: `lf-merge` (align + fuse), `merge_job.rs` (16-bit TIFF beside the first frame),
   `dialogs/merge.rs`, `library/merge_ui.rs`, `Action::MergeHdr` (`Ctrl+H`). Panorama: `lf_merge::panorama`,
   `MergeKind::Panorama`, `Action::MergePanorama` (`Ctrl+M`).
+  Lens blur: `lf_ai::depth` (Depth Anything V2 Small; only Small is Apache-2.0), `lf_ai::lens_blur` (auto focus,
+  circle of confusion, weighted disc layers in linear light, big radii blurred small), `AiTool::LensBlur`
+  (`<name>-LensBlur.tif`), `Action::AiLensBlur` (AI → Enhance).
   Guided Upright: `lf_settings::upright::guided` (uncapped, mode from the guides drawn: `Mode::Horizontal` for
   level guides only), the `Guided` tool (`ToolKind::Guided`, `GuidedTool`: guides in the photo as shot,
   `apply_guides` after each one; up to four).

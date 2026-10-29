@@ -20,6 +20,9 @@ pub const ON_THIS_COMPUTER: &str = "Runs on this computer: nothing is uploaded."
 pub const ABOUT_DENOISE: &str = "Removes noise while keeping detail. Each photo is rendered with its edits and saved beside it as a new 16-bit TIFF; the original is not changed.";
 pub const ABOUT_UPSCALE: &str = "Enlarges each photo with detail filled in, saved beside it as a new 16-bit TIFF. Very large results are capped at 120 megapixels.";
 pub const ABOUT_RETOUCH: &str = "Finds the faces and smooths their skin, leaving eyes, lips and hair sharp. Saved beside each photo as a new 16-bit TIFF.";
+pub const ABOUT_LENS_BLUR: &str = "Finds how far each part of the photo is and blurs what lies in front of and behind the subject, as a wide aperture would. Saved beside each photo as a new 16-bit TIFF.";
+pub const BLUR_AMOUNT: &str = "Blur amount";
+pub const FOCUS_RANGE: &str = "Focus range";
 pub const ABOUT_CUTOUT: &str = "Keeps the main subject and makes the background transparent, saved beside each photo as a PNG.";
 pub const ABOUT_SUBJECT: &str =
     "Finds the main subject and adds it as a mask, ready for its own adjustments.";
@@ -165,6 +168,7 @@ impl AiDialog {
             AiTool::Upscale { .. } => ABOUT_UPSCALE,
             AiTool::Retouch { .. } => ABOUT_RETOUCH,
             AiTool::Cutout => ABOUT_CUTOUT,
+            AiTool::LensBlur { .. } => ABOUT_LENS_BLUR,
             AiTool::Remove => ABOUT_REMOVE,
             AiTool::Mask {
                 target: lf_ai::segment::Target::Subject,
@@ -201,6 +205,19 @@ impl AiDialog {
                 ui.add(egui::Slider::new(&mut pct, 10.0..=100.0).suffix(" %"))
                     .labelled_by(label.id);
                 *amount = pct / 100.0;
+            }
+            AiTool::LensBlur { amount, range } => {
+                let mut pct = *amount * 100.0;
+                let label = ui.label(BLUR_AMOUNT);
+                ui.add(egui::Slider::new(&mut pct, 10.0..=100.0).suffix(" %"))
+                    .labelled_by(label.id);
+                *amount = pct / 100.0;
+                let mut depth = *range * 100.0;
+                let label = ui.label(FOCUS_RANGE);
+                ui.add(egui::Slider::new(&mut depth, 0.0..=80.0).suffix(" %"))
+                    .labelled_by(label.id)
+                    .on_hover_text("How deep the sharp zone round the subject is");
+                *range = depth / 100.0;
             }
             AiTool::Cutout
             | AiTool::Mask { .. }

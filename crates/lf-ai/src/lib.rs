@@ -9,11 +9,13 @@
 
 pub mod assets;
 pub mod cull;
+pub mod depth;
 pub mod faces;
 pub mod features;
 pub mod identity;
 pub mod inpaint;
 pub mod keywords;
+pub mod lens_blur;
 pub mod objects;
 pub mod restore;
 pub mod segment;

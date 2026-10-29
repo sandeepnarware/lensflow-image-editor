@@ -1524,9 +1524,11 @@ impl Library {
                     && (self.compare.is_some()
                         || compare::can_compare(self.selection.current.len()))
             }
-            Action::AiDenoise | Action::AiUpscale | Action::AiRetouch | Action::AiCutout => {
-                self.ai_ready()
-            }
+            Action::AiDenoise
+            | Action::AiUpscale
+            | Action::AiRetouch
+            | Action::AiCutout
+            | Action::AiLensBlur => self.ai_ready(),
             Action::AiRemoveObjects => {
                 self.ai_ready() && self.remove.is_none() && self.ai_targets().len() == 1
             }
@@ -1642,6 +1644,10 @@ impl Library {
             Action::Compare if self.compare.is_some() => self.close_compare(),
             Action::Compare => self.open_compare(env),
             Action::AiDenoise => self.open_ai(crate::ai_job::AiTool::Denoise { strength: 0.8 }),
+            Action::AiLensBlur => self.open_ai(crate::ai_job::AiTool::LensBlur {
+                amount: 0.6,
+                range: 0.2,
+            }),
             Action::AiUpscale => self.open_ai(crate::ai_job::AiTool::Upscale { factor: 2 }),
             Action::AiRetouch => self.open_ai(crate::ai_job::AiTool::Retouch { amount: 0.6 }),
             Action::AiCutout => self.open_ai(crate::ai_job::AiTool::Cutout),

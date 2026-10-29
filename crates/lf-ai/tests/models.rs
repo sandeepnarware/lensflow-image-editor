@@ -309,3 +309,75 @@ fn a_faces_eyes_are_above_its_lips() {
         area(&lips)
     );
 }
+
+#[test]
+fn the_landscape_fixtures_sky_is_far_and_blurred_while_the_foreground_stays_sharp() {
+    let Some(engine) = engine(&lf_ai::depth::DEPTH_MODELS) else {
+        return;
+    };
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/sources/landscape.png"
+    );
+    let img = Rgb::from_rgba8(&image::open(path).expect("fixture").to_rgba8());
+    let depth = lf_ai::depth::depth(&engine, &img, img.w, img.h).expect("depth");
+    let band = |m: &lf_ai::Gray, y0: usize, y1: usize| {
+        let rows = &m.data[y0 * m.w..y1 * m.w];
+        rows.iter().sum::<f32>() / rows.len() as f32
+    };
+    let (top, bottom) = (
+        band(&depth, 0, img.h / 5),
+        band(&depth, img.h * 4 / 5, img.h),
+    );
+    assert!(
+        bottom > top + 0.3,
+        "near at the bottom: top {top}, bottom {bottom}"
+    );
+    // Focus on the foreground: the far half is softened, the near band kept.
+    let focus = Some(bottom);
+    let out = lf_ai::lens_blur::lens_blur(&img, &depth, 1.0, 0.2, focus);
+    let detail = |p: &Rgb, y0: usize, y1: usize| {
+        let mut s = 0.0f32;
+        for y in y0..y1 {
+            for x in 1..p.w {
+                s += (p.at(x, y)[1] - p.at(x - 1, y)[1]).abs();
+            }
+        }
+        s
+    };
+    let (h, w) = (img.h, img.w);
+    let _ = w;
+    let near = (h * 85 / 100, h * 95 / 100);
+    let far = (h * 30 / 100, h * 45 / 100);
+    assert!(
+        detail(&out, near.0, near.1) > detail(&img, near.0, near.1) * 0.8,
+        "the near band keeps its detail"
+    );
+    assert!(
+        detail(&out, far.0, far.1) < detail(&img, far.0, far.1) * 0.8,
+        "the far band is softened"
+    );
+}
+
+/// Lens blur's cost on a 24-megapixel photo (prints the time; only with `LF_AI_DIR` set).
+#[test]
+fn lens_blur_on_24_megapixels_takes_seconds_not_minutes() {
+    if std::env::var_os("LF_AI_DIR").is_none() {
+        return;
+    }
+    let (w, h) = (6000, 4000);
+    let mut img = Rgb::new(w, h);
+    for (i, v) in img.data.iter_mut().enumerate() {
+        *v = ((i * 7919) % 1000) as f32 / 1000.0;
+    }
+    let depth = lf_ai::Gray {
+        w,
+        h,
+        data: (0..w * h).map(|i| (i / w) as f32 / h as f32).collect(),
+    };
+    let t = std::time::Instant::now();
+    let out = lf_ai::lens_blur::lens_blur(&img, &depth, 1.0, 0.2, Some(1.0));
+    let took = t.elapsed();
+    eprintln!("lens blur, 24 MP, full amount: {took:?}");
+    assert_eq!((out.w, out.h), (w, h));
+}

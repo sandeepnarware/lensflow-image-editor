@@ -7,7 +7,8 @@
 //! The licences: ONNX Runtime MIT; IS-Net (subject) Apache-2.0; SkySeg MIT; SCUNet
 //! Apache-2.0; Real-ESRGAN BSD-3-Clause; LaMa Apache-2.0; YuNet MIT;
 //! open-closed-eye-0001 Apache-2.0; MediaPipe selfie multiclass Apache-2.0; SFace Apache-2.0;
-//! CLIP ViT-B/32 MIT; MobileSAM Apache-2.0; MediaPipe Face Mesh V2 Apache-2.0.
+//! CLIP ViT-B/32 MIT; MobileSAM Apache-2.0; MediaPipe Face Mesh V2 Apache-2.0; Depth
+//! Anything V2 Small Apache-2.0.
 //! See `NOTICE`.
 
 use sha2::{Digest, Sha256};
@@ -192,6 +193,16 @@ pub const FACE_MESH: Asset = Asset {
     url: "https://huggingface.co/naklitechie/face-landmarks-onnx/resolve/575c33816c840c5b156398adb485e4f8d138adc2/face_landmarks.onnx",
     size: 4_920_995,
     sha256: "f38c3321ceffbc9e95103480ad38cc3f52e7e1bde2bcee7cd9355d0b9138ac0c",
+    unpack: Unpack::File,
+};
+
+/// Depth Anything V2 Small (Apache-2.0; ONNX by onnx-community): relative inverse depth for
+/// Lens blur. Only the Small model is Apache-2.0 (the larger ones are non-commercial).
+pub const DEPTH: Asset = Asset {
+    file: "depth-anything-v2-small.onnx",
+    url: "https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/4472b7362082ad9968fee890ca0f1e5aca36b93d/onnx/model.onnx",
+    size: 99_060_839,
+    sha256: "afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c",
     unpack: Unpack::File,
 };
 

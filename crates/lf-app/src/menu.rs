@@ -178,7 +178,14 @@ pub const RIBBON: &[Tab] = &[
     Tab {
         title: "AI",
         groups: &[
-            group("Enhance", &[Do(Action::AiDenoise), Do(Action::AiUpscale)]),
+            group(
+                "Enhance",
+                &[
+                    Do(Action::AiDenoise),
+                    Do(Action::AiUpscale),
+                    Do(Action::AiLensBlur),
+                ],
+            ),
             group(
                 "Retouch",
                 &[
@@ -293,6 +300,7 @@ pub fn icon(action: Action) -> &'static str {
         Action::Compare => "⚖",
         Action::Map => "🗺",
         Action::AiDenoise => "✨",
+        Action::AiLensBlur => "◎",
         Action::AiUpscale => "⛶",
         Action::AiRetouch => "☺",
         Action::AiCutout => "✂",
@@ -386,6 +394,7 @@ pub fn short_label(action: Action) -> &'static str {
         Action::SoftProof => "Soft proof",
         Action::ProofProfile => "Profile",
         Action::AiDenoise => "Denoise",
+        Action::AiLensBlur => "Lens blur",
         Action::AiUpscale => "Upscale",
         Action::AiRetouch => "Retouch",
         Action::AiCutout => "Background",
@@ -742,6 +751,7 @@ mod tests {
             Action::MergePanorama,
             Action::MergeFocus,
             Action::AiDenoise,
+            Action::AiLensBlur,
             Action::AiUpscale,
             Action::AiRetouch,
             Action::AiCutout,

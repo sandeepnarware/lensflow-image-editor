@@ -728,6 +728,18 @@ correction) becomes `AiTool::ObjectMask { u, v }`, run like the other AI masks
 asks Segment Anything's multi-mask decoder with the point and SAM's padding point, keeps the
 mask it rates best and softens its logits with a sigmoid.
 
+Lens blur (`AiTool::LensBlur`, a new 16-bit TIFF like AI Denoise) renders the photo with its
+edits, asks `lf_ai::depth` (Depth Anything V2 Small: shorter side about 518, sides multiples of
+14, ImageNet mean and std; its relative inverse depth spread to 0 far .. 1 near and resized to
+the photo) and applies `lens_blur::lens_blur`. The focus is the 90th percentile of depth in
+the middle half of the frame; each pixel's circle of confusion is 0 within half the focus range
+of it and full a third of the depth range beyond. The blur works in linear light (so highlights
+bloom) as seven layers of growing disc radius (largest 3 % of the long side at full amount),
+each pixel mixing the two either side of its circle; samples are weighted by their own circle,
+so the sharp subject does not halo into the background. Discs are read through row prefix
+sums; a radius over 12 px is blurred on a picture made smaller by as much. 24 MP takes about
+12 s in release on this machine.
+
 Guided Upright (Develop's Guided tool) takes drags on the photo as guides, stored in the photo
 as shot (`SpotMap::uv` through the lens corrections), so they stay on the edges they were
 drawn on as the correction changes; up to four, a fifth replacing the oldest. After each guide

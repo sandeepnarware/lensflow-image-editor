@@ -39,7 +39,7 @@ close or competitors ship new features.
 | Camera-matching profiles (camera looks, ~~DCP profiles~~ (done: RAW → Camera profile, user-imported), ~~colour calibration~~ (done: Develop → Calibration)) | All |
 | HDR editing and output for HDR screens, gain-map AVIF/JPEG | Lightroom |
 | Reflection, wire and people removal (one-click distractions) | Lightroom 15.6 |
-| Lens blur (AI depth of field, depth mask) | Lightroom |
+| ~~Lens blur (AI depth of field)~~ (done: AI → Enhance → Lens blur, as a new photo); depth mask | Lightroom |
 | Layers (stacked local edits with opacity) | Capture One, Luminar |
 | ~~Upright Guided (draw lines)~~ (done: Develop → Guided), Level, Auto | Lightroom |
 | New-camera support: rawler can't open Nikon HE/HE* NEF, DNG 1.7 JPEG XL, some Sony ARW / Phase One IIQ | All, updated monthly |

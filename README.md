@@ -170,6 +170,12 @@ first use of a tool downloads the AI engine (ONNX Runtime) and that tool's model
 (the dialog says how much); each file is checked against a pinned SHA-256. They need the
 studio in good standing, and use none of the plan's server AI allowance.
 
+Lens blur (AI → Enhance → Lens blur): finds how far each part of the photo is (Depth
+Anything V2 Small, on this computer) and blurs what lies in front of and behind the subject
+as a wide aperture would, bright points blooming into discs; the subject (the nearest part
+of the middle of the frame) stays sharp within the focus range. Saved beside the photo as
+`<name>-LensBlur.tif`.
+
 Assisted culling (AI → Cull): scores the selected photos (or every photo shown) for blur,
 missed focus on the eyes and closed eyes, then offers to show or reject the ones that look
 wrong. Nothing is flagged until you say so. The grid marks a likely reject with an amber

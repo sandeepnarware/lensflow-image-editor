@@ -2726,6 +2726,10 @@ fn guided_upright_straightens_to_two_drawn_guides() {
     );
     assert_eq!(lens.horizontal, 0.0);
     assert_eq!(before, 0);
-    assert_eq!(history(&root, id), 2, "the photo before, and the correction");
+    assert_eq!(
+        history(&root, id),
+        2,
+        "the photo before, and the correction"
+    );
     assert!(h.query_by_label("2 guides.").is_some());
 }

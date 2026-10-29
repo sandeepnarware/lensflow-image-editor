@@ -621,7 +621,7 @@ SkySeg (MIT), SCUNet (Apache-2.0), Real-ESRGAN general x4v3 (BSD-3-Clause), LaMa
 converted from TFLite to ONNX with its weights unchanged), Intel's open-closed-eye-0001 from the Open Model Zoo
 (Apache-2.0) SFace face recognition from the OpenCV model zoo (Apache-2.0), MobileSAM with Segment
 Anything's mask decoder (Apache-2.0), Google's MediaPipe face landmarker (Face Mesh V2,
-Apache-2.0, converted to ONNX with its weights unchanged) and OpenAI's CLIP ViT-B/32
+Apache-2.0, converted to ONNX with its weights unchanged), Depth Anything V2 Small (Apache-2.0) and OpenAI's CLIP ViT-B/32
 (MIT; the keyword list's text descriptions are computed ahead of time and ship with the app).
 libwebp-sys builds Google's libwebp (BSD-3-Clause) from source into the program for lossy
 WebP export; AVIF export uses rav1e and ravif (BSD-2-Clause / BSD-3-Clause), pure Rust.
