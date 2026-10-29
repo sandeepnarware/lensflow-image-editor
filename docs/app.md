@@ -896,6 +896,10 @@ that differs from the step before, desktop keys by their own name, "+n" for more
 change. A click is `EditOp::Jump` → `EditState::jump` → `edits::jump` (the cursor moved to
 that step, its settings put back, a sidecar written), as several undos would.
 
+The filter bar's camera and lens lists (`Filter::{camera, lens}`, `cull_ui::pick_one`) offer the
+folder's distinct EXIF names (`cull_ui::distinct`), shown when there are two or more (or one is
+chosen); a photo is kept when its `PhotoRow::camera` / `lens` is the one chosen.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

@@ -221,6 +221,9 @@ together; × on a photo takes it out of the survey and the selection.
 History (Develop, at the bottom of the side panel): every edit step of the open photo, newest first, named by
 what it changed ("Exposure", "Crop", "Masks +2"); click one to go back (or forward) to it.
 
+Camera and lens filters (the filter bar): show only the photos from one camera or through one
+lens, when the folder has more than one.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

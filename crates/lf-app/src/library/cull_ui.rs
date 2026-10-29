@@ -48,7 +48,53 @@ fn named(response: &egui::Response, name: &str) {
 }
 
 /// The bar over the grid; returns the filter when the user changed it.
-pub fn filter_bar(ui: &mut egui::Ui, current: &Filter) -> Option<Filter> {
+pub const ANY_CAMERA: &str = "Any camera";
+pub const ANY_LENS: &str = "Any lens";
+pub const CAMERA_LIST: &str = "Camera";
+pub const LENS_LIST: &str = "Lens";
+
+/// The distinct non-empty values of `values`, sorted (the camera and lens lists).
+pub fn distinct<'a>(values: impl Iterator<Item = Option<&'a String>>) -> Vec<String> {
+    let mut v: Vec<String> = values
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// A list of `choices` with "any" first; shown when there is something to choose between.
+fn pick_one(
+    ui: &mut egui::Ui,
+    id: &str,
+    name: &str,
+    any: &str,
+    choices: &[String],
+    value: &mut Option<String>,
+) {
+    if choices.len() < 2 && value.is_none() {
+        return;
+    }
+    let combo = egui::ComboBox::from_id_salt(id)
+        .selected_text(value.as_deref().unwrap_or(any))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, None, any);
+            for c in choices {
+                ui.selectable_value(value, Some(c.clone()), c);
+            }
+        });
+    named(&combo.response, name);
+}
+
+/// The filter bar; `cameras` and `lenses` are the folder's (see [`distinct`]).
+pub fn filter_bar(
+    ui: &mut egui::Ui,
+    current: &Filter,
+    cameras: &[String],
+    lenses: &[String],
+) -> Option<Filter> {
     let mut next = current.clone();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Show").color(theme::MUTED));
@@ -84,6 +130,22 @@ pub fn filter_bar(ui: &mut egui::Ui, current: &Filter) -> Option<Filter> {
                 }
             });
         named(&review.response, REVIEW_LIST);
+        pick_one(
+            ui,
+            "filter-camera",
+            CAMERA_LIST,
+            ANY_CAMERA,
+            cameras,
+            &mut next.camera,
+        );
+        pick_one(
+            ui,
+            "filter-lens",
+            LENS_LIST,
+            ANY_LENS,
+            lenses,
+            &mut next.lens,
+        );
         let search = ui.add(
             egui::TextEdit::singleline(&mut next.text)
                 .hint_text(SEARCH_HINT)

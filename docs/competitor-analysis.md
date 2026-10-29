@@ -74,6 +74,7 @@ close or competitors ship new features.
 - Thumbnail size slider (Lightroom's grid slider): done.
 - Survey view (Lightroom's `N`): done, Library → Survey.
 - History panel (Lightroom's): done, Develop → History.
+- Metadata filter by camera and lens (Lightroom's Library filter): done.
 
 ### Tier 4: large or strategic
 

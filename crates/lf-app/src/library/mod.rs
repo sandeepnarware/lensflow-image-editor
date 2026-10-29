@@ -2066,7 +2066,9 @@ impl Library {
             });
             return;
         }
-        if let Some(filter) = cull_ui::filter_bar(ui, &self.filter) {
+        let cameras = cull_ui::distinct(self.photos.iter().map(|p| p.camera.as_ref()));
+        let lenses = cull_ui::distinct(self.photos.iter().map(|p| p.lens.as_ref()));
+        if let Some(filter) = cull_ui::filter_bar(ui, &self.filter, &cameras, &lenses) {
             self.set_filter(filter);
         }
         // The thumbnail size, remembered once a drag ends.

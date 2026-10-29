@@ -180,6 +180,9 @@ pub struct Filter {
     /// Words that must each appear in the file name, the camera or lens, or the title,
     /// caption, creator or a keyword (case ignored).
     pub text: String,
+    /// Only photos from this camera, or through this lens (as the EXIF names them).
+    pub camera: Option<String>,
+    pub lens: Option<String>,
 }
 
 impl Filter {
@@ -190,6 +193,8 @@ impl Filter {
             || self.label != LabelFilter::Any
             || self.review != ReviewFilter::Any
             || !self.text.trim().is_empty()
+            || self.camera.is_some()
+            || self.lens.is_some()
     }
 
     fn keeps(&self, row: &PhotoRow) -> bool {
@@ -198,6 +203,8 @@ impl Filter {
             && self.label.keeps(row.label)
             && self.review.keeps(row.scores.as_ref())
             && matches_text(row, &self.text)
+            && (self.camera.is_none() || row.camera == self.camera)
+            && (self.lens.is_none() || row.lens == self.lens)
     }
 
     /// The ids the grid shows, in its order. `rows` come in capture order. A collapsed
@@ -298,6 +305,32 @@ mod tests {
             label,
             ..PhotoRow::default()
         }
+    }
+
+    #[test]
+    fn the_camera_and_lens_filters_keep_their_own() {
+        let mut a = row(1, "a.nef", Flag::Unflagged, 0, None);
+        a.camera = Some("Nikon Z 8".into());
+        a.lens = Some("85mm".into());
+        let mut b = row(2, "b.cr3", Flag::Unflagged, 0, None);
+        b.camera = Some("Canon R5".into());
+        b.lens = Some("85mm".into());
+        let rows = vec![a, b];
+        let nikon = Filter {
+            camera: Some("Nikon Z 8".into()),
+            ..Filter::default()
+        };
+        assert!(nikon.narrows());
+        assert_eq!(nikon.arrange(&rows), vec![1]);
+        let lens = Filter {
+            lens: Some("85mm".into()),
+            ..Filter::default()
+        };
+        assert_eq!(lens.arrange(&rows), vec![1, 2]);
+        assert_eq!(
+            crate::library::cull_ui::distinct(rows.iter().map(|r| r.camera.as_ref())),
+            vec!["Canon R5".to_owned(), "Nikon Z 8".to_owned()]
+        );
     }
 
     fn rows() -> Vec<PhotoRow> {
