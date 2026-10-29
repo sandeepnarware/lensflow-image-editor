@@ -52,12 +52,30 @@ pub enum ToolKind {
     WhiteBalance,
     /// Local adjustments: linear and radial gradients with their own sliders.
     Masks,
+    /// Guided Upright: lines drawn along edges that should be upright or level.
+    Guided,
 }
 
 pub const CROP: &str = "Crop";
 pub const SPOTS: &str = "Spots";
 pub const WHITE_BALANCE: &str = "White balance";
 pub const MASKS: &str = "Masks";
+pub const GUIDED: &str = "Guided";
+/// Guided Upright's hint, in its panel.
+pub const GUIDED_HINT: &str = "Drag along two edges that should be upright (and two that should be level, if you like). The photo follows each guide. Esc leaves.";
+pub const CLEAR_GUIDES: &str = "Clear guides";
+pub const GUIDED_TURNED: &str = "Guided Upright works on a photo that is not turned or flipped.";
+/// The most guides kept (a fifth replaces the oldest), and the shortest kept (points).
+pub const MAX_GUIDES: usize = 4;
+const MIN_GUIDE_POINTS: f32 = 20.0;
+
+/// Guided Upright's state: the guides drawn (in the photo as shot, so they stay on the
+/// photo's edges as the correction changes) and the one being drawn.
+#[derive(Debug, Clone, Default)]
+pub struct GuidedTool {
+    pub guides: Vec<lf_settings::upright::Segment>,
+    drawing: Option<((f64, f64), (f64, f64))>,
+}
 /// The eyedropper's hint, in its panel.
 pub const WB_HINT: &str = "Click something that should be grey or white. Esc leaves.";
 /// The crop panel's buttons: apply (`Enter`) and put back (`Esc`).
@@ -71,6 +89,7 @@ pub enum Active {
     Spots(SpotTool),
     WhiteBalance,
     Masks(MaskTool),
+    Guided(GuidedTool),
 }
 
 /// The tools' state in the Develop view.
@@ -97,6 +116,7 @@ impl Tools {
             Some(Active::Spots(_)) => Some(ToolKind::Spots),
             Some(Active::WhiteBalance) => Some(ToolKind::WhiteBalance),
             Some(Active::Masks(_)) => Some(ToolKind::Masks),
+            Some(Active::Guided(_)) => Some(ToolKind::Guided),
             None => None,
         }
     }
@@ -279,6 +299,7 @@ impl Develop {
             ToolKind::Spots => Active::Spots(SpotTool::new(self.tools.spot_mode)),
             ToolKind::WhiteBalance => Active::WhiteBalance,
             ToolKind::Masks => Active::Masks(MaskTool::default()),
+            ToolKind::Guided => Active::Guided(GuidedTool::default()),
         });
         self.panels.curve.clear_selection();
         self.settings_changed();
@@ -297,7 +318,7 @@ impl Develop {
                 self.commit(toasts);
             }
             Some(Active::Masks(_)) => self.commit(toasts),
-            Some(Active::WhiteBalance) | None => {}
+            Some(Active::WhiteBalance) | Some(Active::Guided(_)) | None => {}
         }
     }
 
@@ -398,6 +419,8 @@ impl Develop {
             owns_drag: true,
             took_wheel: false,
         };
+        // Guided Upright: a guide finished this frame (fit once the borrows end).
+        let mut guided = false;
         // Where the eyedropper was clicked (the sample is read once the borrows end).
         let mut picked = None;
         // Where Alt-click picked a mask's range colour (read the same way).
@@ -531,6 +554,35 @@ impl Develop {
                 input.owns_drag = !picking_object && (painting || tool.grab.is_some());
                 if response.hovered() {
                     ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+                }
+            }
+            Active::Guided(tool) => {
+                let m =
+                    SpotMap::new(map, &edit.settings, full, output_w).through_lens(&edit.settings);
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+                }
+                if response.drag_started()
+                    && let Some(at) = origin
+                {
+                    let p = m.uv(at);
+                    tool.drawing = Some((p, p));
+                }
+                if response.dragged()
+                    && let (Some((a, _)), Some(at)) = (tool.drawing, pointer)
+                {
+                    tool.drawing = Some((a, m.uv(at)));
+                }
+                if response.drag_stopped()
+                    && let Some((a, b)) = tool.drawing.take()
+                    && m.screen(a).distance(m.screen(b)) >= MIN_GUIDE_POINTS
+                {
+                    tool.guides
+                        .push(lf_settings::upright::Segment { a, b, weight: 1.0 });
+                    if tool.guides.len() > MAX_GUIDES {
+                        tool.guides.remove(0);
+                    }
+                    guided = true;
                 }
             }
             Active::WhiteBalance => {
@@ -745,6 +797,9 @@ impl Develop {
             }
         }
         self.absorb_tool(out, toasts);
+        if guided {
+            self.apply_guides(full, toasts);
+        }
         if let Some(at) = picked {
             self.pick_white_balance(at, toasts);
         }
@@ -752,6 +807,39 @@ impl Develop {
             self.pick_range_colour(at, toasts);
         }
         input
+    }
+
+    /// Guided Upright: the perspective and straightening that make the guides upright and
+    /// level (once there are two of a kind), one history step. The crop is kept inside, as
+    /// Upright's buttons keep it.
+    fn apply_guides(&mut self, full: (u32, u32), toasts: &mut Toasts) {
+        let Some(Active::Guided(tool)) = &self.tools.active else {
+            return;
+        };
+        let guides = tool.guides.clone();
+        let Some(edit) = self.session.edit() else {
+            return;
+        };
+        let s = &edit.settings;
+        if s.rotate != lf_settings::Rotate::R0 || s.flip_h || s.flip_v {
+            toasts.push(Level::Info, GUIDED_TURNED);
+            return;
+        }
+        let aspect = f64::from(full.0) / f64::from(full.1.max(1));
+        let Some(fit) = lf_settings::upright::guided(&guides, aspect, &Lens::from_settings(s))
+        else {
+            return;
+        };
+        self.commit(toasts);
+        self.edit(|s| {
+            let mut lens = Lens::from_settings(s);
+            lens.vertical = fit.vertical;
+            lens.horizontal = fit.horizontal;
+            lens.write_into(s);
+            let (tw, th) = crop::turned(s, full.0, full.1);
+            crop::straighten(s, fit.angle, tw, th);
+        });
+        self.commit(toasts);
     }
 
     /// The eyedropper clicked at `at` (source fractions): the temperature and tint that make
@@ -809,6 +897,19 @@ impl Develop {
         match active {
             Active::Crop(tool) => paint_crop(&painter, map, &edit.settings.crop, tool.grid()),
             Active::WhiteBalance => {}
+            Active::Guided(tool) => {
+                let m =
+                    SpotMap::new(map, &edit.settings, full, output_w).through_lens(&edit.settings);
+                let lines = tool.guides.iter().map(|g| (g.a, g.b)).chain(tool.drawing);
+                for (a, b) in lines {
+                    let (p, q) = (m.screen(a), m.screen(b));
+                    painter.line_segment([p, q], Stroke::new(3.0, Color32::from_black_alpha(110)));
+                    painter.line_segment([p, q], Stroke::new(1.5, Color32::from_rgb(255, 210, 60)));
+                    for end in [p, q] {
+                        painter.circle_filled(end, 3.5, Color32::from_rgb(255, 210, 60));
+                    }
+                }
+            }
             Active::Masks(tool) => {
                 let spot_map = SpotMap::new(map, &edit.settings, full, output_w);
                 let masks = Masks::from_settings(&edit.settings);
@@ -892,6 +993,12 @@ impl Develop {
             if masks.clicked() {
                 toggle = Some(ToolKind::Masks);
             }
+            let guided = ui
+                .selectable_label(open == Some(ToolKind::Guided), GUIDED)
+                .on_hover_text("Guided Upright: draw lines that should be upright or level");
+            if guided.clicked() {
+                toggle = Some(ToolKind::Guided);
+            }
         });
         if let Some(kind) = toggle {
             self.toggle_tool(kind, toasts);
@@ -936,6 +1043,22 @@ impl Develop {
             }
             Active::WhiteBalance => {
                 ui.label(RichText::new(WB_HINT).color(theme::MUTED));
+            }
+            Active::Guided(tool) => {
+                ui.label(RichText::new(GUIDED_HINT).color(theme::MUTED));
+                let n = tool.guides.len();
+                ui.label(match n {
+                    0 => "No guides yet.".to_owned(),
+                    1 => "1 guide.".to_owned(),
+                    n => format!("{n} guides."),
+                });
+                if ui
+                    .add_enabled(n > 0, egui::Button::new(CLEAR_GUIDES))
+                    .on_hover_text("The correction stays; undo takes it back")
+                    .clicked()
+                {
+                    tool.guides.clear();
+                }
             }
             Active::Masks(tool) => {
                 let mut refused = None;

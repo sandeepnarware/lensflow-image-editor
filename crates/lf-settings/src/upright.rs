@@ -7,6 +7,11 @@
 //! it was nearer vertical than level) or level. The cost is each line's leftover lean, squared
 //! and capped (so a line that is truly slanted, a roof, cannot pull the fit), weighted by its
 //! length. The search is coordinate descent over the three values, coarse then fine.
+//!
+//! Guided Upright ([`guided`]) fits the same corrections to lines the user drew: every guide
+//! counts in full however far it leans (no cap: the user chose it), and the corrections
+//! fitted follow what was drawn (two upright guides: the vertical perspective; two level
+//! ones: the horizontal; both: both).
 
 use crate::lens::Lens;
 
@@ -25,6 +30,8 @@ pub enum Mode {
     Vertical,
     /// Level, verticals upright and horizontals level (both perspectives).
     Full,
+    /// Level, and horizontals level (horizontal perspective; Guided with level guides only).
+    Horizontal,
 }
 
 /// The fitted corrections: the lens's perspective sliders and the straightening angle
@@ -41,7 +48,7 @@ pub const MAX_ANGLE: f64 = 10.0;
 /// How much of a line's lean (tan²) counts at most.
 const CAP: f64 = 0.03;
 
-fn cost(segments: &[Segment], aspect: f64, lens: &Lens, angle: f64) -> f64 {
+fn cost(segments: &[Segment], aspect: f64, lens: &Lens, angle: f64, cap: f64) -> f64 {
     let (s, c) = angle.to_radians().sin_cos();
     let mut total = 0.0;
     for seg in segments {
@@ -56,7 +63,7 @@ fn cost(segments: &[Segment], aspect: f64, lens: &Lens, angle: f64) -> f64 {
         } else {
             (d.1 / d.0.abs().max(1e-9)).powi(2)
         };
-        total += seg.weight * lean.min(CAP);
+        total += seg.weight * lean.min(cap);
     }
     total
 }
@@ -75,10 +82,39 @@ fn best(lo: f64, hi: f64, step: f64, f: impl Fn(f64) -> f64) -> f64 {
 /// of height, keeping `base`'s other lens corrections. `None` when there are too few lines to
 /// say (at least two near-vertical ones, and in `Full` two near-level ones too).
 pub fn fit(segments: &[Segment], aspect: f64, base: &Lens, mode: Mode) -> Option<Fit> {
-    let upright = |s: &&Segment| ((s.b.1 - s.a.1).abs()) >= ((s.b.0 - s.a.0) * aspect).abs();
-    let verticals = segments.iter().filter(upright).count();
-    let levels = segments.len() - verticals;
-    if verticals < 2 || (mode == Mode::Full && levels < 2) {
+    fit_with(segments, aspect, base, mode, CAP)
+}
+
+/// Guided Upright: the corrections that make the user's `guides` upright or level (see the
+/// module docs); `None` until there are two upright or two level guides.
+pub fn guided(guides: &[Segment], aspect: f64, base: &Lens) -> Option<Fit> {
+    let (verticals, levels) = counts(guides, aspect);
+    let mode = match (verticals >= 2, levels >= 2) {
+        (true, true) => Mode::Full,
+        (true, false) => Mode::Vertical,
+        (false, true) => Mode::Horizontal,
+        (false, false) => return None,
+    };
+    fit_with(guides, aspect, base, mode, f64::INFINITY)
+}
+
+/// How many of `segments` are nearer upright than level, and how many are not.
+fn counts(segments: &[Segment], aspect: f64) -> (usize, usize) {
+    let verticals = segments
+        .iter()
+        .filter(|s| (s.b.1 - s.a.1).abs() >= ((s.b.0 - s.a.0) * aspect).abs())
+        .count();
+    (verticals, segments.len() - verticals)
+}
+
+fn fit_with(segments: &[Segment], aspect: f64, base: &Lens, mode: Mode, cap: f64) -> Option<Fit> {
+    let (verticals, levels) = counts(segments, aspect);
+    let enough = match mode {
+        Mode::Vertical => verticals >= 2,
+        Mode::Full => verticals >= 2 && levels >= 2,
+        Mode::Horizontal => levels >= 2,
+    };
+    if !enough {
         return None;
     }
     let lens_of = |v: f64, h: f64| Lens {
@@ -93,20 +129,22 @@ pub fn fit(segments: &[Segment], aspect: f64, base: &Lens, mode: Mode) -> Option
     };
     for (span, step, angle_step) in [(100.0, 4.0, 0.5), (8.0, 0.5, 0.1), (1.0, 0.1, 0.02)] {
         for _ in 0..3 {
-            let (lo, hi) = (f.vertical - span, f.vertical + span);
-            f.vertical = best(lo.max(-100.0), hi.min(100.0), step, |v| {
-                cost(segments, aspect, &lens_of(v, f.horizontal), f.angle)
-            });
-            if mode == Mode::Full {
+            if mode != Mode::Horizontal {
+                let (lo, hi) = (f.vertical - span, f.vertical + span);
+                f.vertical = best(lo.max(-100.0), hi.min(100.0), step, |v| {
+                    cost(segments, aspect, &lens_of(v, f.horizontal), f.angle, cap)
+                });
+            }
+            if mode != Mode::Vertical {
                 let (lo, hi) = (f.horizontal - span, f.horizontal + span);
                 f.horizontal = best(lo.max(-100.0), hi.min(100.0), step, |h| {
-                    cost(segments, aspect, &lens_of(f.vertical, h), f.angle)
+                    cost(segments, aspect, &lens_of(f.vertical, h), f.angle, cap)
                 });
             }
             let a_span = (span / 10.0).max(angle_step * 10.0);
             let (lo, hi) = (f.angle - a_span, f.angle + a_span);
             f.angle = best(lo.max(-MAX_ANGLE), hi.min(MAX_ANGLE), angle_step, |a| {
-                cost(segments, aspect, &lens_of(f.vertical, f.horizontal), a)
+                cost(segments, aspect, &lens_of(f.vertical, f.horizontal), a, cap)
             });
         }
     }
@@ -176,6 +214,33 @@ mod tests {
         assert!((f.vertical + 20.0).abs() < 2.0, "{f:?}");
         assert!((f.horizontal - 25.0).abs() < 2.0, "{f:?}");
         assert!(f.angle.abs() < 0.3, "{f:?}");
+    }
+
+    #[test]
+    fn guides_count_in_full_and_choose_what_is_fitted() {
+        let aspect = 1.5;
+        // A strong lean, beyond what automatic Upright trusts a line with.
+        let truth = Lens {
+            vertical: 80.0,
+            ..Lens::default()
+        };
+        let all = scene(&truth, 0.0, aspect);
+        // Two upright guides (the outer edges of a building).
+        let two = [all[0], all[3]];
+        let g = guided(&two, aspect, &Lens::default()).unwrap();
+        assert!((g.vertical - 80.0).abs() < 3.0, "{g:?}");
+        assert_eq!(g.horizontal, 0.0, "only what was drawn is fitted");
+        // Two level guides alone fit the horizontal perspective.
+        let truth = Lens {
+            horizontal: -30.0,
+            ..Lens::default()
+        };
+        let all = scene(&truth, 0.0, aspect);
+        let g = guided(&all[4..6], aspect, &Lens::default()).unwrap();
+        assert!((g.horizontal + 30.0).abs() < 3.0, "{g:?}");
+        assert_eq!(g.vertical, 0.0);
+        // One guide: not yet.
+        assert_eq!(guided(&all[..1], aspect, &Lens::default()), None);
     }
 
     #[test]

@@ -728,6 +728,15 @@ correction) becomes `AiTool::ObjectMask { u, v }`, run like the other AI masks
 asks Segment Anything's multi-mask decoder with the point and SAM's padding point, keeps the
 mask it rates best and softens its logits with a sigmoid.
 
+Guided Upright (Develop's Guided tool) takes drags on the photo as guides, stored in the photo
+as shot (`SpotMap::uv` through the lens corrections), so they stay on the edges they were
+drawn on as the correction changes; up to four, a fifth replacing the oldest. After each guide
+`upright::guided` fits the perspective and straightening: every guide counts in full (no cap,
+unlike the automatic fit, which distrusts steep lines), and what is fitted follows what was
+drawn (two upright guides: vertical perspective; two level ones: horizontal; both: both). The
+correction goes into `desktop.lens` and the angle, with the crop kept inside, as one history
+step. Photos turned or flipped are refused. Guides last while the tool is open.
+
 Rename… (Home → Selection, `Action::RenamePhotos`, Library mode) previews the first new names
 from the rows in memory (`rename::new_name`). On Rename, Develop closes (so it holds no old
 path) and an `Io` job flushes the sidecar saver first (so no queued write lands under an old

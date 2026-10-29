@@ -2685,3 +2685,47 @@ fn rename_gives_the_selected_photos_new_names() {
     assert_eq!(names(&h), vec!["Party_1.png", "Party_2.png"]);
     assert!(shoot.join("Party_1.png").exists() && shoot.join("Taken.png").exists());
 }
+
+/// Guided Upright: two guides drawn along edges that lean towards each other set the
+/// vertical perspective, one history step; one guide alone changes nothing.
+#[test]
+fn guided_upright_straightens_to_two_drawn_guides() {
+    use lf_app::develop::tools::{self, ToolKind};
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    let id = h.state().lib.photos()[0].id;
+    let root = dir.path().join("catalogue");
+    h.get_by_label(tools::GUIDED).click();
+    h.step();
+    assert_eq!(h.state().lib.develop().tool(), Some(ToolKind::Guided));
+    let draw = |h: &mut Harness<'static, State>, from: egui::Pos2, to: egui::Pos2| {
+        h.hover_at(from);
+        h.step();
+        h.drag_at(from);
+        h.step();
+        for i in 1..=4 {
+            h.hover_at(from + (to - from) * (i as f32 / 4.0));
+            h.step();
+        }
+        h.drop_at(to);
+        h.step();
+        h.step();
+    };
+    let before = history(&root, id);
+    // Edges that close in towards the top, as a building shot from below.
+    draw(&mut h, egui::pos2(520.0, 220.0), egui::pos2(480.0, 440.0));
+    assert_eq!(history(&root, id), before, "one guide is not enough");
+    draw(&mut h, egui::pos2(680.0, 220.0), egui::pos2(720.0, 440.0));
+    let lens = lf_settings::lens::Lens::from_settings(&settings(&h));
+    assert!(
+        lens.vertical.abs() > 5.0,
+        "the verticals were straightened: {lens:?}"
+    );
+    assert_eq!(lens.horizontal, 0.0);
+    assert_eq!(before, 0);
+    assert_eq!(history(&root, id), 2, "the photo before, and the correction");
+    assert!(h.query_by_label("2 guides.").is_some());
+}

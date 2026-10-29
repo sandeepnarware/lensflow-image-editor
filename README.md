@@ -17,7 +17,8 @@ The application signs in with LensFlow and enforces the studio's entitlement,
 catalogues folders, and shows a library grid and filmstrip. Its Develop view
 draws the preview straight into a texture egui shows, with every web control:
 the adjust panels, the crop and straighten tool, and the heal and clone spot
-tool. It keeps one history step per gesture, with undo and redo, and writes
+tool, and Guided Upright (draw two edges that should be upright, or level, and the
+perspective follows). It keeps one history step per gesture, with undo and redo, and writes
 sidecars after a quiet second. It also has looks and studio presets synced with
 LensFlow (the one applied last has an Amount slider, 0–200 %, until the photo is edited
 another way); Auto-sync (with several photos selected, each change in Develop is made on
