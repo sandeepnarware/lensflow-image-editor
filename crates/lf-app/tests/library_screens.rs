@@ -3362,3 +3362,47 @@ fn find_similar_shows_the_look_alikes() {
     });
     assert!(h.state().lib.shown().contains(&a));
 }
+
+/// The Painter: with a keyword typed, a click on a thumbnail gives it the keyword, and the
+/// selection stays as it was.
+#[test]
+fn the_painter_gives_clicked_photos_its_keyword() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 3);
+    import_folder(&mut h, &shoot, 3);
+    let first = h.state().lib.photos()[0].id;
+    h.state_mut().lib.selection.click(first);
+    assert!(run_action(&mut h, Action::Painter));
+    h.step();
+    h.step();
+    h.get_by_label(lf_app::library::painter::KEYWORD_HINT)
+        .click();
+    h.step();
+    h.get_by_label(lf_app::library::painter::KEYWORD_HINT)
+        .type_text("mehndi");
+    h.step();
+    for name in ["p1.png", "p2.png"] {
+        h.get_by_role_and_label(egui::accesskit::Role::Button, name)
+            .click();
+        h.step();
+        h.step();
+    }
+    let with: Vec<String> = h
+        .state()
+        .lib
+        .photos()
+        .iter()
+        .filter(|p| p.meta.keywords == vec!["mehndi".to_owned()])
+        .map(|p| p.path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(with, vec!["p1.png".to_owned(), "p2.png".to_owned()]);
+    assert_eq!(
+        h.state().lib.selection.current,
+        vec![first],
+        "the selection is left alone"
+    );
+}

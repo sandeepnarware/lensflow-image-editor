@@ -254,6 +254,9 @@ the active photo's title, caption, creator, copyright and keywords.
 Find similar (Home → Stacks → Similar): the folder's photos that look like the active one,
 shown alone (nearest first) until the filter is cleared.
 
+Painter (Home → Selection → Painter): choose a keyword, a star rating, a colour label or a flag,
+then click thumbnails (or drag across them) to give it to each; the selection stays as it is.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

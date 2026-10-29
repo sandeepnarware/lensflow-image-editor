@@ -24,6 +24,7 @@ pub mod lut_ui;
 pub mod map;
 pub mod merge_ui;
 pub mod meta_ui;
+pub mod painter;
 pub mod people_ui;
 pub mod print_ui;
 pub mod quick_develop;
@@ -227,6 +228,8 @@ pub struct Library {
     pub cell: f32,
     /// Library → Quick develop, while open.
     quick_develop: bool,
+    /// The Painter, while on.
+    painter: Option<painter::Painter>,
     last_scroll: f32,
     /// Copied edits (`Ctrl+Shift+C`).
     clipboard: Clipboard,
@@ -319,6 +322,7 @@ impl Library {
             reveal_active: false,
             columns: 1,
             quick_develop: false,
+            painter: None,
             cell: prefs.grid_cell.clamp(grid::MIN_CELL, grid::MAX_CELL),
             last_scroll: 0.0,
             clipboard: Clipboard::default(),
@@ -1662,6 +1666,7 @@ impl Library {
             }
             Action::StackPairs => !develop && !self.photos.is_empty() && self.can_add(),
             Action::FindSimilar => !develop && self.selection.active().is_some(),
+            Action::Painter => !develop && !self.photos.is_empty(),
             Action::AssistedCulling | Action::FindPeople | Action::FindKeywords => {
                 !develop
                     && self.local_ai
@@ -1812,6 +1817,7 @@ impl Library {
             Action::AutoStack => self.open_auto_stack(),
             Action::StackPairs => self.stack_pairs(env),
             Action::FindSimilar => self.find_similar(env),
+            Action::Painter => self.toggle_painter(),
             Action::NewAlbum => self.open_album_dialog(crate::dialogs::album::Purpose::New),
             Action::NewSmartAlbum => {
                 self.open_album_dialog(crate::dialogs::album::Purpose::NewSmart)
@@ -2131,7 +2137,9 @@ impl Library {
             });
             return;
         }
+        self.painter_bar(ui);
         let actions = grid::show(ui, self);
+        self.apply_paint(ui, env);
         if (actions.scroll_y - self.last_scroll).abs() > 0.5 {
             self.last_scroll = actions.scroll_y;
             self.revive_thumbs(env);

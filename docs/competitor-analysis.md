@@ -84,6 +84,7 @@ close or competitors ship new features.
 - Web gallery export (Lightroom's Web module, simple): done, Home → Web gallery.
 - Sync metadata (Lightroom's): done, the Metadata panel.
 - Find similar photos: done, Home → Stacks → Similar (by fingerprint).
+- Painter tool (Lightroom's spray can): done, Home → Selection → Painter.
 
 ### Tier 4: large or strategic
 

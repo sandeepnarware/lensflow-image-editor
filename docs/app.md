@@ -954,6 +954,12 @@ first); `Msg::Similar` sets `Filter::only` to them, so the grid shows them alone
 filter is cleared. The hash compares neighbours left to right, so it is a look-alike test of
 layout and light, not of content.
 
+The Painter (`library/painter.rs`, `Action::Painter`): while on, a bar over the grid chooses the
+paint (`Paint::Keyword` typed, or a `Mark`); the grid's cells skip selection and the marquee and
+instead `touch` the cell the pointer is on with the button down (each photo once a stroke,
+`lift` when the button comes up). After the grid is drawn, `apply_paint` sets the mark as chosen
+(`set_mark`, never toggled) or adds the keyword (`change_meta`).
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

@@ -119,6 +119,8 @@ pub enum Action {
     StackPairs,
     /// The folder's photos that look like the active one.
     FindSimilar,
+    /// Click or drag across photos to give them a keyword, rating, label or flag.
+    Painter,
     // Albums
     /// Make an album (with the selected photos).
     NewAlbum,
@@ -240,6 +242,7 @@ impl Action {
             Action::AutoStack => "Auto-stack…",
             Action::StackPairs => "Stack RAW+JPEG pairs",
             Action::FindSimilar => "Find similar photos",
+            Action::Painter => "Painter",
             Action::NewAlbum => "New album…",
             Action::NewSmartAlbum => "New smart album…",
             Action::AddToAlbum => "Add to album…",

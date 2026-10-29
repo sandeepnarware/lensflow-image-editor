@@ -168,9 +168,10 @@ pub fn show(ui: &mut egui::Ui, lib: &mut Library) -> GridActions {
                 ui.scope_id().with("grid-backdrop"),
                 Sense::drag(),
             );
-            if backdrop.drag_started_by(egui::PointerButton::Primary) {
+            if backdrop.drag_started_by(egui::PointerButton::Primary) && lib.painter.is_none() {
                 begin_marquee(ui, lib, modifiers.command);
             }
+            let down = ui.input(|i| i.pointer.primary_down());
             for i in v.first..v.last {
                 let id = lib.order[i];
                 let rect = cell_rect(i);
@@ -196,6 +197,13 @@ pub fn show(ui: &mut egui::Ui, lib: &mut Library) -> GridActions {
                     Some(text) => response.on_hover_text(text),
                     None => response,
                 };
+                // The painter paints what the pointer passes over with the button down.
+                if let Some(p) = &mut lib.painter {
+                    if (down && response.contains_pointer()) || response.clicked() {
+                        p.touch(id);
+                    }
+                    continue;
+                }
                 if response.drag_started_by(egui::PointerButton::Primary) {
                     begin_marquee(ui, lib, modifiers.command);
                 } else if response.double_clicked() {
