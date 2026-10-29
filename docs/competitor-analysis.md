@@ -41,7 +41,7 @@ close or competitors ship new features.
 | Reflection, wire and people removal (one-click distractions) | Lightroom 15.6 |
 | ~~Lens blur (AI depth of field)~~ (done: AI → Enhance → Lens blur, as a new photo); depth mask | Lightroom |
 | Layers (stacked local edits with opacity) | Capture One, Luminar |
-| ~~Upright Guided (draw lines)~~ (done: Develop → Guided), Level, Auto | Lightroom |
+| ~~Upright Guided (draw lines)~~ (done: Develop → Guided), ~~Level, Auto~~ (done: Lens corrections → Upright) | Lightroom |
 | New-camera support: rawler can't open Nikon HE/HE* NEF, DNG 1.7 JPEG XL, some Sony ARW / Phase One IIQ | All, updated monthly |
 
 ### Tier 3: workflow conveniences

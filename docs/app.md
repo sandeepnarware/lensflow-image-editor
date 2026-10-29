@@ -740,6 +740,11 @@ so the sharp subject does not halo into the background. Discs are read through r
 sums; a radius over 12 px is blurred on a picture made smaller by as much. 24 MP takes about
 12 s in release on this machine.
 
+Upright's Level fits the straightening angle alone (`upright::Mode::Level`, from any two
+lines); Auto fits Full (or Vertical when there are no level lines) and takes the perspective
+`AUTO_SHARE` (0.6) of the way, with the angle fitted again for it: a balanced correction,
+as Lightroom's Auto is.
+
 Guided Upright (Develop's Guided tool) takes drags on the photo as guides, stored in the photo
 as shot (`SpotMap::uv` through the lens corrections), so they stay on the edges they were
 drawn on as the correction changes; up to four, a fifth replacing the oldest. After each guide

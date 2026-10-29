@@ -32,7 +32,15 @@ pub enum Mode {
     Full,
     /// Level, and horizontals level (horizontal perspective; Guided with level guides only).
     Horizontal,
+    /// Only level: the straightening angle, no perspective.
+    Level,
+    /// A balanced correction (Lightroom's Auto): level, and the perspective `Full` finds
+    /// taken [`AUTO_SHARE`] of the way, so a photo is straightened without looking forced.
+    Auto,
 }
+
+/// How much of the full perspective correction Auto applies.
+pub const AUTO_SHARE: f64 = 0.6;
 
 /// The fitted corrections: the lens's perspective sliders and the straightening angle
 /// (degrees, as `EditSettings::angle`).
@@ -98,6 +106,20 @@ pub fn guided(guides: &[Segment], aspect: f64, base: &Lens) -> Option<Fit> {
     fit_with(guides, aspect, base, mode, f64::INFINITY)
 }
 
+/// The straightening angle alone that best levels `segments` through `lens`.
+fn level_angle(segments: &[Segment], aspect: f64, lens: &Lens, cap: f64) -> f64 {
+    let mut a = 0.0;
+    for (span, step) in [(MAX_ANGLE, 0.5), (1.0, 0.1), (0.1, 0.01)] {
+        a = best(
+            (a - span).max(-MAX_ANGLE),
+            (a + span).min(MAX_ANGLE),
+            step,
+            |x| cost(segments, aspect, lens, x, cap),
+        );
+    }
+    (a * 100.0).round() / 100.0
+}
+
 /// How many of `segments` are nearer upright than level, and how many are not.
 fn counts(segments: &[Segment], aspect: f64) -> (usize, usize) {
     let verticals = segments
@@ -113,7 +135,35 @@ fn fit_with(segments: &[Segment], aspect: f64, base: &Lens, mode: Mode, cap: f64
         Mode::Vertical => verticals >= 2,
         Mode::Full => verticals >= 2 && levels >= 2,
         Mode::Horizontal => levels >= 2,
+        Mode::Level => verticals + levels >= 2,
+        Mode::Auto => verticals >= 2,
     };
+    if mode == Mode::Auto {
+        // Full when there are level lines to go by, else the verticals alone.
+        let full = if levels >= 2 {
+            Mode::Full
+        } else {
+            Mode::Vertical
+        };
+        let mut f = fit_with(segments, aspect, base, full, cap)?;
+        f.vertical = (f.vertical * AUTO_SHARE * 10.0).round() / 10.0;
+        f.horizontal = (f.horizontal * AUTO_SHARE * 10.0).round() / 10.0;
+        // The angle that suits the gentler perspective.
+        let lens = Lens {
+            vertical: f.vertical,
+            horizontal: f.horizontal,
+            ..*base
+        };
+        f.angle = level_angle(segments, aspect, &lens, cap);
+        return Some(f);
+    }
+    if mode == Mode::Level {
+        return Some(Fit {
+            vertical: base.vertical,
+            horizontal: base.horizontal,
+            angle: level_angle(segments, aspect, base, cap),
+        });
+    }
     if !enough {
         return None;
     }
@@ -241,6 +291,25 @@ mod tests {
         assert_eq!(g.vertical, 0.0);
         // One guide: not yet.
         assert_eq!(guided(&all[..1], aspect, &Lens::default()), None);
+    }
+
+    #[test]
+    fn level_only_turns_and_auto_corrects_part_of_the_way() {
+        let aspect = 1.5;
+        let truth = Lens {
+            vertical: 40.0,
+            ..Lens::default()
+        };
+        let segs = scene(&truth, 3.0, aspect);
+        let level = fit(&segs, aspect, &Lens::default(), Mode::Level).unwrap();
+        assert_eq!((level.vertical, level.horizontal), (0.0, 0.0));
+        assert!((level.angle - 3.0).abs() < 1.0, "{level:?}");
+        let auto = fit(&segs, aspect, &Lens::default(), Mode::Auto).unwrap();
+        assert!(
+            (auto.vertical - 40.0 * AUTO_SHARE).abs() < 2.0,
+            "part of the way: {auto:?}"
+        );
+        assert!(auto.angle.abs() < MAX_ANGLE);
     }
 
     #[test]

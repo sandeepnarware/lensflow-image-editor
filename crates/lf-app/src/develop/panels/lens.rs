@@ -25,6 +25,8 @@ pub const UPRIGHT: &str = "Upright";
 pub const PROFILE: &str = "Apply lens profile";
 pub const UPRIGHT_VERTICAL: &str = "Vertical";
 pub const UPRIGHT_FULL: &str = "Full";
+pub const UPRIGHT_LEVEL: &str = "Level";
+pub const UPRIGHT_AUTO: &str = "Auto";
 pub const UPRIGHT_NONE: &str =
     "Not enough straight lines were found to straighten (or the photo is turned or flipped).";
 
@@ -50,6 +52,8 @@ pub fn show(
         ui.label(UPRIGHT)
             .on_hover_text("Make vertical lines upright and the horizon level");
         for (label, mode) in [
+            (UPRIGHT_AUTO, lf_settings::upright::Mode::Auto),
+            (UPRIGHT_LEVEL, lf_settings::upright::Mode::Level),
             (UPRIGHT_VERTICAL, lf_settings::upright::Mode::Vertical),
             (UPRIGHT_FULL, lf_settings::upright::Mode::Full),
         ] {
