@@ -18,6 +18,7 @@ pub mod people;
 pub mod places;
 pub mod presets;
 pub mod print;
+pub mod rename;
 pub mod scores;
 pub mod sidecar;
 pub mod stacks;

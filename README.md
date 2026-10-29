@@ -25,7 +25,9 @@ all of them, except their crop, spots and masks: Home → Settings → Auto-sync
 in Develop); a Calibration section (the red, green and blue primaries' hue and saturation,
 and a shadows tint); DNG camera profiles for RAW photos (`.dcp`, imported from the RAW
 section: Adobe's DNG Converter installs Adobe Standard and Camera Matching profiles; none
-ship with the app); copy and paste of edits, "Apply to N photos", named versions,
+ship with the app); copy and paste of edits, "Apply to N photos", "Rename…" for the
+selected photos' files (a pattern with `{name}`, `{seq}`, `{date}`, `{camera}`; sidecars go
+with them, and a name already taken refuses the whole batch), named versions,
 "Match a reference…", and export to disk. The window has a ribbon, as in Microsoft Office
 (File, Home, Library, Develop, View, Account and Help tabs), one status bar, Preferences, an About box
 and a keyboard map. CI builds the app for Windows, macOS and Linux. How it is

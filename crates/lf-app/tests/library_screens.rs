@@ -2593,3 +2593,95 @@ fn auto_sync_sends_a_change_to_the_other_selected_photos() {
     });
     assert_eq!(stored(ids[2]).contrast, 25.0, "its own contrast stays");
 }
+
+/// "Rename…": the selected photos' files take names from the pattern (the preview shows
+/// them first), their sidecars go with them, and the grid shows the new names; a name taken
+/// by a file outside the batch refuses everything and says why.
+#[test]
+fn rename_gives_the_selected_photos_new_names() {
+    use lf_app::dialogs::rename;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 2);
+    import_folder(&mut h, &shoot, 2);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    let names = |h: &Harness<'static, State>| -> Vec<String> {
+        let mut v: Vec<String> = h
+            .state()
+            .lib
+            .photos()
+            .iter()
+            .map(|p| p.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    };
+    std::fs::write(shoot.join("Taken.png"), b"not catalogued").unwrap();
+
+    h.state_mut().lib.selection.select(&ids);
+    {
+        let ctx = h.ctx.clone();
+        let s = h.state_mut();
+        let mut env = Env {
+            jobs: &s.jobs,
+            toasts: &mut s.toasts,
+            prefs: &mut s.prefs,
+            config_dir: &s.config,
+        };
+        assert!(
+            s.lib
+                .run(lf_app::shortcuts::Action::RenamePhotos, &ctx, &mut env)
+        );
+    }
+    h.step();
+    h.step();
+    assert!(h.query_by_label("Rename 2 photos").is_some());
+    let field = h.get_by_role_and_label(Role::TextInput, rename::PATTERN);
+    field.click();
+    h.step();
+    h.key_press(Key::End);
+    for _ in 0..16 {
+        h.key_press(Key::Backspace);
+    }
+    h.get_by_role_and_label(Role::TextInput, rename::PATTERN)
+        .type_text("Taken");
+    h.step();
+    h.get_by_label(rename::RENAME).click();
+    // The refusal (a long line, wrapped: matched by part).
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while h
+        .query_by_label_contains("is already taken in its folder")
+        .is_none()
+    {
+        assert!(std::time::Instant::now() < end, "the refusal was not shown");
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    h.get_by_role_and_label(Role::TextInput, rename::PATTERN)
+        .click();
+    h.step();
+    h.key_press(Key::End);
+    for _ in 0..16 {
+        h.key_press(Key::Backspace);
+    }
+    h.get_by_role_and_label(Role::TextInput, rename::PATTERN)
+        .type_text("Party_{seq}");
+    h.step();
+    assert!(
+        h.query_by_label_contains("->  Party_1.png").is_some(),
+        "previewed"
+    );
+    h.get_by_label(rename::RENAME).click();
+    step_until(&mut h, "the new names in the grid", |s| {
+        s.lib
+            .photos()
+            .iter()
+            .any(|p| p.path.ends_with("Party_2.png"))
+    });
+    assert_eq!(names(&h), vec!["Party_1.png", "Party_2.png"]);
+    assert!(shoot.join("Party_1.png").exists() && shoot.join("Taken.png").exists());
+}

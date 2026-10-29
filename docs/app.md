@@ -728,6 +728,16 @@ correction) becomes `AiTool::ObjectMask { u, v }`, run like the other AI masks
 asks Segment Anything's multi-mask decoder with the point and SAM's padding point, keeps the
 mask it rates best and softens its logits with a sigmoid.
 
+Rename… (Home → Selection, `Action::RenamePhotos`, Library mode) previews the first new names
+from the rows in memory (`rename::new_name`). On Rename, Develop closes (so it holds no old
+path) and an `Io` job flushes the sidecar saver first (so no queued write lands under an old
+name), then `rename::plan` works out every name and refuses the batch when one is taken by a
+file (or a sidecar) outside it, or given twice in a folder; `rename::run` moves each photo and
+its sidecar to a temporary name, then to its new one (so photos of the batch can swap names),
+undoing every move on a failure, and updates `photos.path` in one transaction through
+placeholder paths (the column is unique). Contents never change; thumbnails, edits and the
+frame cache are keyed by id or content, so they follow.
+
 Auto-sync (`prefs.auto_sync`; Home → Settings → Auto-sync, or Develop's checkbox when other
 photos are selected): `Develop::run_edit` keeps the committed settings before a commit or a
 reset and, when the commit lands, `sync::changes` gives the keys that changed (inside

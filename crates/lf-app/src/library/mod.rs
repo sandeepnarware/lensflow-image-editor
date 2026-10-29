@@ -129,6 +129,8 @@ pub struct Library {
     start_ai_now: bool,
     /// Remove objects' painting dialog, while open.
     remove: Option<crate::dialogs::remove::RemoveDialog>,
+    /// "Rename…", while open or renaming.
+    rename: Option<crate::dialogs::rename::RenameDialog>,
     /// Auto-stack's dialog, while open or running.
     auto_stack: Option<crate::dialogs::auto_stack::AutoStackDialog>,
     local_ai: bool,
@@ -237,6 +239,7 @@ impl Library {
             current_folder: None,
             current_album: None,
             people: people_ui::PeopleState::default(),
+            rename: None,
             sync_seen: false,
             ai: None,
             start_ai_now: false,
@@ -934,6 +937,7 @@ impl Library {
             } => self.person_photos_loaded(root, group, result, env),
             Msg::PeopleChanged { root, result } => self.people_changed(root, result, env),
             Msg::Synced { root, ids, failed } => self.synced(root, ids, failed, env),
+            Msg::Renamed { root, result } => self.renamed(root, result, env),
             Msg::DcpImported(result) => match result {
                 Ok(name) => {
                     env.toasts.push(
@@ -1452,6 +1456,7 @@ impl Library {
         self.print_dialog(ui.ctx(), env);
         self.merge_dialog(ui.ctx(), env);
         self.album_dialogs(ui.ctx(), env);
+        self.rename_dialog(ui.ctx(), env);
         self.people_dialogs(ui.ctx(), env);
         self.ai_dialog(ui.ctx(), env);
         self.remove_dialog(ui.ctx());
@@ -1474,6 +1479,7 @@ impl Library {
             || self.merge.is_some()
             || self.album_dialog_open()
             || self.people_dialog_open()
+            || self.rename.is_some()
             || self.ai.is_some()
             || self.remove.is_some()
     }
@@ -1497,6 +1503,7 @@ impl Library {
             Action::CopySettings => self.copy_source().is_some(),
             Action::PasteSettings | Action::ApplyToSelected | Action::MatchReference => selected,
             Action::AutoSync => true,
+            Action::RenamePhotos => !develop && selected && self.rename.is_none() && self.can_add(),
             Action::EditIn => (develop || selected) && self.can_add(),
             Action::Print => develop || selected,
             Action::MergeHdr | Action::MergePanorama | Action::MergeFocus => {
@@ -1605,6 +1612,12 @@ impl Library {
             }
             // The filmstrip in Develop too: the open photo stays the active one.
             Action::SelectAll => self.selection.select_all(&self.order),
+            Action::RenamePhotos => {
+                let ids = self.selected_in_order();
+                if !ids.is_empty() {
+                    self.rename = Some(crate::dialogs::rename::RenameDialog::new(ids));
+                }
+            }
             Action::MatchReference => self.open_match(),
             Action::EditIn => self.edit_in(env),
             Action::Print => self.open_print(),
@@ -2133,6 +2146,74 @@ impl Library {
                     count(failed.len())
                 ),
             );
+        }
+    }
+
+    /// "Rename…": the dialog, and the rename on the `Io` lane (after every waiting sidecar is
+    /// written, so none lands under an old name; Develop lets go of its photo first).
+    fn rename_dialog(&mut self, ctx: &egui::Context, env: &mut Env) {
+        let Some(dialog) = &self.rename else {
+            return;
+        };
+        let rows: Vec<PhotoRow> = dialog
+            .ids
+            .iter()
+            .filter_map(|id| self.photo(*id).cloned())
+            .collect();
+        let refs: Vec<&PhotoRow> = rows.iter().collect();
+        let Some(dialog) = &mut self.rename else {
+            return;
+        };
+        match dialog.show(ctx, &refs) {
+            crate::dialogs::rename::RenameAction::None => {}
+            crate::dialogs::rename::RenameAction::Close => self.rename = None,
+            crate::dialogs::rename::RenameAction::Rename(pattern) => {
+                let Some(root) = self.root.clone() else {
+                    return;
+                };
+                dialog.running = true;
+                dialog.error = None;
+                let ids = dialog.ids.clone();
+                self.develop.close(env.toasts);
+                let saver = self.develop.saver();
+                env.jobs.spawn(Lane::Io, "rename photos", move || {
+                    let result = saver.flush().and_then(|()| {
+                        let catalog =
+                            lf_catalog::Catalog::open(&root).map_err(|e| e.to_string())?;
+                        let plan = lf_catalog::rename::plan(&catalog, &ids, &pattern)
+                            .map_err(|e| e.to_string())?;
+                        lf_catalog::rename::run(&catalog, &plan).map_err(|e| e.to_string())
+                    });
+                    Msg::Renamed { root, result }
+                });
+            }
+        }
+    }
+
+    fn renamed(&mut self, root: PathBuf, result: Result<usize, String>, env: &mut Env) {
+        if self.root.as_deref() != Some(root.as_path()) {
+            return;
+        }
+        match result {
+            Ok(n) => {
+                self.rename = None;
+                env.toasts.push(
+                    Level::Success,
+                    match n {
+                        0 => "No name changed.".to_owned(),
+                        1 => "Renamed 1 photo.".to_owned(),
+                        n => format!("Renamed {} photos.", count(n)),
+                    },
+                );
+                self.reload_photos(env);
+            }
+            Err(e) => match &mut self.rename {
+                Some(dialog) => {
+                    dialog.running = false;
+                    dialog.error = Some(e);
+                }
+                None => env.toasts.push(Level::Error, e),
+            },
         }
     }
 

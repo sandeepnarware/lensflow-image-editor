@@ -193,6 +193,11 @@ pub enum Msg {
     LutImported(Result<String, String>),
     /// A `.dcp` camera profile was copied into the catalogue and loaded (its name), or why not.
     DcpImported(Result<String, String>),
+    /// "Rename…" renamed photos (`root`: the catalogue): how many, or why none.
+    Renamed {
+        root: PathBuf,
+        result: Result<usize, String>,
+    },
     /// Auto-sync made a change on other photos (`root`: the catalogue): which, and which failed.
     Synced {
         root: PathBuf,
@@ -811,6 +816,7 @@ pub(crate) mod owners {
             | Msg::LutImported(..)
             | Msg::DcpImported(..)
             | Msg::Synced { .. }
+            | Msg::Renamed { .. }
             | Msg::EditInDone(..)
             | Msg::PrintProgress { .. }
             | Msg::PrintDone(..)
@@ -942,6 +948,10 @@ pub(crate) mod owners {
                 root: dir.to_path_buf(),
                 ids: Vec::new(),
                 failed: Vec::new(),
+            },
+            Msg::Renamed {
+                root: dir.to_path_buf(),
+                result: Err("no".into()),
             },
             Msg::EditInDone(Err("no".into())),
             Msg::PrintProgress { done: 1, total: 2 },

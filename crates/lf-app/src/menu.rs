@@ -87,7 +87,10 @@ pub const RIBBON: &[Tab] = &[
                     Do(Action::AutoSync),
                 ],
             ),
-            group("Selection", &[Do(Action::SelectAll)]),
+            group(
+                "Selection",
+                &[Do(Action::SelectAll), Do(Action::RenamePhotos)],
+            ),
             group(
                 "Stacks",
                 &[
@@ -273,6 +276,7 @@ pub fn icon(action: Action) -> &'static str {
         Action::CopySettings => "📋",
         Action::PasteSettings => "📥",
         Action::ApplyToSelected => "🗐",
+        Action::RenamePhotos => "✏",
         Action::AutoSync => "🔄",
         Action::SelectAll => "☑",
         Action::Preferences => "⚙",
@@ -349,6 +353,7 @@ pub fn short_label(action: Action) -> &'static str {
         Action::ExportToGallery => "To gallery",
         Action::CopySettings => "Copy settings",
         Action::ApplyToSelected => "Apply to selected",
+        Action::RenamePhotos => "Rename",
         Action::AutoSync => "Auto-sync",
         Action::Preferences => "Preferences",
         Action::MatchReference => "Match reference",
@@ -761,6 +766,7 @@ mod tests {
             Action::CopySettings,
             Action::PasteSettings,
             Action::ApplyToSelected,
+            Action::RenamePhotos,
             Action::AutoSync,
             Action::SelectAll,
             Action::Preferences,

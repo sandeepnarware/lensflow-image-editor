@@ -28,6 +28,8 @@ pub enum Action {
     CopySettings,
     PasteSettings,
     ApplyToSelected,
+    /// Rename the selected photos' files from a pattern.
+    RenamePhotos,
     /// Develop's Auto-sync on or off.
     AutoSync,
     SelectAll,
@@ -147,6 +149,7 @@ impl Action {
             Action::CopySettings => "Copy settings…",
             Action::PasteSettings => "Paste settings",
             Action::ApplyToSelected => "Apply to selected…",
+            Action::RenamePhotos => "Rename…",
             Action::AutoSync => "Auto-sync",
             Action::SelectAll => "Select all",
             Action::Preferences => "Preferences…",
