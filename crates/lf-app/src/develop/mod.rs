@@ -28,6 +28,7 @@ mod navigator;
 pub mod open;
 pub mod panels;
 pub mod preview;
+pub mod readout;
 pub mod tools;
 pub mod upright;
 pub mod versions_panel;
@@ -161,6 +162,10 @@ pub struct Develop {
     navigator: Option<Preview>,
     navigator_drawn: Option<navigator::NavKey>,
     last_view: View,
+    /// The colour readout: a small picture of the edit, and the photo point under the
+    /// pointer while it is over the preview.
+    readout_img: Option<image::RgbaImage>,
+    readout_at: Option<(f64, f64)>,
     /// The settings changed: draw again.
     dirty: bool,
     histogram: Option<Histogram>,
@@ -218,6 +223,8 @@ impl Develop {
             navigator: None,
             navigator_drawn: None,
             last_view: View::default(),
+            readout_img: None,
+            readout_at: None,
             dirty: false,
             histogram: None,
             last_change: Instant::now(),
@@ -852,6 +859,7 @@ impl Develop {
         self.last_drawn = None;
         self.last_before = None;
         self.navigator_drawn = None;
+        self.readout_img = None;
         self.histogram = None;
         if !self.is_lost() {
             self.state = State::Empty;
@@ -896,10 +904,18 @@ impl Develop {
                 self.last_drawn = None;
                 self.last_before = None;
                 self.navigator_drawn = None;
+                self.readout_img = None;
+                self.readout_img = None;
                 self.navigator_drawn = None;
+                self.readout_img = None;
+                self.readout_img = None;
                 self.last_before = None;
                 self.navigator_drawn = None;
+                self.readout_img = None;
+                self.readout_img = None;
                 self.navigator_drawn = None;
+                self.readout_img = None;
+                self.readout_img = None;
                 self.last_histogram = None;
                 self.settings_changed();
                 Outcome::Shown(photo_id)
@@ -935,6 +951,7 @@ impl Develop {
         self.last_drawn = None;
         self.last_before = None;
         self.navigator_drawn = None;
+        self.readout_img = None;
         self.state = State::Lost;
         true
     }
@@ -955,7 +972,19 @@ impl Develop {
     pub fn side_ui(&mut self, ui: &mut egui::Ui, photo: Option<&PhotoRow>, toasts: &mut Toasts) {
         ui.add_space(8.0);
         histogram::show(ui, self.histogram.as_ref());
-        ui.add_space(8.0);
+        let value = self
+            .readout_img
+            .as_ref()
+            .zip(self.readout_at)
+            .and_then(|(img, at)| readout::value_at(img, at));
+        // Always a line, so the panel below does not jump as the pointer comes and goes.
+        ui.label(
+            RichText::new(value.map(readout::text).unwrap_or_default())
+                .monospace()
+                .small()
+                .color(theme::MUTED),
+        );
+        ui.add_space(4.0);
         if self.is_ready() {
             self.navigator_ui(ui, toasts);
         }
@@ -1192,6 +1221,17 @@ impl Develop {
         };
         let placement = self.viewport.placement(output, panel);
         self.last_view = placement.view;
+        // The photo point under the pointer, for the colour readout (not over the photo as
+        // it was, nor the crop tool's whole frame).
+        self.readout_at = response
+            .hover_pos()
+            .filter(|p| rect.contains(*p) && !before && draw_crop.is_none())
+            .map(|p| {
+                let c = (p - rect.min) / rect.size();
+                self.viewport
+                    .output_at((f64::from(c.x), f64::from(c.y)), output, panel)
+            })
+            .filter(|(u, v)| (0.0..=1.0).contains(u) && (0.0..=1.0).contains(v));
         let (_, _, rw, rh) = placement.rect;
         let size = preview::canvas_size(&self.gpu, rw, rh);
         if let State::Ready(photo, _) = &self.state {
@@ -1407,6 +1447,20 @@ impl Develop {
 
     /// Remakes the histogram 200 ms after the last change, once per change.
     fn update_histogram(&mut self, ctx: &egui::Context, toasts: &mut Toasts) {
+        // The readout's picture, once the pointer is over the photo and none is current.
+        if self.readout_at.is_some()
+            && self.readout_img.is_none()
+            && let State::Ready(photo, _) = &mut self.state
+        {
+            let settings = self.session.edit().map_or(&photo.settings, |e| &e.settings);
+            match photo.renderer.pixels(settings, readout::EDGE) {
+                Ok(img) => {
+                    self.readout_img = Some(img);
+                    ctx.request_repaint();
+                }
+                Err(e) => self.renderer_error("The colour readout could not be made", e, toasts),
+            }
+        }
         let now = Instant::now();
         if !Throttle::should_run(self.last_change, self.last_histogram, now) {
             if self.last_histogram.is_none_or(|run| run < self.last_change) {
@@ -1416,6 +1470,9 @@ impl Develop {
             return;
         }
         self.last_histogram = Some(now);
+        // The edit changed: the readout's picture is made again (while the pointer is over the
+        // photo).
+        self.readout_img = None;
         let State::Ready(photo, _) = &mut self.state else {
             return;
         };

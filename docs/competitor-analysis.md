@@ -63,6 +63,7 @@ close or competitors ship new features.
 - Crop overlays (thirds, grid, golden ratio, diagonals, triangles, spiral) cycled with `O`: done.
 - Before/after side by side (Lightroom's `Y`): done, View → Before/After side by side.
 - Navigator panel (Lightroom's): done, Develop's side panel.
+- Colour readout under the cursor (Lightroom's RGB under the histogram): done.
 
 ### Tier 4: large or strategic
 

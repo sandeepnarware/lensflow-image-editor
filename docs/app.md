@@ -821,6 +821,13 @@ preview stores the part it showed (`last_view`); the navigator frames it (`frame
 is less than the whole photo, and a click or drag sets `viewport.centre` to the point under the
 pointer (`point_at`), which the viewport then clamps.
 
+The colour readout (`develop/readout.rs`) shows the edited photo's RGB (8-bit display values
+as percentages) at the point under the pointer, under the histogram. The preview stores the
+photo point (`readout_at`, through `Viewport::output_at`; none over the photo as it was or the
+crop tool's whole frame); while there is one, `update_histogram` keeps a picture of the edit at
+800 px (`Renderer::pixels`), made once when the pointer arrives and again after each histogram
+run (each edit, at most every 200 ms). Nothing is read back while the pointer is elsewhere.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the
