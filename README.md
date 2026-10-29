@@ -240,6 +240,10 @@ photo; nothing changes until it is clicked.
 Metadata presets (the Metadata panel): save the first selected photo's creator, copyright and
 keywords as a named preset, and apply one to the whole selection in one click.
 
+Keyword list (the sidebar, under People): every keyword of the folder with how many photos
+have it, as a tree when written as paths ("Places > India > Goa"); click one to show only those
+photos (and any under it), again to show all.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

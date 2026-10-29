@@ -183,6 +183,8 @@ pub struct Filter {
     /// Only photos from this camera, or through this lens (as the EXIF names them).
     pub camera: Option<String>,
     pub lens: Option<String>,
+    /// Only photos with this keyword or one under it (the sidebar's Keywords list).
+    pub keyword: Option<String>,
 }
 
 impl Filter {
@@ -195,6 +197,7 @@ impl Filter {
             || !self.text.trim().is_empty()
             || self.camera.is_some()
             || self.lens.is_some()
+            || self.keyword.is_some()
     }
 
     fn keeps(&self, row: &PhotoRow) -> bool {
@@ -205,6 +208,10 @@ impl Filter {
             && matches_text(row, &self.text)
             && (self.camera.is_none() || row.camera == self.camera)
             && (self.lens.is_none() || row.lens == self.lens)
+            && self
+                .keyword
+                .as_ref()
+                .is_none_or(|k| crate::library::keywords_ui::under(&row.meta.keywords, k))
     }
 
     /// The ids the grid shows, in its order. `rows` come in capture order. A collapsed

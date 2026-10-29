@@ -19,6 +19,7 @@ pub mod geotag_ui;
 pub mod grid;
 pub mod import_ui;
 pub mod ingest_ui;
+pub mod keywords_ui;
 pub mod lut_ui;
 pub mod map;
 pub mod merge_ui;
@@ -1999,6 +2000,7 @@ impl Library {
             .show(ui, |ui| {
                 self.albums_sidebar(ui, env);
                 self.people_sidebar(ui, env);
+                self.keywords_sidebar(ui);
             });
     }
 

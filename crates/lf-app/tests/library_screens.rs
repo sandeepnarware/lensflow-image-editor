@@ -3235,3 +3235,42 @@ fn a_metadata_preset_is_applied_to_the_selection() {
         assert_eq!(p.meta.keywords, vec!["wedding".to_owned()]);
     }
 }
+
+/// The sidebar's Keywords list: a parent keyword shows the photos with any keyword under it.
+#[test]
+fn the_keyword_list_filters_by_a_keyword_and_those_under_it() {
+    use lf_catalog::meta::Change;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 3);
+    import_folder(&mut h, &shoot, 3);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    for (id, k) in [
+        (ids[0], "Places > Goa"),
+        (ids[1], "Places > Delhi"),
+        (ids[2], "cake"),
+    ] {
+        let s = h.state_mut();
+        let mut env = Env {
+            jobs: &s.jobs,
+            toasts: &mut s.toasts,
+            prefs: &mut s.prefs,
+            config_dir: &s.config,
+        };
+        s.lib
+            .change_meta(vec![id], Change::AddKeywords(vec![k.to_owned()]), &mut env);
+    }
+    h.step();
+    h.step();
+    h.get_by_label("Keyword Places").click();
+    h.step();
+    h.step();
+    assert_eq!(h.state().lib.shown().len(), 2, "Goa and Delhi");
+    h.get_by_label("Keyword Places").click();
+    h.step();
+    h.step();
+    assert_eq!(h.state().lib.shown().len(), 3, "all again");
+}

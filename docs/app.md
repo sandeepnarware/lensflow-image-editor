@@ -930,6 +930,12 @@ list and "Save as preset" (the first selected photo's creator, copyright and key
 name; the same name replaces). Applying is `meta_ui::preset_changes` (creator and copyright set
 when the preset has them, keywords added) through `change_meta`, as typing them would.
 
+The Keywords list (`library/keywords_ui.rs`) builds a tree from the folder's keywords
+(`tree`: each keyword and every parent of its "a > b > c" path, counting photos under it); a
+click sets `Filter::keyword` (toggled), which keeps photos with that keyword or one below it,
+case ignored (`keywords_ui::under`). Keywords are stored as typed, so a hierarchy is a naming
+habit, not a separate table.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

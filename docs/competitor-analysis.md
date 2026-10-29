@@ -80,6 +80,7 @@ close or competitors ship new features.
 - Geotagging from a GPX tracklog (Lightroom's Map → Tracklog): done, View → GPX track.
 - Preset preview on hover (Lightroom's): done.
 - Metadata presets (Lightroom's): done, the Metadata panel.
+- Keyword list with hierarchy (Lightroom's Keyword List): done, the sidebar's Keywords.
 
 ### Tier 4: large or strategic
 
