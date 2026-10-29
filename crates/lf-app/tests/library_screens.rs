@@ -2733,3 +2733,45 @@ fn guided_upright_straightens_to_two_drawn_guides() {
     );
     assert!(h.query_by_label("2 guides.").is_some());
 }
+
+/// View → Slideshow: the grid's photos one at a time; the arrows step (wrapping round) and
+/// Esc ends it.
+#[test]
+fn a_slideshow_steps_through_the_photos_and_esc_ends_it() {
+    use lf_app::shortcuts::Action;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 3);
+    import_folder(&mut h, &shoot, 3);
+    {
+        let ctx = h.ctx.clone();
+        let s = h.state_mut();
+        let mut env = Env {
+            jobs: &s.jobs,
+            toasts: &mut s.toasts,
+            prefs: &mut s.prefs,
+            config_dir: &s.config,
+        };
+        assert!(s.lib.run(Action::Slideshow, &ctx, &mut env));
+    }
+    h.step();
+    assert_eq!(h.state().lib.slideshow_position(), Some((0, 3)));
+    h.key_press(Key::ArrowRight);
+    h.step();
+    assert_eq!(h.state().lib.slideshow_position(), Some((1, 3)));
+    h.key_press(Key::ArrowLeft);
+    h.step();
+    h.key_press(Key::ArrowLeft);
+    h.step();
+    assert_eq!(
+        h.state().lib.slideshow_position(),
+        Some((2, 3)),
+        "round to the last"
+    );
+    h.key_press(Key::Escape);
+    h.step();
+    assert_eq!(h.state().lib.slideshow_position(), None);
+}

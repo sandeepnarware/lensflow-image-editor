@@ -206,7 +206,10 @@ pub const RIBBON: &[Tab] = &[
         title: "View",
         groups: &[
             group("Mode", &[Do(Action::Library), Do(Action::Develop)]),
-            group("Panels", &[Do(Action::Metadata), Do(Action::Map)]),
+            group(
+                "Panels",
+                &[Do(Action::Metadata), Do(Action::Map), Do(Action::Slideshow)],
+            ),
             group(
                 "Preview",
                 &[
@@ -295,6 +298,7 @@ pub fn icon(action: Action) -> &'static str {
         Action::BeforeAfter => "◑",
         Action::Clipping => "⚠",
         Action::FocusPeaking => "🎯",
+        Action::Slideshow => "▶",
         Action::VisualizeSpots => "🔍",
         Action::SoftProof => "🖶",
         Action::ProofProfile => "🎨",
@@ -398,6 +402,7 @@ pub fn short_label(action: Action) -> &'static str {
         Action::Metadata => "Metadata",
         Action::Clipping => "Clipping",
         Action::FocusPeaking => "Peaking",
+        Action::Slideshow => "Slideshow",
         Action::VisualizeSpots => "Spots view",
         Action::SoftProof => "Soft proof",
         Action::ProofProfile => "Profile",
@@ -799,6 +804,7 @@ mod tests {
             Action::BeforeAfter,
             Action::Clipping,
             Action::FocusPeaking,
+            Action::Slideshow,
             Action::VisualizeSpots,
             Action::SoftProof,
             Action::ProofProfile,

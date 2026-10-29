@@ -42,6 +42,8 @@ pub enum Action {
     Clipping,
     /// Sharp edges shown green over the preview.
     FocusPeaking,
+    /// The selected photos (or the grid's) one at a time over the whole window.
+    Slideshow,
     /// The preview as white edges on black, so dust spots show.
     VisualizeSpots,
     /// Show the photo as a printer and paper profile would print it.
@@ -166,6 +168,7 @@ impl Action {
             Action::BeforeAfter => "Before/After",
             Action::Clipping => "Show clipping",
             Action::FocusPeaking => "Focus peaking",
+            Action::Slideshow => "Slideshow",
             Action::VisualizeSpots => "Visualize spots",
             Action::SoftProof => "Soft proof",
             Action::ProofProfile => "Proof profile…",

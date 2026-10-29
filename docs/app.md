@@ -747,6 +747,12 @@ so the sharp subject does not halo into the background. Discs are read through r
 sums; a radius over 12 px is blurred on a picture made smaller by as much. 24 MP takes about
 12 s in release on this machine.
 
+Slideshow (View → Slideshow, `library/slideshow.rs`) covers the window on black with the
+selection (or the grid's photos), one at a time, each rendered with its edits on the `Open`
+lane as Compare renders (`Msg::SlideRendered`, by generation); the next one renders while
+this one shows, and slides behind are let go. It moves on every 4 s once a photo is up;
+Space pauses, the arrows step (wrapping round), Esc or a click ends it.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

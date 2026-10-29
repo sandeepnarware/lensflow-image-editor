@@ -24,6 +24,7 @@ pub mod meta_ui;
 pub mod people_ui;
 pub mod print_ui;
 pub mod selection;
+pub mod slideshow;
 pub mod stacks_ui;
 
 use crate::app::THUMBS_STOPPED_BANNER;
@@ -138,6 +139,8 @@ pub struct Library {
     compare: Option<compare::Compare>,
     /// View → Map, while open (it shows in place of the grid).
     map: Option<map::MapView>,
+    /// View → Slideshow, while running (it covers the window).
+    slideshow: Option<slideshow::Slideshow>,
     compare_generation: u64,
     albums: Vec<lf_catalog::albums::Album>,
     /// New album, New smart album or Edit album, while open.
@@ -247,6 +250,7 @@ impl Library {
             auto_stack: None,
             local_ai: false,
             compare: None,
+            slideshow: None,
             map: None,
             compare_generation: 0,
             albums: Vec::new(),
@@ -923,6 +927,11 @@ impl Library {
                 id,
                 result,
             } => self.compare_rendered(generation, id, result),
+            Msg::SlideRendered {
+                generation,
+                id,
+                result,
+            } => self.slide_rendered(generation, id, result),
             Msg::AlbumPhotos {
                 root,
                 album_id,
@@ -1458,6 +1467,7 @@ impl Library {
         self.merge_dialog(ui.ctx(), env);
         self.album_dialogs(ui.ctx(), env);
         self.rename_dialog(ui.ctx(), env);
+        self.slideshow_ui(ui.ctx(), env);
         self.people_dialogs(ui.ctx(), env);
         self.ai_dialog(ui.ctx(), env);
         self.remove_dialog(ui.ctx(), env);
@@ -1481,6 +1491,7 @@ impl Library {
             || self.album_dialog_open()
             || self.people_dialog_open()
             || self.rename.is_some()
+            || self.slideshow.is_some()
             || self.ai.is_some()
             || self.remove.is_some()
     }
@@ -1504,6 +1515,7 @@ impl Library {
             Action::CopySettings => self.copy_source().is_some(),
             Action::PasteSettings | Action::ApplyToSelected | Action::MatchReference => selected,
             Action::AutoSync => true,
+            Action::Slideshow => !develop && self.slideshow.is_none() && !self.order.is_empty(),
             Action::RenamePhotos => !develop && selected && self.rename.is_none() && self.can_add(),
             Action::EditIn => (develop || selected) && self.can_add(),
             Action::Print => develop || selected,
@@ -1618,6 +1630,7 @@ impl Library {
             }
             // The filmstrip in Develop too: the open photo stays the active one.
             Action::SelectAll => self.selection.select_all(&self.order),
+            Action::Slideshow => self.open_slideshow(env),
             Action::RenamePhotos => {
                 let ids = self.selected_in_order();
                 if !ids.is_empty() {

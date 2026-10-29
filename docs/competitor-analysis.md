@@ -51,7 +51,7 @@ close or competitors ship new features.
 - ~~Batch rename of existing photos (PhotoLab 9)~~ (done: Home → Selection → Rename…).
 - Second-monitor view, reference view, ~~focus peaking~~ (done: View → Peaking, `Shift+J`), 100% loupe.
 - ~~Visualize spots~~ (done: View → Spots view).
-- ~~Contact sheets~~ (done: Print's 9, 20 and 48 a page, with a sheet title, page numbers and Details captions) and slideshows.
+- ~~Contact sheets~~ (done: Print's 9, 20 and 48 a page, with a sheet title, page numbers and Details captions) and ~~slideshows~~ (done: View → Slideshow).
 - ~~Film negative conversion (Capture One 16.7, Negative Lab Pro)~~ (done: Develop → Film negative).
 - Pixel-shift and high-resolution merges.
 - DNG and JPEG XL export.

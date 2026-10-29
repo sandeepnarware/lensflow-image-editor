@@ -198,6 +198,12 @@ pub enum Msg {
         root: PathBuf,
         result: Result<usize, String>,
     },
+    /// A slideshow's photo was rendered (`generation`: the show that asked).
+    SlideRendered {
+        generation: u64,
+        id: i64,
+        result: Result<Box<crate::library::compare::Pixels>, String>,
+    },
     /// Remove objects' "Select people": the people found in photo `id` (the mask's size).
     PeopleSelected {
         id: i64,
@@ -822,6 +828,7 @@ pub(crate) mod owners {
             | Msg::DcpImported(..)
             | Msg::Synced { .. }
             | Msg::PeopleSelected { .. }
+            | Msg::SlideRendered { .. }
             | Msg::Renamed { .. }
             | Msg::EditInDone(..)
             | Msg::PrintProgress { .. }
@@ -960,6 +967,11 @@ pub(crate) mod owners {
                 result: Err("no".into()),
             },
             Msg::PeopleSelected {
+                id: 1,
+                result: Err("no".into()),
+            },
+            Msg::SlideRendered {
+                generation: 1,
                 id: 1,
                 result: Err("no".into()),
             },
