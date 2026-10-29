@@ -305,6 +305,12 @@ impl Library {
         self.remove = Some(RemoveDialog::new(id));
     }
 
+    pub(super) fn wires_selected(&mut self, id: i64, result: Result<lf_ai::Gray, String>) {
+        if let Some(dialog) = self.remove.as_mut().filter(|d| d.id == id) {
+            dialog.wires_found(result);
+        }
+    }
+
     pub(super) fn people_selected(&mut self, id: i64, result: Result<lf_ai::Gray, String>) {
         if let Some(dialog) = self.remove.as_mut().filter(|d| d.id == id) {
             dialog.people_found(result);
@@ -341,6 +347,18 @@ impl Library {
                         })
                         .map_err(|e| e.to_string());
                     Msg::PeopleSelected { id, result }
+                });
+            }
+            RemoveAction::SelectWires(picture) => {
+                let id = dialog.id;
+                let engine = self.ai_engine();
+                env.jobs.spawn(Lane::Long, "select wires", move || {
+                    let stop = std::sync::atomic::AtomicBool::new(false);
+                    let result = engine
+                        .prepare(&lf_ai::segment::SKY_MODELS, &mut |_, _| {}, &stop)
+                        .and_then(|()| lf_ai::wires::find(&engine, &picture))
+                        .map_err(|e| e.to_string());
+                    Msg::WiresSelected { id, result }
                 });
             }
             RemoveAction::Remove(mask) => {

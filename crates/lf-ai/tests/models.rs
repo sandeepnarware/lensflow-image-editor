@@ -167,6 +167,27 @@ fn a_panoramas_empty_edges_are_filled_from_the_picture() {
 }
 
 #[test]
+fn a_wire_across_the_sky_is_found() {
+    let Some(e) = engine(&lf_ai::segment::SKY_MODELS) else {
+        return;
+    };
+    let (w, h) = (900usize, 600usize);
+    let mut img = scene(w, h);
+    // A dark wire across the sky, two pixels thick, sagging a little.
+    for x in 0..w {
+        let t = x as f32 / w as f32 - 0.5;
+        let y = (80.0 + 60.0 * t * t * 4.0) as usize;
+        for yy in y..y + 2 {
+            img.data[(yy * w + x) * 3..(yy * w + x) * 3 + 3].copy_from_slice(&[0.1, 0.1, 0.1]);
+        }
+    }
+    let m = lf_ai::wires::find(&e, &img).unwrap();
+    assert_eq!(m.data[80 * w + w / 2], 1.0, "the wire's middle");
+    let on = m.data.iter().filter(|&&v| v > 0.0).count();
+    assert!(on < w * 8, "the wire and little else: {on}");
+}
+
+#[test]
 fn no_face_is_found_in_a_landscape() {
     let Some(e) = engine(&lf_ai::faces::FACE_MODELS) else {
         return;

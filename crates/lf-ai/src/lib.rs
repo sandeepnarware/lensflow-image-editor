@@ -21,6 +21,7 @@ pub mod restore;
 pub mod segment;
 pub mod sky;
 pub mod tiles;
+pub mod wires;
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

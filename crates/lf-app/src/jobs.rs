@@ -216,6 +216,11 @@ pub enum Msg {
         id: i64,
         result: Result<Box<crate::library::compare::Pixels>, String>,
     },
+    /// Remove objects' "Select wires": the wires found in photo `id` (the mask's size).
+    WiresSelected {
+        id: i64,
+        result: Result<lf_ai::Gray, String>,
+    },
     /// Remove objects' "Select people": the people found in photo `id` (the mask's size).
     PeopleSelected {
         id: i64,
@@ -840,6 +845,7 @@ pub(crate) mod owners {
             | Msg::DcpImported(..)
             | Msg::Synced { .. }
             | Msg::PeopleSelected { .. }
+            | Msg::WiresSelected { .. }
             | Msg::SlideRendered { .. }
             | Msg::ReferenceRendered { .. }
             | Msg::SecondWindowRendered { .. }
@@ -981,6 +987,10 @@ pub(crate) mod owners {
                 result: Err("no".into()),
             },
             Msg::PeopleSelected {
+                id: 1,
+                result: Err("no".into()),
+            },
+            Msg::WiresSelected {
                 id: 1,
                 result: Err("no".into()),
             },

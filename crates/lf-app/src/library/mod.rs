@@ -977,6 +977,7 @@ impl Library {
             Msg::PeopleChanged { root, result } => self.people_changed(root, result, env),
             Msg::Synced { root, ids, failed } => self.synced(root, ids, failed, env),
             Msg::PeopleSelected { id, result } => self.people_selected(id, result),
+            Msg::WiresSelected { id, result } => self.wires_selected(id, result),
             Msg::Renamed { root, result } => self.renamed(root, result, env),
             Msg::DcpImported(result) => match result {
                 Ok(name) => {

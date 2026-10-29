@@ -38,7 +38,7 @@ close or competitors ship new features.
 | Denoise on raw sensor data, before demosaicing (ours runs after) | DxO DeepPRIME XD3, Lightroom Denoise, Capture One Enhanced Denoise |
 | Camera-matching profiles (camera looks, ~~DCP profiles~~ (done: RAW → Camera profile, user-imported), ~~colour calibration~~ (done: Develop → Calibration)) | All |
 | HDR editing and output for HDR screens, gain-map AVIF/JPEG | Lightroom |
-| Reflection, wire and ~~people removal~~ (done: Remove objects → Select people) (one-click distractions) | Lightroom 15.6 |
+| Reflection, ~~wire~~ (done: Remove objects → Select wires) and ~~people removal~~ (done: Remove objects → Select people) (one-click distractions) | Lightroom 15.6 |
 | ~~Lens blur (AI depth of field)~~ (done: AI → Enhance → Lens blur, as a new photo); ~~depth mask~~ (done: Masks → Foreground, Background) | Lightroom |
 | ~~Layers (stacked local edits with opacity)~~ (done: masks have opacity, show/hide and Duplicate) | Capture One, Luminar |
 | ~~Upright Guided (draw lines)~~ (done: Develop → Guided), ~~Level, Auto~~ (done: Lens corrections → Upright) | Lightroom |

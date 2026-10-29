@@ -8,7 +8,8 @@
 //!
 //! "Select people" paints every person the people model finds (widened a little, so their
 //! edges and shadows' start go too); rubbing out whoever should stay, then Remove, takes the
-//! rest away (Lightroom's distraction removal of people).
+//! rest away (Lightroom's distraction removal of people). "Select wires" paints the wires and
+//! power lines found against the sky ([`lf_ai::wires`]) the same way.
 
 use crate::theme;
 use eframe::egui::{self, Color32, Key, Pos2, Rect, RichText, Sense, Vec2};
@@ -25,6 +26,12 @@ pub const SELECT_PEOPLE: &str = "Select people";
 pub const SELECTING: &str = "Finding the people…";
 pub const NO_PEOPLE: &str = "No people were found.";
 pub const PEOPLE_HINT: &str = "Rub out (Alt-drag) whoever should stay, then Remove.";
+pub const SELECT_WIRES: &str = "Select wires";
+pub const SELECTING_WIRES: &str = "Finding wires against the sky…";
+pub const NO_WIRES: &str = "No wires were found against the sky.";
+pub const WIRES_HINT: &str = "Rub out (Alt-drag) anything that is not a wire, then Remove.";
+/// How much a found wire is widened, as a share of the mask's long edge.
+const WIDEN_WIRES: f32 = 0.003;
 /// How much a found person is widened, as a share of the mask's long edge.
 const WIDEN: f32 = 0.008;
 
@@ -38,6 +45,8 @@ pub enum RemoveAction {
     Remove(Gray),
     /// Find the people in this picture (the mask's size) and paint them.
     SelectPeople(lf_ai::Rgb),
+    /// Find the wires against the sky in this picture (the mask's size) and paint them.
+    SelectWires(lf_ai::Rgb),
     Close,
 }
 
@@ -58,8 +67,9 @@ pub struct RemoveDialog {
     last: Option<Pos2>,
     /// The photo at the mask's size (what "Select people" looks at).
     picture: Option<lf_ai::Rgb>,
-    /// "Select people" is running; what it last said.
+    /// "Select people" or "Select wires" is running (which: `wires`); what it last said.
     pub selecting: bool,
+    selecting_wires: bool,
     note: Option<&'static str>,
 }
 
@@ -79,21 +89,39 @@ impl RemoveDialog {
             last: None,
             picture: None,
             selecting: false,
+            selecting_wires: false,
             note: None,
         }
     }
 
     /// "Select people" answered: everyone found is painted (added to what is painted).
     pub fn people_found(&mut self, result: Result<Gray, String>) {
+        self.found(result, WIDEN, NO_PEOPLE, PEOPLE_HINT);
+    }
+
+    /// "Select wires" answered: the wires found are painted (added to what is painted).
+    pub fn wires_found(&mut self, result: Result<Gray, String>) {
+        self.found(result, WIDEN_WIRES, NO_WIRES, WIRES_HINT);
+    }
+
+    /// What a selection found, widened by `widen` of the long edge and painted.
+    fn found(
+        &mut self,
+        result: Result<Gray, String>,
+        widen_by: f32,
+        none: &'static str,
+        hint: &'static str,
+    ) {
         self.selecting = false;
+        self.selecting_wires = false;
         match result {
             Ok(found) if found.w == self.mw && found.h == self.mh => {
                 let people: Vec<bool> = found.data.iter().map(|&v| v >= 0.5).collect();
                 if !people.contains(&true) {
-                    self.note = Some(NO_PEOPLE);
+                    self.note = Some(none);
                     return;
                 }
-                let r = (WIDEN * self.mw.max(self.mh) as f32).ceil() as usize;
+                let r = (widen_by * self.mw.max(self.mh) as f32).ceil() as usize;
                 for (m, on) in self
                     .mask
                     .iter_mut()
@@ -104,10 +132,10 @@ impl RemoveDialog {
                     }
                 }
                 self.dirty = true;
-                self.note = Some(PEOPLE_HINT);
+                self.note = Some(hint);
             }
-            Ok(_) => self.note = Some(NO_PEOPLE),
-            Err(e) => log::warn!("selecting people failed: {e}"),
+            Ok(_) => self.note = Some(none),
+            Err(e) => log::warn!("selecting failed: {e}"),
         }
     }
 
@@ -279,9 +307,24 @@ impl RemoveDialog {
                     self.note = None;
                     action = RemoveAction::SelectPeople(picture.clone());
                 }
+                if ui
+                    .add_enabled(ready, egui::Button::new(SELECT_WIRES))
+                    .clicked()
+                    && let Some(picture) = &self.picture
+                {
+                    self.selecting = true;
+                    self.selecting_wires = true;
+                    self.note = None;
+                    action = RemoveAction::SelectWires(picture.clone());
+                }
             });
             if self.selecting {
-                ui.label(RichText::new(SELECTING).color(theme::MUTED));
+                let doing = if self.selecting_wires {
+                    SELECTING_WIRES
+                } else {
+                    SELECTING
+                };
+                ui.label(RichText::new(doing).color(theme::MUTED));
             } else if let Some(note) = self.note {
                 ui.label(RichText::new(note).color(theme::MUTED));
             }
@@ -375,6 +418,29 @@ mod tests {
             data: vec![0.1; 5000],
         }));
         assert_eq!(d.note, Some(NO_PEOPLE));
+    }
+
+    #[test]
+    fn wires_found_are_painted_and_none_says_so() {
+        let mut d = RemoveDialog::new(1);
+        d.rendered(Ok(image::RgbaImage::new(100, 50)));
+        let mut found = Gray {
+            w: 100,
+            h: 50,
+            data: vec![0.0; 5000],
+        };
+        for x in 0..100 {
+            found.data[20 * 100 + x] = 1.0;
+        }
+        d.wires_found(Ok(found));
+        assert_eq!(d.mask[20 * 100 + 40], 255);
+        assert_eq!(d.note, Some(WIRES_HINT));
+        d.wires_found(Ok(Gray {
+            w: 100,
+            h: 50,
+            data: vec![0.0; 5000],
+        }));
+        assert_eq!(d.note, Some(NO_WIRES));
     }
 
     #[test]

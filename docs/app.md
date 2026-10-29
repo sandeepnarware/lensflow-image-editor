@@ -855,6 +855,16 @@ answers `Msg::PeopleSelected`; everyone found (coverage ≥ 0.5) is widened by 0
 edge (`remove::widen`, rows then columns) and added to what is painted. The user rubs out
 whoever should stay; Remove then fills the rest with LaMa as for any painted mask.
 
+"Select wires" works the same way (`Msg::WiresSelected`, widened by 0.3 %) with
+`lf_ai::wires::find`: no model draws wires, so they are found by shape. Within the sky (SkySeg,
+widened by three closing radii so a wire's ends at a pole or roof come too), a black-hat (the
+brightness closed by a square of radius long edge / 250, at least 2 px, minus the brightness;
+running min/max through monotonic queues, so linear time) marks thin lines at least 0.04 darker
+than the sky about them. Those are grouped into 8-connected pieces and kept when long (box
+diagonal at least 8 % of the long edge) and thin (pixels per unit length at most two radii):
+birds and clouds' edges go, wires stay. A branch against the sky can be kept too; it is rubbed
+out before Remove.
+
 Depth masks (Masks → Foreground, Background) are `Target`s sent to `lf_ai::depth::mask`: the
 depth map at the mask's size, split where Otsu's threshold best separates near from far (the
 middle of the best-scoring run, so an empty gap splits in its centre), with a soft edge 0.08
