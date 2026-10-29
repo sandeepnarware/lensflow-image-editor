@@ -106,6 +106,8 @@ pub struct PanelOutput {
     pub reset: Option<&'static [GroupKey]>,
     /// The white-balance eyedropper was clicked: open (or leave) its tool.
     pub pick_wb: bool,
+    /// Colour mix's targeted adjustment was clicked: open (or leave) its tool.
+    pub target_hsl: bool,
     /// "Import .cube…" was clicked.
     pub import_lut: bool,
     /// "Import .dcp…" was clicked.
@@ -131,6 +133,8 @@ pub struct PanelContext<'a> {
     pub sample: Option<&'a Sample>,
     /// The white-balance eyedropper is open (its button shows pressed).
     pub picking_wb: bool,
+    /// The targeted adjustment is on (its button shows pressed).
+    pub targeting_hsl: bool,
     /// The LUT looks loaded (`lf_pipeline::lut::names`).
     pub luts: &'a [String],
     /// The camera profiles loaded (`lf_raw::dcp::names`: name, camera).
@@ -218,7 +222,11 @@ pub fn show(
                     out.pick_wb |= pick;
                     r
                 }
-                "hsl" => hsl::show(ui, &mut state.hsl_mode, s),
+                "hsl" => {
+                    let (r, target) = hsl::show(ui, &mut state.hsl_mode, s, ctx.targeting_hsl);
+                    out.target_hsl |= target;
+                    r
+                }
                 "curve" => {
                     let c = curve::edit(ui, &mut state.curve, &mut s.curve, ctx.histogram);
                     SliderResponse {

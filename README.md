@@ -188,6 +188,10 @@ frame round the part shown when zoomed in; click or drag on it to move there.
 Colour readout: in Develop, with the pointer over the photo, the edited red, green and blue
 there show under the histogram as percentages.
 
+Targeted Colour mix: in Develop's Colour mix, "🎯 Drag in photo", then drag up or down on a
+colour in the photo to change the hue, saturation or luminance (whichever the section shows) of
+the bands that colour belongs to.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

@@ -828,6 +828,15 @@ crop tool's whole frame); while there is one, `update_histogram` keeps a picture
 800 px (`Renderer::pixels`), made once when the pointer arrives and again after each histogram
 run (each edit, at most every 200 ms). Nothing is read back while the pointer is elsewhere.
 
+The targeted Colour mix adjustment (`ToolKind::Targeted`, `develop/tools/targeted.rs`) is a tool
+opened by the Colour mix section's "🎯 Drag in photo" (`PanelOutput::target_hsl`). At a drag's
+start it takes the edited colour under the pointer (the colour readout's picture), its hue
+(`masks::hue_of`; a grey spot moves nothing and says so) and each band's share of it with the
+shader's own weighting (smoothstep of the hue distance over the band's width, scaled so the
+strongest is 1). Moving up raises, down lowers, half a slider unit per point, each band by its
+share, for the property the section shows (`PanelState::hsl_mode`, followed while the tool is
+open); release is one history step.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

@@ -9,6 +9,7 @@ pub mod crop;
 pub mod masks;
 pub mod overlay;
 pub mod spots;
+pub mod targeted;
 
 use super::panels;
 use super::view::Viewport;
@@ -55,6 +56,8 @@ pub enum ToolKind {
     Masks,
     /// Guided Upright: lines drawn along edges that should be upright or level.
     Guided,
+    /// Colour mix's targeted adjustment: a drag on a colour moves its bands.
+    Targeted,
 }
 
 pub const CROP: &str = "Crop";
@@ -91,6 +94,7 @@ pub enum Active {
     WhiteBalance,
     Masks(MaskTool),
     Guided(GuidedTool),
+    Targeted(targeted::TargetedTool),
 }
 
 /// The tools' state in the Develop view.
@@ -121,6 +125,7 @@ impl Tools {
             Some(Active::WhiteBalance) => Some(ToolKind::WhiteBalance),
             Some(Active::Masks(_)) => Some(ToolKind::Masks),
             Some(Active::Guided(_)) => Some(ToolKind::Guided),
+            Some(Active::Targeted(_)) => Some(ToolKind::Targeted),
             None => None,
         }
     }
@@ -304,6 +309,9 @@ impl Develop {
             ToolKind::WhiteBalance => Active::WhiteBalance,
             ToolKind::Masks => Active::Masks(MaskTool::default()),
             ToolKind::Guided => Active::Guided(GuidedTool::default()),
+            ToolKind::Targeted => {
+                Active::Targeted(targeted::TargetedTool::new(self.panels.hsl_mode))
+            }
         });
         self.panels.curve.clear_selection();
         self.settings_changed();
@@ -322,7 +330,10 @@ impl Develop {
                 self.commit(toasts);
             }
             Some(Active::Masks(_)) => self.commit(toasts),
-            Some(Active::WhiteBalance) | Some(Active::Guided(_)) | None => {}
+            Some(Active::WhiteBalance)
+            | Some(Active::Guided(_))
+            | Some(Active::Targeted(_))
+            | None => {}
         }
     }
 
@@ -413,6 +424,14 @@ impl Develop {
         let Some(full) = self.full_size() else {
             return ToolInput::default();
         };
+        // The edited colour's hue under the pointer (the targeted adjustment's).
+        let target_hue = self
+            .readout_img
+            .as_ref()
+            .zip(self.readout_at)
+            .and_then(|(img, at)| crate::develop::readout::value_at(img, at))
+            .and_then(|rgb| lf_settings::masks::hue_of(rgb.map(|v| f64::from(v) / 255.0)));
+        let mut grey = false;
         let (Some(active), Some(edit)) = (self.tools.active.as_mut(), self.session.edit_mut())
         else {
             return ToolInput::default();
@@ -589,6 +608,27 @@ impl Develop {
                     }
                     guided = true;
                 }
+            }
+            Active::Targeted(tool) => {
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+                }
+                if response.drag_started()
+                    && let Some(at) = origin
+                    && !tool.start(&edit.settings, target_hue, at.y)
+                {
+                    grey = true;
+                }
+                if response.dragged()
+                    && tool.dragging()
+                    && let Some(at) = pointer
+                {
+                    edit.set(|s| out.changed |= tool.drag_to(s, at.y));
+                }
+                if response.drag_stopped() && tool.release() {
+                    out.commit = true;
+                }
+                input.owns_drag = true;
             }
             Active::WhiteBalance => {
                 if response.hovered() {
@@ -811,6 +851,9 @@ impl Develop {
         if let Some(at) = picked_colour {
             self.pick_range_colour(at, toasts);
         }
+        if grey {
+            toasts.push(Level::Info, targeted::GREY);
+        }
         input
     }
 
@@ -907,7 +950,7 @@ impl Develop {
                 tool.grid(),
                 self.tools.crop_overlay,
             ),
-            Active::WhiteBalance => {}
+            Active::WhiteBalance | Active::Targeted(_) => {}
             Active::Guided(tool) => {
                 let m =
                     SpotMap::new(map, &edit.settings, full, output_w).through_lens(&edit.settings);
@@ -1062,6 +1105,10 @@ impl Develop {
             }
             Active::WhiteBalance => {
                 ui.label(RichText::new(WB_HINT).color(theme::MUTED));
+            }
+            Active::Targeted(tool) => {
+                ui.label(RichText::new(targeted::HINT).color(theme::MUTED));
+                ui.label(format!("Colour mix: {}", tool.mode.label()));
             }
             Active::Guided(tool) => {
                 ui.label(RichText::new(GUIDED_HINT).color(theme::MUTED));

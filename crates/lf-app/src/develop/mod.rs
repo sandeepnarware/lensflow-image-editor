@@ -1093,6 +1093,7 @@ impl Develop {
             histogram: self.histogram.as_ref(),
             sample: Some(&opened.sample),
             picking_wb: self.tools.kind() == Some(ToolKind::WhiteBalance),
+            targeting_hsl: self.tools.kind() == Some(ToolKind::Targeted),
         };
         let panels = &mut self.panels;
         let mut out = PanelOutput::default();
@@ -1107,6 +1108,13 @@ impl Develop {
         }
         if out.pick_wb {
             self.toggle_tool(ToolKind::WhiteBalance, toasts);
+        }
+        if out.target_hsl {
+            self.toggle_tool(ToolKind::Targeted, toasts);
+        }
+        // The targeted adjustment follows the property the panel shows.
+        if let Some(tools::Active::Targeted(t)) = &mut self.tools.active {
+            t.mode = self.panels.hsl_mode;
         }
         self.lut_import_asked |= out.import_lut;
         self.dcp_import_asked |= out.import_dcp;

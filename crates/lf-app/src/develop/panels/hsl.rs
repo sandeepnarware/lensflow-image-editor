@@ -55,7 +55,20 @@ fn band_colour(band: HslBand) -> Color32 {
     }
 }
 
-pub fn show(ui: &mut egui::Ui, mode: &mut Mode, s: &mut EditSettings) -> SliderResponse {
+pub const TARGET: &str = "🎯 Drag in photo";
+
+/// The section; `.1` is true when its targeted-adjustment button was clicked (`targeting`:
+/// the tool is on).
+pub fn show(
+    ui: &mut egui::Ui,
+    mode: &mut Mode,
+    s: &mut EditSettings,
+    targeting: bool,
+) -> (SliderResponse, bool) {
+    let target = ui
+        .selectable_label(targeting, TARGET)
+        .on_hover_text("Drag up or down on a colour in the photo to change its bands")
+        .clicked();
     let shown = if s.bw {
         ui.label(RichText::new(BW_NOTE).small().color(theme::MUTED));
         Mode::Luminance
@@ -92,5 +105,5 @@ pub fn show(ui: &mut egui::Ui, mode: &mut Mode, s: &mut EditSettings) -> SliderR
             });
         }
     });
-    out
+    (out, target)
 }

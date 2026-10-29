@@ -64,6 +64,7 @@ close or competitors ship new features.
 - Before/after side by side (Lightroom's `Y`): done, View → Before/After side by side.
 - Navigator panel (Lightroom's): done, Develop's side panel.
 - Colour readout under the cursor (Lightroom's RGB under the histogram): done.
+- Targeted adjustment for Colour mix (Lightroom's TAT): done.
 
 ### Tier 4: large or strategic
 

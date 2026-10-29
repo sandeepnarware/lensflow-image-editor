@@ -28,6 +28,7 @@ fn harness(raw: bool) -> Harness<'static, State> {
                     histogram: None,
                     sample: None,
                     picking_wb: false,
+                    targeting_hsl: false,
                     luts: &[],
                     profiles: &s.profiles,
                 };
@@ -210,6 +211,7 @@ fn recorded() -> Harness<'static, Recorded> {
                     histogram: None,
                     sample: None,
                     picking_wb: false,
+                    targeting_hsl: false,
                     luts: &[],
                     profiles: &[],
                 };
@@ -355,6 +357,7 @@ fn auto_tone_auto_white_balance_and_the_eyedropper_button() {
                     histogram: None,
                     sample: Some(&s.sample),
                     picking_wb: false,
+                    targeting_hsl: false,
                     luts: &[],
                     profiles: &[],
                 };
@@ -475,4 +478,17 @@ fn the_calibration_section_writes_desktop_calibration_and_its_reset_clears_it() 
         s
     };
     assert!(h.state().settings.desktop.is_none());
+}
+
+/// Colour mix's "Drag in photo" asks for the targeted adjustment.
+#[test]
+fn colour_mix_offers_the_targeted_adjustment() {
+    let mut h = harness(false);
+    h.run();
+    h.get_by_label("Colour mix").click();
+    h.run();
+    assert!(!h.state().last.target_hsl);
+    h.get_by_label(panels::hsl::TARGET).click();
+    h.step();
+    assert!(h.state().last.target_hsl);
 }
