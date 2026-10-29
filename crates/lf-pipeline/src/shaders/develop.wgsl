@@ -75,6 +75,8 @@ struct Uniforms {
     masks: array<MaskU, 8>,
     lens: vec4<f32>,        // distortion, lens vignetting, red scale, blue scale
     persp: vec4<f32>,       // vertical and horizontal keystone, corner radius squared
+    calib: array<vec4<f32>, 3>, // desktop only: colour calibration's matrix, row by row
+    calib_tint: vec4<f32>,  // shadows tint, on (0: the web's pass exactly)
 }
 
 @group(0) @binding(0) var u_img: texture_2d<f32>;    // the photo (after spots)
@@ -108,6 +110,19 @@ fn sample_2d(t: texture_2d<f32>, s: sampler, uv: vec2<f32>) -> vec4<f32> {
 
 const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
 fn luma(c: vec3<f32>) -> f32 { return dot(c, LUMA); }
+
+// Desktop only: colour calibration (`lf_settings::calibration`), in linear light, before every
+// other adjustment: the primaries' matrix, then a green-magenta tint strongest in the shadows.
+fn calibrate(c: vec3<f32>) -> vec3<f32> {
+    let l = pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2));
+    var m = vec3<f32>(dot(u.calib[0].xyz, l), dot(u.calib[1].xyz, l), dot(u.calib[2].xyz, l));
+    let t = u.calib_tint.x;
+    if (t != 0.0) {
+        let w = 1.0 - smoothstep(0.0, 0.5, clamp(dot(c, LUMA), 0.0, 1.0));
+        m *= mix(vec3<f32>(1.0), vec3<f32>(1.0 + t, 1.0 - t, 1.0 + t), w * w);
+    }
+    return pow(max(m, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+}
 fn to_linear(c: vec3<f32>) -> vec3<f32> { return pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2)); }
 fn to_gamma(c: vec3<f32>) -> vec3<f32> { return pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)); }
 
@@ -410,6 +425,7 @@ fn fs_develop(in: VsOut) -> @location(0) vec4<f32> {
             c = to_gamma(to_linear(c) * (1.0 + u.lens.y * dot(q, q) / u.persp.z));
         }
     }
+    if (u.calib_tint.y != 0.0) { c = calibrate(c); }
     if (u.develop != 0u) { c = develop(c, uv, muv); }
 
     if (u.lut_amount > 0.0) {

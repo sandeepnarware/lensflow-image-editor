@@ -73,6 +73,10 @@ pub struct Uniforms {
     pub lens: [f32; 4],
     /// Vertical and horizontal keystone, the corner's squared radius, unused.
     pub persp: [f32; 4],
+    /// Desktop only: colour calibration's primaries matrix, row by row (`w` unused).
+    pub calib: [[f32; 4]; 3],
+    /// The shadows tint, 1 when calibration is on (0: the web's pass exactly), unused, unused.
+    pub calib_tint: [f32; 4],
 }
 
 /// One local adjustment as `develop.wgsl`'s `MaskU` takes it (seven 16-byte rows).
@@ -167,7 +171,7 @@ impl MaskUniform {
 const _: () = {
     use std::mem::{offset_of, size_of};
     assert!(size_of::<MaskUniform>() == 112);
-    assert!(size_of::<Uniforms>() == 624 + 16 + MAX_MASKS * 112 + 32);
+    assert!(size_of::<Uniforms>() == 624 + 16 + MAX_MASKS * 112 + 32 + 64);
     assert!(offset_of!(Uniforms, wb) == 128);
     assert!(offset_of!(Uniforms, pixel) == 232);
     assert!(offset_of!(Uniforms, hsl) == 240);
@@ -204,6 +208,8 @@ impl Uniforms {
         let v = shader_values(s);
         let masks = Masks::from_settings(s);
         let lens = lf_settings::lens::Lens::from_settings(s);
+        let calibration = lf_settings::calibration::Calibration::from_settings(s);
+        let calib = calibration.matrix();
         let aspect = f64::from(f.img_size[0]) / f64::from(f.img_size[1].max(1));
         let mut mask_uniforms = [MaskUniform::default(); MAX_MASKS];
         for (layer, (slot, mask)) in mask_uniforms.iter_mut().zip(&masks.0).enumerate() {
@@ -278,6 +284,13 @@ impl Uniforms {
                 (lens.vertical / 100.0 * lf_settings::lens::KEYSTONE) as f32,
                 (lens.horizontal / 100.0 * lf_settings::lens::KEYSTONE) as f32,
                 ((aspect * aspect + 1.0) / 4.0) as f32,
+                0.0,
+            ],
+            calib: calib.map(|r| [r[0], r[1], r[2], 0.0]),
+            calib_tint: [
+                calibration.tint(),
+                f32::from(u8::from(f.develop && !calibration.is_neutral())),
+                0.0,
                 0.0,
             ],
         }

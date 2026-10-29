@@ -4,6 +4,7 @@
 //! settings they are given and say what happened; the Develop view commits, resets and
 //! redraws.
 
+pub mod calibration;
 pub mod color;
 pub mod crop;
 pub mod curve;
@@ -251,6 +252,20 @@ pub fn show(
     }
     out.absorb(r);
     out.lens_profile |= profile;
+    let mut r = SliderResponse::default();
+    if section(ui, "calibration", calibration::TITLE, false, |ui| {
+        r = calibration::show(ui, s)
+    }) {
+        let before = s.clone();
+        calibration::reset(s);
+        if *s != before {
+            r = SliderResponse {
+                changed: true,
+                released: true,
+            };
+        }
+    }
+    out.absorb(r);
     let mut r = SliderResponse::default();
     if section(ui, "lut", lut::TITLE, false, |ui| {
         let (lr, import) = lut::show(ui, s, ctx.luts);

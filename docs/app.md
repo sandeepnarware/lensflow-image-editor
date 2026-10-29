@@ -728,6 +728,13 @@ correction) becomes `AiTool::ObjectMask { u, v }`, run like the other AI masks
 asks Segment Anything's multi-mask decoder with the point and SAM's padding point, keeps the
 mask it rates best and softens its logits with a sigmoid.
 
+Calibration (Develop → Calibration, `desktop.calibration`) moves the red, green and blue
+primaries: `Calibration::matrix` turns each about the grey axis (±30° at ±100) and scales its
+distance from grey, then weights the columns so white maps to white, so greys never move. The
+develop shader applies it first, in linear light (`calibrate`, behind `calib_tint.y`, so
+neutral settings are the web's pass exactly), then the shadows tint (green–magenta, weighted
+by `(1 − smoothstep(0, 0.5, luma))²`).
+
 Camera profiles (Develop → RAW → Camera profile) are DNG `.dcp` files the user imports
 (`profiles::import` copies them into `<root>/.lensflow/profiles/`; `profiles::load_all` reads
 them into `lf_raw::dcp`'s registry when the catalogue opens, before thumbnails start). A photo

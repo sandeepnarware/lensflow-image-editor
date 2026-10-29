@@ -8,6 +8,7 @@
 //! [`EditSettings::to_value`] output.
 
 pub mod amount;
+pub mod calibration;
 pub mod curve;
 pub mod geometry;
 pub mod groups;

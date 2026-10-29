@@ -445,3 +445,34 @@ fn the_lens_section_writes_desktop_lens_and_its_reset_clears_it() {
     assert!(h.state().settings.desktop.is_none());
     assert_eq!(h.state().commits, commits + 1, "one step");
 }
+
+#[test]
+fn the_calibration_section_writes_desktop_calibration_and_its_reset_clears_it() {
+    use lf_app::develop::panels::calibration;
+    use lf_settings::calibration::Calibration;
+    let mut h = harness(false);
+    h.run();
+    h.get_by_label(calibration::TITLE).click();
+    h.run();
+    let labels = slider_labels(&h);
+    for l in calibration::LABELS {
+        assert!(labels.iter().any(|s| s == l), "{l} missing from {labels:?}");
+    }
+    let rect = h.get_by_label("Red primary hue").rect();
+    let at = rect.center();
+    h.drag_at(at);
+    h.run();
+    h.hover_at(at + egui::vec2(40.0, 0.0));
+    h.run();
+    h.drop_at(at + egui::vec2(40.0, 0.0));
+    h.run();
+    let c = Calibration::from_settings(&h.state().settings);
+    assert!(c.red_hue > 0.0, "{c:?}");
+    assert_eq!(h.state().commits, 1);
+    h.state_mut().settings = {
+        let mut s = h.state().settings.clone();
+        calibration::reset(&mut s);
+        s
+    };
+    assert!(h.state().settings.desktop.is_none());
+}
