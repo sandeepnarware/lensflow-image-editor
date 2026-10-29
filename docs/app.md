@@ -728,6 +728,15 @@ correction) becomes `AiTool::ObjectMask { u, v }`, run like the other AI masks
 asks Segment Anything's multi-mask decoder with the point and SAM's padding point, keeps the
 mask it rates best and softens its logits with a sigmoid.
 
+Auto-sync (`prefs.auto_sync`; Home → Settings → Auto-sync, or Develop's checkbox when other
+photos are selected): `Develop::run_edit` keeps the committed settings before a commit or a
+reset and, when the commit lands, `sync::changes` gives the keys that changed (inside
+`desktop` too), never the photo's own crop, turn, flips, aspect, spots, healing or masks.
+Patches not yet sent merge (`sync::merge`). Each frame `Library::auto_sync` tells Develop how
+many other photos are selected and sends a waiting patch to them on the `Long` lane
+(`batch::run` with `Recipe::Sync`, sidecars through the saver); `Msg::Synced` refreshes their
+thumbnails and reports failures. Undo and redo stay on the open photo.
+
 Calibration (Develop → Calibration, `desktop.calibration`) moves the red, green and blue
 primaries: `Calibration::matrix` turns each about the grey axis (±30° at ±100) and scales its
 distance from grey, then weights the columns so white maps to white, so greys never move. The

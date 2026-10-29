@@ -95,6 +95,8 @@ pub struct Prefs {
     pub develop_quality: DevelopQuality,
     /// The printer and paper ICC profile soft-proofing uses.
     pub proof_profile: Option<PathBuf>,
+    /// Develop's Auto-sync: each change to the open photo goes to the other selected ones.
+    pub auto_sync: bool,
 }
 
 impl Default for Prefs {
@@ -108,6 +110,7 @@ impl Default for Prefs {
             export_presets: Vec::new(),
             last_ingest: None,
             external_editor: None,
+            auto_sync: false,
             develop_quality: DevelopQuality::default(),
             proof_profile: None,
         }
@@ -180,6 +183,7 @@ mod tests {
                 skip_duplicates: false,
             }),
             external_editor: Some(PathBuf::from("C:/Apps/Editor.exe")),
+            auto_sync: true,
             develop_quality: DevelopQuality::Fast,
             proof_profile: Some(PathBuf::from("C:/Profiles/lab-lustre.icc")),
         };

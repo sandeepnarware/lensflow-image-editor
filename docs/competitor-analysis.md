@@ -47,7 +47,7 @@ close or competitors ship new features.
 ### Tier 3: workflow conveniences
 
 - ~~Presets with an Amount slider~~ (done: looks and studio presets, 0–200 %); adaptive presets that carry AI masks.
-- Auto-sync (edit one photo, the selection follows).
+- ~~Auto-sync (edit one photo, the selection follows)~~ (done: Home → Settings → Auto-sync).
 - Batch rename of existing photos (PhotoLab 9); we only rename on import.
 - Second-monitor view, reference view, focus peaking / focus mask, 100% loupe.
 - Contact sheets and slideshows (we have Print to PDF, no contact-sheet layout).

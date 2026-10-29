@@ -32,6 +32,8 @@ pub enum Recipe {
     /// back to their defaults, then the preset is laid on; its crop, rotation and spots are
     /// never applied.
     Look(Value),
+    /// Auto-sync: the keys one gesture changed on another photo ([`crate::sync`]).
+    Sync(Value),
 }
 
 impl Recipe {
@@ -40,6 +42,7 @@ impl Recipe {
         match self {
             Recipe::Paste(partial) => apply(onto, partial),
             Recipe::Look(look) => apply_look(onto, &clipboard_settings(look)),
+            Recipe::Sync(patch) => crate::sync::apply(onto, patch),
         }
     }
 

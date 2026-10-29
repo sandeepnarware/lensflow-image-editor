@@ -169,6 +169,9 @@ cargo test --workspace                   # includes the 228-render parity suite
   Merge to HDR: `lf-merge` (align + fuse), `merge_job.rs` (16-bit TIFF beside the first frame),
   `dialogs/merge.rs`, `library/merge_ui.rs`, `Action::MergeHdr` (`Ctrl+H`). Panorama: `lf_merge::panorama`,
   `MergeKind::Panorama`, `Action::MergePanorama` (`Ctrl+M`).
+  Auto-sync: `sync.rs` (key-level `changes`/`apply`, never crop, turn, spots, heal or masks), captured in
+  `Develop::run_edit` (commits and resets, not undo), sent by `Library::auto_sync` on `Long` through
+  `batch::run` with `Recipe::Sync` (`Msg::Synced`); `prefs.auto_sync`, `Action::AutoSync`, Develop's checkbox.
   Colour calibration: `lf_settings::calibration` (`desktop.calibration`; primaries matrix keeping white, shadows
   tint), `calib`/`calib_tint` uniforms and `calibrate` in `develop.wgsl` (off when neutral), `panels/calibration.rs`.
   Camera profiles: `lf_raw::dcp` (DCP parser, registry by `lf_settings::dcp_id`, forward matrix → ProPhoto →

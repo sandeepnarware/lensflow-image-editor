@@ -2541,3 +2541,55 @@ fn select_object_asks_for_a_mask_where_the_photo_is_clicked() {
     assert!(h.query_by_label(mask_tool::PICK_OBJECT).is_none());
     assert_eq!(settings(&h), before, "a click to pick changes nothing");
 }
+
+/// Auto-sync: with three photos selected and the box ticked, a drag on the open photo's
+/// Exposure is made on the other two as well (on the `Long` lane), each keeping the rest of
+/// its own edit; with the box clear, nothing follows.
+#[test]
+fn auto_sync_sends_a_change_to_the_other_selected_photos() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 3);
+    import_folder(&mut h, &shoot, 3);
+    let root = dir.path().join("catalogue");
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    // The third photo has its own contrast, which must survive the sync.
+    {
+        let catalog = lf_catalog::Catalog::open(&root).unwrap();
+        let mut s = lf_settings::EditSettings::default_settings();
+        s.contrast = 25.0;
+        lf_catalog::edits::set_settings(&catalog, ids[2], &s).unwrap();
+    }
+    h.state_mut().lib.selection.select(&ids);
+    h.state_mut().lib.selection.set_active(ids[0]);
+    h.key_press(Key::D);
+    step_until(&mut h, "the photo to open", |s| s.lib.develop().is_ready());
+    h.step();
+    let stored = |id: i64| {
+        let catalog = lf_catalog::Catalog::open(&root).unwrap();
+        lf_catalog::edits::get_settings(&catalog, id)
+            .unwrap()
+            .unwrap_or_else(lf_settings::EditSettings::default_settings)
+    };
+
+    // Off: the others stay as they were.
+    drag_slider(&mut h, "Exposure", 40.0);
+    for _ in 0..10 {
+        h.step();
+    }
+    assert_eq!(stored(ids[1]).exposure, 0.0, "auto-sync is off");
+
+    h.get_by_label("Auto-sync the 2 other selected photos")
+        .click();
+    h.step();
+    assert!(h.state().lib.develop().auto_sync());
+    drag_slider(&mut h, "Exposure", 40.0);
+    let open = settings(&h).exposure;
+    step_until(&mut h, "the sync to reach the others", |_| {
+        stored(ids[1]).exposure == open && stored(ids[2]).exposure == open
+    });
+    assert_eq!(stored(ids[2]).contrast, 25.0, "its own contrast stays");
+}

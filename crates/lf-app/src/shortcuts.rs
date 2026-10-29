@@ -28,6 +28,8 @@ pub enum Action {
     CopySettings,
     PasteSettings,
     ApplyToSelected,
+    /// Develop's Auto-sync on or off.
+    AutoSync,
     SelectAll,
     Preferences,
     // View
@@ -145,6 +147,7 @@ impl Action {
             Action::CopySettings => "Copy settings…",
             Action::PasteSettings => "Paste settings",
             Action::ApplyToSelected => "Apply to selected…",
+            Action::AutoSync => "Auto-sync",
             Action::SelectAll => "Select all",
             Action::Preferences => "Preferences…",
             Action::Library => "Go to Library",

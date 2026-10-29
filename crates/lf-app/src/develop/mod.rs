@@ -71,6 +71,8 @@ pub const OPENING: &str = "Opening…";
 /// The placeholder for a photo that cannot be opened.
 pub const CANT_OPEN: &str = "Can't open";
 /// The corner label while the photo is shown as it was.
+/// Auto-sync's hover text.
+pub const AUTO_SYNC_HINT: &str = "Each change to this photo is made on the other selected photos too (not their crop, spots or masks).";
 pub const BEFORE: &str = "Before";
 /// Shown where the preview would be when the window has no graphics device to share.
 pub const NO_PREVIEW: &str = "The preview needs the graphics device.";
@@ -157,6 +159,11 @@ pub struct Develop {
     extras: extras::Extras,
     /// "Import .cube…" was clicked; the library opens the file picker.
     lut_import_asked: bool,
+    /// Auto-sync is on; how many other photos are selected; and the change waiting to go to
+    /// them (the photo it was made on, and the keys, [`crate::sync`]).
+    auto_sync: bool,
+    sync_others: usize,
+    sync_out: Option<(i64, serde_json::Value)>,
     /// "Import .dcp…" was clicked (the library takes the request).
     dcp_import_asked: bool,
     /// "Apply lens profile" was clicked (the library takes the request).
@@ -192,6 +199,9 @@ impl Develop {
             tools: tools::Tools::default(),
             extras: extras::Extras::default(),
             lut_import_asked: false,
+            auto_sync: false,
+            sync_others: 0,
+            sync_out: None,
             dcp_import_asked: false,
             lens_profile_asked: false,
         }
@@ -280,9 +290,31 @@ impl Develop {
 
     fn run_edit(&mut self, op: EditOp, toasts: &mut Toasts) {
         let damaged = matches!(&self.state, State::Ready(o, _) if o.sidecar_error.is_some());
+        // Auto-sync: what a gesture (or a reset) changes goes to the other selected photos;
+        // undo and redo stay on this one.
+        let syncing = self.auto_sync
+            && self.sync_others > 0
+            && matches!(op, EditOp::Commit | EditOp::Reset(_));
+        let before = syncing
+            .then(|| {
+                self.session
+                    .edit()
+                    .map(|e| (e.photo_id, e.committed.clone()))
+            })
+            .flatten();
         let committed = self
             .session
             .run(op, self.photo_path.as_deref(), damaged, toasts);
+        if committed
+            && let (Some((id, before)), Some(edit)) = (before, self.session.edit())
+            && edit.photo_id == id
+            && let Some(patch) = crate::sync::changes(&before, &edit.committed)
+        {
+            match &mut self.sync_out {
+                Some((photo, waiting)) if *photo == id => crate::sync::merge(waiting, patch),
+                out => *out = Some((id, patch)),
+            }
+        }
         if op != EditOp::Commit {
             self.settings_changed();
             // The points changed under the curve editor's selection (and the spot tool's).
@@ -334,6 +366,25 @@ impl Develop {
     /// "Import .cube…" was clicked since the last call.
     pub fn take_lut_import(&mut self) -> bool {
         std::mem::take(&mut self.lut_import_asked)
+    }
+
+    /// Auto-sync on or off.
+    pub fn set_auto_sync(&mut self, on: bool) {
+        self.auto_sync = on;
+    }
+
+    pub fn auto_sync(&self) -> bool {
+        self.auto_sync
+    }
+
+    /// How many other photos are selected (Auto-sync's targets), each frame.
+    pub fn set_sync_others(&mut self, n: usize) {
+        self.sync_others = n;
+    }
+
+    /// The change waiting for Auto-sync: the photo it was made on and the keys.
+    pub fn take_sync(&mut self) -> Option<(i64, serde_json::Value)> {
+        self.sync_out.take()
     }
 
     /// "Import .dcp…" was clicked since the last call.
@@ -820,6 +871,19 @@ impl Develop {
             return;
         }
         self.damaged_ui(ui, toasts);
+        if self.sync_others > 0 {
+            ui.add_space(4.0);
+            let label = if self.sync_others == 1 {
+                "Auto-sync the other selected photo".to_owned()
+            } else {
+                format!(
+                    "Auto-sync the {} other selected photos",
+                    crate::catalog_ext::count(self.sync_others)
+                )
+            };
+            ui.checkbox(&mut self.auto_sync, label)
+                .on_hover_text(AUTO_SYNC_HINT);
+        }
         ui.add_space(8.0);
         let before = self.before();
         if ui.selectable_label(before, BEFORE).clicked() {

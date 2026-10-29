@@ -119,6 +119,8 @@ pub struct Library {
     current_folder: Option<i64>,
     /// The album shown in place of a folder ([`albums_ui`]); never both.
     current_album: Option<i64>,
+    /// Auto-sync's checkbox has been read against the prefs once (at first the prefs win).
+    sync_seen: bool,
     /// People, and the person shown in place of a folder or album ([`people_ui`]).
     people: people_ui::PeopleState,
     /// An AI tool's dialog, while open or running; and whether the gate allows the tools.
@@ -235,6 +237,7 @@ impl Library {
             current_folder: None,
             current_album: None,
             people: people_ui::PeopleState::default(),
+            sync_seen: false,
             ai: None,
             start_ai_now: false,
             remove: None,
@@ -930,6 +933,7 @@ impl Library {
                 result,
             } => self.person_photos_loaded(root, group, result, env),
             Msg::PeopleChanged { root, result } => self.people_changed(root, result, env),
+            Msg::Synced { root, ids, failed } => self.synced(root, ids, failed, env),
             Msg::DcpImported(result) => match result {
                 Ok(name) => {
                     env.toasts.push(
@@ -1413,6 +1417,7 @@ impl Library {
         if self.develop.take_dcp_import() {
             self.pick_dcp(env);
         }
+        self.auto_sync(env);
         match self.mode {
             Mode::Library if self.map.is_some() => {
                 egui::CentralPanel::default_margins().show(ui, |ui| self.map_ui(ui, env));
@@ -1491,6 +1496,7 @@ impl Library {
             Action::Redo => develop && self.develop.can_redo(),
             Action::CopySettings => self.copy_source().is_some(),
             Action::PasteSettings | Action::ApplyToSelected | Action::MatchReference => selected,
+            Action::AutoSync => true,
             Action::EditIn => (develop || selected) && self.can_add(),
             Action::Print => develop || selected,
             Action::MergeHdr | Action::MergePanorama | Action::MergeFocus => {
@@ -1584,6 +1590,19 @@ impl Library {
             Action::CopySettings => self.copying = true,
             Action::PasteSettings => self.paste(ctx, env),
             Action::ApplyToSelected => self.open_batch(None),
+            Action::AutoSync => {
+                let on = !self.develop.auto_sync();
+                self.develop.set_auto_sync(on);
+                env.prefs.auto_sync = on;
+                env.toasts.push(
+                    Level::Info,
+                    if on {
+                        "Auto-sync is on: changes in Develop go to every selected photo."
+                    } else {
+                        "Auto-sync is off."
+                    },
+                );
+            }
             // The filmstrip in Develop too: the open photo stays the active one.
             Action::SelectAll => self.selection.select_all(&self.order),
             Action::MatchReference => self.open_match(),
@@ -2039,6 +2058,81 @@ impl Library {
                 }
             }
             _ => self.open_batch(Some(partial)),
+        }
+    }
+
+    /// Auto-sync, each frame: the checkbox and the prefs agree, Develop knows how many other
+    /// photos are selected, and a change made since goes to them on the `Long` lane.
+    fn auto_sync(&mut self, env: &mut Env) {
+        if self.develop.auto_sync() != env.prefs.auto_sync {
+            if self.sync_seen {
+                env.prefs.auto_sync = self.develop.auto_sync();
+            } else {
+                self.develop.set_auto_sync(env.prefs.auto_sync);
+            }
+        }
+        self.sync_seen = true;
+        let Mode::Develop(open) = self.mode else {
+            self.develop.set_sync_others(0);
+            return;
+        };
+        let others: Vec<i64> = self
+            .selected_in_order()
+            .into_iter()
+            .filter(|id| *id != open)
+            .collect();
+        self.develop.set_sync_others(others.len());
+        let Some((photo, patch)) = self.develop.take_sync() else {
+            return;
+        };
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        if photo != open || others.is_empty() {
+            return;
+        }
+        let saver = self.develop.saver();
+        env.jobs.spawn(Lane::Long, "auto-sync", move || {
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            let p = match lf_catalog::Catalog::open(&root) {
+                Ok(c) => batch::run(
+                    &c,
+                    &others,
+                    &clipboard::Recipe::Sync(patch),
+                    &saver,
+                    &stop,
+                    |_| {},
+                ),
+                Err(e) => batch::BatchProgress {
+                    failed: others.iter().map(|&id| (id, e.to_string())).collect(),
+                    ..batch::BatchProgress::default()
+                },
+            };
+            Msg::Synced {
+                root,
+                ids: others,
+                failed: p.failed,
+            }
+        });
+    }
+
+    fn synced(&mut self, root: PathBuf, ids: Vec<i64>, failed: Vec<(i64, String)>, env: &mut Env) {
+        if self.root.as_deref() != Some(root.as_path()) {
+            return;
+        }
+        let done: Vec<i64> = ids
+            .into_iter()
+            .filter(|id| !failed.iter().any(|(f, _)| f == id))
+            .collect();
+        self.edited(&done, env);
+        if let Some((_, why)) = failed.first() {
+            env.toasts.push(
+                Level::Warning,
+                format!(
+                    "Auto-sync could not change {} of the selected photos. {why}",
+                    count(failed.len())
+                ),
+            );
         }
     }
 
