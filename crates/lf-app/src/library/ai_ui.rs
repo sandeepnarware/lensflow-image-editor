@@ -52,7 +52,7 @@ impl Library {
         let download = self.ai_engine().to_download(&tool.models());
         self.ai = Some(AiDialog::new(ids, tool, download));
         // A mask with nothing to download starts at once.
-        if matches!(tool, AiTool::Mask { .. }) && download == 0 {
+        if matches!(tool, AiTool::Mask { .. } | AiTool::ObjectMask { .. }) && download == 0 {
             self.start_ai_now = true;
         }
     }

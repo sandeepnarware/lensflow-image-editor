@@ -2497,3 +2497,47 @@ fn a_row_of_photos_merges_to_a_panorama() {
     let (w, _) = image::image_dimensions(shoot.join("f0-Pano.tif")).unwrap();
     assert!((880..=905).contains(&w), "{w}");
 }
+
+/// Select object waits for a click on the photo, which asks for an AI mask of what is there
+/// (the AI dialog opens with the point, in the photo's 0..1 space); nothing else changes.
+#[test]
+fn select_object_asks_for_a_mask_where_the_photo_is_clicked() {
+    use lf_app::ai_job::AiTool;
+    use lf_app::develop::tools::masks as mask_tool;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    h.state_mut().lib.set_local_ai(true);
+    h.key_press(Key::M);
+    h.step();
+    h.step();
+    let before = settings(&h);
+    h.get_by_label(mask_tool::SELECT_OBJECT).click();
+    h.step();
+    assert!(h.query_by_label(mask_tool::PICK_OBJECT).is_some());
+    let centre = egui::pos2(600.0, 330.0);
+    h.hover_at(centre);
+    h.step();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton {
+            pos: centre,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.step();
+    }
+    h.step();
+    let tool = h.state().lib.ai().map(|d| d.tool);
+    let Some(AiTool::ObjectMask { u, v }) = tool else {
+        panic!("no object mask asked for: {tool:?}");
+    };
+    assert!(
+        (u - 0.5).abs() < 0.1 && (v - 0.5).abs() < 0.1,
+        "the middle: {u}, {v}"
+    );
+    assert!(h.query_by_label(mask_tool::PICK_OBJECT).is_none());
+    assert_eq!(settings(&h), before, "a click to pick changes nothing");
+}

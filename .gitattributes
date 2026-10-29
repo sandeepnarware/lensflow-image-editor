@@ -1,4 +1,5 @@
 tests/fixtures/** -text
+*.f16 binary
 *.sh text eol=lf
 packaging/linux/AppRun text eol=lf
 packaging/linux/*.desktop text eol=lf

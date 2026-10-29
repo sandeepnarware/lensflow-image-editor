@@ -242,3 +242,31 @@ fn the_landscape_fixture_is_keyworded_as_a_landscape() {
         "{words:?}"
     );
 }
+
+#[test]
+fn a_click_on_a_disc_masks_the_disc() {
+    let Some(engine) = engine(&lf_ai::objects::OBJECT_MODELS) else {
+        return;
+    };
+    // A bright orange disc on a dark blue-grey ground.
+    let (w, h) = (640, 480);
+    let mut img = Rgb::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let inside = (x as f32 - 400.0).hypot(y as f32 - 220.0) < 110.0;
+            let c = if inside {
+                [0.95, 0.55, 0.1]
+            } else {
+                [0.15, 0.18, 0.25]
+            };
+            img.data[(y * w + x) * 3..(y * w + x) * 3 + 3].copy_from_slice(&c);
+        }
+    }
+    let mask = lf_ai::objects::object_mask(&engine, &img, (400.0 / 640.0, 220.0 / 480.0), 320, 240)
+        .expect("mask");
+    assert_eq!((mask.w, mask.h), (320, 240));
+    let at = |x: usize, y: usize| mask.data[y * 320 + x];
+    assert!(at(200, 110) > 0.8, "the disc's middle: {}", at(200, 110));
+    assert!(at(10, 10) < 0.2, "a corner: {}", at(10, 10));
+    assert!(at(60, 200) < 0.2, "the ground: {}", at(60, 200));
+}

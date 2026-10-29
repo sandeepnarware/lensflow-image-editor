@@ -7,7 +7,7 @@
 //! The licences: ONNX Runtime MIT; IS-Net (subject) Apache-2.0; SkySeg MIT; SCUNet
 //! Apache-2.0; Real-ESRGAN BSD-3-Clause; LaMa Apache-2.0; YuNet MIT;
 //! open-closed-eye-0001 Apache-2.0; MediaPipe selfie multiclass Apache-2.0; SFace Apache-2.0;
-//! CLIP ViT-B/32 MIT.
+//! CLIP ViT-B/32 MIT; MobileSAM Apache-2.0.
 //! See `NOTICE`.
 
 use sha2::{Digest, Sha256};
@@ -163,6 +163,25 @@ pub const CLIP_VISION: Asset = Asset {
     url: "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/6b7c523703ae26e39be4b03774966f8571c7f523/onnx/vision_model_quantized.onnx",
     size: 89_117_001,
     sha256: "583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0ab9839299",
+    unpack: Unpack::File,
+};
+
+/// MobileSAM's image encoder (Apache-2.0, ONNX by Acly): a photo scaled to 1024 on its
+/// longest side as 64 × 64 × 256 numbers, normalised and padded inside the graph.
+pub const SAM_ENCODER: Asset = Asset {
+    file: "mobile_sam_image_encoder.onnx",
+    url: "https://huggingface.co/Acly/MobileSAM/resolve/0d3b403339b4674a82493d5e97964dd78089ddc8/mobile_sam_image_encoder.onnx",
+    size: 28_157_093,
+    sha256: "580f5fb648ea1062c0aabc26217aed56921985f03f0cbbd852bba81d760cc749",
+    unpack: Unpack::File,
+};
+
+/// Segment Anything's prompt decoder (Apache-2.0), answering several masks per click.
+pub const SAM_DECODER: Asset = Asset {
+    file: "sam_mask_decoder_multi.onnx",
+    url: "https://huggingface.co/Acly/MobileSAM/resolve/0d3b403339b4674a82493d5e97964dd78089ddc8/sam_mask_decoder_multi.onnx",
+    size: 16_496_559,
+    sha256: "8976b90a87ba50a6a72217a5ff994f7d25ce16f2229fcc1ed259e1294c622ffe",
     unpack: Unpack::File,
 };
 

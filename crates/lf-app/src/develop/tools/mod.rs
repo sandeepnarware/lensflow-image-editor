@@ -425,7 +425,25 @@ impl Develop {
                             .uv(at),
                     );
                 }
+                // Select object: the next click says which object (and does nothing else).
+                let picking_object = tool.picking_object && !picking_colour;
+                if picking_object {
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+                    }
+                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        tool.picking_object = false;
+                    }
+                    if response.clicked()
+                        && let Some(at) = origin.or(pointer)
+                    {
+                        tool.object_request = Some(spot_map.uv(at));
+                        tool.picking_object = false;
+                    }
+                    input.owns_drag = false;
+                }
                 let painting = !picking_colour
+                    && !picking_object
                     && tool
                         .brush_selected(&Masks::from_settings(&edit.settings))
                         .is_some();
@@ -467,6 +485,7 @@ impl Develop {
                     }
                 }
                 if !painting
+                    && !picking_object
                     && response.drag_started()
                     && let Some(at) = origin
                 {
@@ -496,6 +515,7 @@ impl Develop {
                 // A click picks the mask under it (and changes nothing).
                 if !painting
                     && !picking_colour
+                    && !picking_object
                     && response.clicked()
                     && let Some(at) = origin.or(pointer)
                 {
@@ -508,7 +528,7 @@ impl Develop {
                     tool.release();
                 }
                 // A drag that caught no handle (with no brush picked) pans the photo.
-                input.owns_drag = painting || tool.grab.is_some();
+                input.owns_drag = !picking_object && (painting || tool.grab.is_some());
                 if response.hovered() {
                     ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
                 }
@@ -997,8 +1017,22 @@ fn masks_panel(
             if button.on_disabled_hover_text(masks::AI_OFF).clicked() {
                 tool.ai_request = Some(target);
             }
+            if target == lf_ai::segment::Target::Sky {
+                let object = ui
+                    .add_enabled(
+                        tool.ai_allowed,
+                        egui::Button::selectable(tool.picking_object, masks::SELECT_OBJECT),
+                    )
+                    .on_disabled_hover_text(masks::AI_OFF);
+                if object.clicked() {
+                    tool.picking_object = !tool.picking_object;
+                }
+            }
         }
     });
+    if tool.picking_object {
+        ui.label(egui::RichText::new(masks::PICK_OBJECT).color(crate::theme::WARNING));
+    }
     for (i, m) in list.0.iter().enumerate() {
         let name = format!("{}. {}", i + 1, m.kind_name());
         if ui

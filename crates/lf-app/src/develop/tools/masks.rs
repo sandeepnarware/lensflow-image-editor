@@ -32,6 +32,8 @@ pub const INVERT: &str = "Invert";
 /// Before the people buttons (People, Face skin, Body skin, Hair, Clothes).
 pub const PEOPLE: &str = "People:";
 pub const AI_OFF: &str = "The AI tools need the studio in good standing.";
+pub const SELECT_OBJECT: &str = "Select object";
+pub const PICK_OBJECT: &str = "Click the object to mask (Esc cancels).";
 pub const RANGE: &str = "Range";
 pub const RANGE_PICK: &str = "Alt-click the photo to pick the colour.";
 pub const NO_HUE: &str = "That spot has no colour to pick (it is grey); try a more colourful part.";
@@ -84,6 +86,10 @@ pub struct MaskTool {
     pub ai_allowed: bool,
     /// An AI mask's button was pressed: what it should find.
     pub ai_request: Option<lf_ai::segment::Target>,
+    /// Select object is waiting for a click on the photo.
+    pub picking_object: bool,
+    /// Where Select object was clicked (mask space, 0..1).
+    pub object_request: Option<(f64, f64)>,
 }
 
 /// A point in the square space (x × aspect), where distances mean the same both ways.

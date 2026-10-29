@@ -13,6 +13,7 @@ pub mod faces;
 pub mod identity;
 pub mod inpaint;
 pub mod keywords;
+pub mod objects;
 pub mod restore;
 pub mod segment;
 pub mod tiles;

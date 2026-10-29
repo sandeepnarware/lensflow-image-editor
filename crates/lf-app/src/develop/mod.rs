@@ -496,10 +496,22 @@ impl Develop {
         self.local_ai = allowed;
     }
 
-    /// An AI mask's button pressed since the last call: what it should find.
-    pub fn take_ai_mask_request(&mut self) -> Option<lf_ai::segment::Target> {
+    /// An AI mask asked for since the last call (a button, or a click with Select object):
+    /// the tool to run.
+    pub fn take_ai_mask_request(&mut self) -> Option<crate::ai_job::AiTool> {
         match &mut self.tools.active {
-            Some(tools::Active::Masks(tool)) => tool.ai_request.take(),
+            Some(tools::Active::Masks(tool)) => tool
+                .ai_request
+                .take()
+                .map(|target| crate::ai_job::AiTool::Mask { target })
+                .or_else(|| {
+                    tool.object_request
+                        .take()
+                        .map(|(u, v)| crate::ai_job::AiTool::ObjectMask {
+                            u: u as f32,
+                            v: v as f32,
+                        })
+                }),
             _ => None,
         }
     }

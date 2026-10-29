@@ -24,6 +24,8 @@ pub const ABOUT_CUTOUT: &str = "Keeps the main subject and makes the background 
 pub const ABOUT_SUBJECT: &str =
     "Finds the main subject and adds it as a mask, ready for its own adjustments.";
 pub const ABOUT_PEOPLE: &str = "Finds the people in the photo (or their hair, skin or clothes) and adds them as a mask, ready for their own adjustments. Works best on people who fill a good part of the frame.";
+pub const ABOUT_OBJECT: &str =
+    "Finds the object you clicked and adds it as a mask, ready for its own adjustments.";
 pub const ABOUT_SKY: &str = "Finds the sky and adds it as a mask, ready for its own adjustments.";
 pub const ABOUT_CULL: &str = "Checks each photo for blur, missed focus on the eyes and closed eyes, so the likely rejects can be found at once. Nothing is flagged until you say so.";
 pub const ABOUT_FIND_PEOPLE: &str = "Finds the faces in each photo and groups the ones that look like the same person. Name a group under People to find that person in every photo; new photos of them are matched as they are scanned.";
@@ -170,6 +172,7 @@ impl AiDialog {
                 target: lf_ai::segment::Target::Sky,
             } => ABOUT_SKY,
             AiTool::Mask { .. } => ABOUT_PEOPLE,
+            AiTool::ObjectMask { .. } => ABOUT_OBJECT,
             AiTool::Cull => ABOUT_CULL,
             AiTool::FindPeople => ABOUT_FIND_PEOPLE,
             AiTool::FindKeywords => ABOUT_FIND_KEYWORDS,
@@ -199,6 +202,7 @@ impl AiDialog {
             }
             AiTool::Cutout
             | AiTool::Mask { .. }
+            | AiTool::ObjectMask { .. }
             | AiTool::Remove
             | AiTool::Cull
             | AiTool::FindPeople

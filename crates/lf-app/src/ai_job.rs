@@ -35,6 +35,9 @@ pub enum AiTool {
     /// A mask of the subject, the sky, the people or a part of them for the open photo,
     /// added in Develop.
     Mask { target: Target },
+    /// A mask of the object clicked at `(u, v)` (0..1 of the photo before its crop and turn),
+    /// added in Develop ([`lf_ai::objects`]).
+    ObjectMask { u: f32, v: f32 },
     /// Sharpness, faces and closed eyes scored into the catalogue ([`lf_ai::cull`]).
     Cull,
     /// Faces found, described and grouped into people in the catalogue
@@ -54,6 +57,7 @@ impl AiTool {
             AiTool::Cutout => lf_ai::segment::SUBJECT_MODELS.to_vec(),
             AiTool::Remove => lf_ai::inpaint::INPAINT_MODELS.to_vec(),
             AiTool::Mask { target } => target.models().to_vec(),
+            AiTool::ObjectMask { .. } => lf_ai::objects::OBJECT_MODELS.to_vec(),
             AiTool::Cull => lf_ai::cull::CULL_MODELS.to_vec(),
             AiTool::FindPeople => lf_ai::identity::IDENTITY_MODELS.to_vec(),
             AiTool::FindKeywords => lf_ai::keywords::KEYWORD_MODELS.to_vec(),
@@ -77,6 +81,7 @@ impl AiTool {
                 Target::BodySkin => "Select body skin",
                 Target::Clothes => "Select clothes",
             },
+            AiTool::ObjectMask { .. } => "Select object",
             AiTool::Cull => "Assisted culling",
             AiTool::FindPeople => "Find people",
             AiTool::FindKeywords => "Find keywords",
@@ -91,9 +96,11 @@ impl AiTool {
             AiTool::Retouch { .. } => ("Retouched".into(), "tif"),
             AiTool::Cutout => ("Cutout".into(), "png"),
             AiTool::Remove => ("Removed".into(), "tif"),
-            AiTool::Mask { .. } | AiTool::Cull | AiTool::FindPeople | AiTool::FindKeywords => {
-                (String::new(), "")
-            }
+            AiTool::Mask { .. }
+            | AiTool::ObjectMask { .. }
+            | AiTool::Cull
+            | AiTool::FindPeople
+            | AiTool::FindKeywords => (String::new(), ""),
         }
     }
 }
@@ -240,6 +247,10 @@ pub fn run(
             mask(&gpu, engine, &catalog, id, &row.path, target).map(|shape| {
                 report.masks.push((id, shape));
             })
+        } else if let AiTool::ObjectMask { u, v } = tool {
+            object_mask(&gpu, engine, &catalog, id, &row.path, (u, v)).map(|shape| {
+                report.masks.push((id, shape));
+            })
         } else {
             one(
                 &gpu, engine, &catalog, id, &row.path, tool, painted, &mut tick, stop,
@@ -315,7 +326,11 @@ fn one(
             let done = lf_ai::faces::smooth_skin(&img, &faces, amount);
             write_tiff16(&out, &done)?;
         }
-        AiTool::Mask { .. } | AiTool::Cull | AiTool::FindPeople | AiTool::FindKeywords => {
+        AiTool::Mask { .. }
+        | AiTool::ObjectMask { .. }
+        | AiTool::Cull
+        | AiTool::FindPeople
+        | AiTool::FindKeywords => {
             return Err("Not a file.".to_owned());
         }
         AiTool::Remove => {
@@ -358,6 +373,47 @@ fn mask(
     path: &Path,
     target: Target,
 ) -> Result<lf_settings::masks::Shape, String> {
+    let (img, w, h) = mask_source(gpu, catalog, id, path)?;
+    let found = lf_ai::segment::mask(engine, target, &img, w, h).map_err(|e| e.to_string())?;
+    image_shape(target.key(), &found).ok_or_else(|| format!("No {} was found.", target.noun()))
+}
+
+/// A mask of the object at `at` (0..1 in mask space) of photo `id`, as [`mask`] finds them.
+fn object_mask(
+    gpu: &Arc<Gpu>,
+    engine: &Engine,
+    catalog: &Catalog,
+    id: i64,
+    path: &Path,
+    at: (f32, f32),
+) -> Result<lf_settings::masks::Shape, String> {
+    let (img, w, h) = mask_source(gpu, catalog, id, path)?;
+    let found = lf_ai::objects::object_mask(engine, &img, at, w, h).map_err(|e| e.to_string())?;
+    image_shape("object", &found).ok_or_else(|| "No object was found there.".to_owned())
+}
+
+/// A found mask as a mask shape (`None` when it covers nothing).
+fn image_shape(what: &str, found: &Gray) -> Option<lf_settings::masks::Shape> {
+    let values: Vec<u8> = found.to_luma8().into_raw();
+    if values.iter().all(|&v| v < 13) {
+        return None;
+    }
+    Some(lf_settings::masks::Shape::Image {
+        what: what.to_owned(),
+        width: found.w as u32,
+        height: found.h as u32,
+        data: lf_settings::masks::encode_coverage(&values),
+    })
+}
+
+/// Photo `id` as AI masks see it (edited, before its crop and turn), and the size a mask of
+/// it is kept at.
+fn mask_source(
+    gpu: &Arc<Gpu>,
+    catalog: &Catalog,
+    id: i64,
+    path: &Path,
+) -> Result<(Rgb, usize, usize), String> {
     let mut settings = edits::get_settings(catalog, id)
         .map_err(|e| e.to_string())?
         .unwrap_or_else(EditSettings::default_settings);
@@ -378,17 +434,7 @@ fn mask(
         ((img.w as f64 * k).round() as usize).max(1),
         ((img.h as f64 * k).round() as usize).max(1),
     );
-    let found = lf_ai::segment::mask(engine, target, &img, w, h).map_err(|e| e.to_string())?;
-    let values: Vec<u8> = found.to_luma8().into_raw();
-    if values.iter().all(|&v| v < 13) {
-        return Err(format!("No {} was found.", target.noun()));
-    }
-    Ok(lf_settings::masks::Shape::Image {
-        what: target.key().to_owned(),
-        width: w as u32,
-        height: h as u32,
-        data: lf_settings::masks::encode_coverage(&values),
-    })
+    Ok((img, w, h))
 }
 
 /// Assisted culling: scores the photos of `ids` that have no fresh scores (as shot, at

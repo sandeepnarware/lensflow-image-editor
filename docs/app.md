@@ -720,6 +720,14 @@ with at least 8 % of the softmax (scale 100) over the list, five at most. `lf_ca
 search, and the Metadata panel's "Suggested by AI" turns one into a keyword
 (`Change::AddKeywords`).
 
+Select object (the Masks tool) arms `MaskTool::picking_object`; the next click on the photo
+(mapped into mask space by `SpotMap::uv`, so it lands right under a crop, turn or lens
+correction) becomes `AiTool::ObjectMask { u, v }`, run like the other AI masks
+(`ai_job::mask_source`: edited, before crop and turn). `lf_ai::objects` scales the photo to
+1024 on its longest side for MobileSAM's encoder (which normalises and pads in its graph),
+asks Segment Anything's multi-mask decoder with the point and SAM's padding point, keeps the
+mask it rates best and softens its logits with a sigmoid.
+
 `crates/lf-ai/tests/models.rs` runs the real models when `LF_AI_DIR` names a folder holding
 them (`LF_AI_DOWNLOAD=1` fetches them there); otherwise those tests return at once.
 
