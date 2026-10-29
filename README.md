@@ -251,6 +251,9 @@ works offline, uploads anywhere.
 Sync metadata (the Metadata panel, several photos selected): the other selected photos take
 the active photo's title, caption, creator, copyright and keywords.
 
+Find similar (Home → Stacks → Similar): the folder's photos that look like the active one,
+shown alone (nearest first) until the filter is cleared.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

@@ -276,6 +276,12 @@ pub enum Msg {
         auto: bool,
         result: Result<Option<String>, String>,
     },
+    /// "Find similar": the photos like `of`, nearest first.
+    Similar {
+        root: PathBuf,
+        of: i64,
+        result: Result<Vec<i64>, String>,
+    },
     /// Web gallery: the site's page, or why it could not be made.
     WebGalleryDone(Result<PathBuf, String>),
     /// "Tag from GPX track": how many photos were placed, of how many.
@@ -887,6 +893,7 @@ pub(crate) mod owners {
             | Msg::AutoImported { .. }
             | Msg::Geotagged { .. }
             | Msg::WebGalleryDone(..)
+            | Msg::Similar { .. }
             | Msg::StackProgress { .. }
             | Msg::AlbumPhotos { .. }
             | Msg::AlbumChanged { .. }
@@ -1059,6 +1066,11 @@ pub(crate) mod owners {
                 result: Ok((0, 0)),
             },
             Msg::WebGalleryDone(Err("no".into())),
+            Msg::Similar {
+                root: dir.join("elsewhere"),
+                of: 1,
+                result: Ok(Vec::new()),
+            },
             Msg::StackProgress { done: 1, total: 2 },
             Msg::LensProfile {
                 photo_id: 1,

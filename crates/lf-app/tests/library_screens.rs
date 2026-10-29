@@ -3320,3 +3320,45 @@ fn sync_metadata_copies_the_active_photos_fields() {
         assert_eq!(p.meta.keywords, vec!["dance".to_owned()]);
     }
 }
+
+/// Library → Find similar: the photos that look like the active one, alone in the grid.
+#[test]
+fn find_similar_shows_the_look_alikes() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    std::fs::create_dir_all(&shoot).unwrap();
+    // Two of a ramp darkening to the right (one a little brighter), and one brightening.
+    for (name, f) in [
+        (
+            "a.png",
+            (|x: u32, _y: u32| (x * 255 / 160) as u8) as fn(u32, u32) -> u8,
+        ),
+        ("b.png", |x, _| (255 - x * 255 / 160).min(235) as u8 + 20),
+        ("c.png", |x, _| (x * 255 / 160) as u8),
+    ] {
+        image::RgbaImage::from_fn(160, 120, |x, y| {
+            let v = f(x, y);
+            image::Rgba([v, v, v, 255])
+        })
+        .save(shoot.join(name))
+        .unwrap();
+    }
+    import_folder(&mut h, &shoot, 3);
+    let a = h
+        .state()
+        .lib
+        .photos()
+        .iter()
+        .find(|p| p.path.ends_with("a.png"))
+        .unwrap()
+        .id;
+    h.state_mut().lib.selection.click(a);
+    assert!(run_action(&mut h, Action::FindSimilar));
+    step_until(&mut h, "the look-alikes alone", |s| {
+        s.lib.shown().len() == 2
+    });
+    assert!(h.state().lib.shown().contains(&a));
+}

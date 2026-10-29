@@ -21,6 +21,16 @@ enum Change {
 }
 
 pub const NO_PAIRS: &str = "No RAW+JPEG pairs were found in this folder.";
+pub const LOOKING: &str = "Looking for similar photos…";
+pub const NONE_SIMILAR: &str = "No similar photos were found in this folder.";
+
+/// "4 photos like DSC_1.NEF (clear the filter to see all)."
+pub fn like(n: usize, name: &str) -> String {
+    format!(
+        "{} like {name} (clear the filter to see all).",
+        crate::catalog_ext::count(n)
+    )
+}
 
 /// "3 RAW+JPEG pairs stacked."
 pub fn paired(n: usize) -> String {
@@ -165,6 +175,47 @@ impl Library {
                 result,
             }
         });
+    }
+
+    /// Library → Find similar: the folder's photos that look like the active one (their
+    /// fingerprints made first where missing), shown alone until the filter is cleared.
+    pub(super) fn find_similar(&mut self, env: &mut Env) {
+        let (Some(of), Some(root)) = (self.selection.active(), self.root.clone()) else {
+            return;
+        };
+        let ids: Vec<i64> = self.photos.iter().map(|p| p.id).collect();
+        let gpu = self.gpu.clone();
+        env.toasts.push(Level::Info, LOOKING);
+        env.jobs.spawn(Lane::Long, "find similar", move || {
+            let result = crate::stack_job::similar(gpu, &root, of, &ids);
+            Msg::Similar { root, of, result }
+        });
+    }
+
+    pub(super) fn similar_found(
+        &mut self,
+        root: std::path::PathBuf,
+        of: i64,
+        result: Result<Vec<i64>, String>,
+        env: &mut Env,
+    ) {
+        if self.root.as_deref() != Some(root.as_path()) {
+            return;
+        }
+        match result {
+            Ok(ids) if ids.len() > 1 => {
+                let name = self
+                    .photo(of)
+                    .map(|p| crate::develop::open::file_name(&p.path))
+                    .unwrap_or_default();
+                env.toasts.push(Level::Info, like(ids.len() - 1, &name));
+                let mut f = self.filter.clone();
+                f.only = Some(ids);
+                self.set_filter(f);
+            }
+            Ok(_) => env.toasts.push(Level::Info, NONE_SIMILAR),
+            Err(e) => env.toasts.push(Level::Warning, e),
+        }
     }
 
     /// Home → Auto-stack…: the selection when several photos are selected, else every photo

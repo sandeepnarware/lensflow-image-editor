@@ -56,6 +56,47 @@ pub fn seconds(captured_at: &str) -> Option<f64> {
 }
 
 /// Stacks the bursts and duplicates among `ids` (in capture order).
+/// Fingerprints the photos of `ids` that have none yet (each rendered small as shot); returns
+/// how many could not be read.
+pub fn fingerprint(
+    gpu: &Arc<Gpu>,
+    catalog: &Catalog,
+    ids: &[i64],
+    progress: &mut impl FnMut(usize, usize),
+    stop: &AtomicBool,
+) -> Result<usize, String> {
+    let todo = catalog.unhashed(ids).map_err(|e| e.to_string())?;
+    let as_shot = EditSettings::default_settings();
+    let mut unreadable = 0;
+    for (i, (id, path)) in todo.iter().enumerate() {
+        if stop.load(Ordering::SeqCst) {
+            return Err(lf_ai::AiError::Stopped.to_string());
+        }
+        progress(i, todo.len());
+        match crate::ai_job::render_at(gpu, path, &as_shot, HASH_EDGE, Quality::Preview) {
+            Ok(img) => {
+                let hash = stacks::dhash(&lf_ai::cull::luma(&img), img.w, img.h);
+                catalog.set_hash(*id, hash).map_err(|e| e.to_string())?;
+            }
+            Err(e) => {
+                log::warn!("fingerprinting could not read {}: {e}", path.display());
+                unreadable += 1;
+            }
+        }
+    }
+    progress(todo.len(), todo.len());
+    Ok(unreadable)
+}
+
+/// "Find similar": the photos of `ids` like `of`, nearest first (fingerprinting any not done).
+pub fn similar(gpu: Arc<Gpu>, root: &Path, of: i64, ids: &[i64]) -> Result<Vec<i64>, String> {
+    let catalog = Catalog::open(root).map_err(|e| e.to_string())?;
+    let stop = AtomicBool::new(false);
+    fingerprint(&gpu, &catalog, ids, &mut |_, _| {}, &stop)?;
+    let hashes = catalog.hashes(ids).map_err(|e| e.to_string())?;
+    Ok(stacks::similar(of, &hashes))
+}
+
 pub fn run(
     gpu: Arc<Gpu>,
     root: &Path,
@@ -65,26 +106,10 @@ pub fn run(
     stop: &AtomicBool,
 ) -> Result<AutoStacked, String> {
     let catalog = Catalog::open(root).map_err(|e| e.to_string())?;
-    let todo = catalog.unhashed(ids).map_err(|e| e.to_string())?;
-    let as_shot = EditSettings::default_settings();
-    let mut done = AutoStacked::default();
-    for (i, (id, path)) in todo.iter().enumerate() {
-        if stop.load(Ordering::SeqCst) {
-            return Err(lf_ai::AiError::Stopped.to_string());
-        }
-        progress(i, todo.len());
-        match crate::ai_job::render_at(&gpu, path, &as_shot, HASH_EDGE, Quality::Preview) {
-            Ok(img) => {
-                let hash = stacks::dhash(&lf_ai::cull::luma(&img), img.w, img.h);
-                catalog.set_hash(*id, hash).map_err(|e| e.to_string())?;
-            }
-            Err(e) => {
-                log::warn!("auto-stack could not read {}: {e}", path.display());
-                done.unreadable += 1;
-            }
-        }
-    }
-    progress(todo.len(), todo.len());
+    let mut done = AutoStacked {
+        unreadable: fingerprint(&gpu, &catalog, ids, &mut progress, stop)?,
+        ..AutoStacked::default()
+    };
     let hashes = catalog.hashes(ids).map_err(|e| e.to_string())?;
     let mut candidates = Vec::new();
     for &id in ids {

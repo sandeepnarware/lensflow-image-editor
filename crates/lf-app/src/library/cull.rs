@@ -185,6 +185,8 @@ pub struct Filter {
     pub lens: Option<String>,
     /// Only photos with this keyword or one under it (the sidebar's Keywords list).
     pub keyword: Option<String>,
+    /// Only these photos (Find similar's answer).
+    pub only: Option<Vec<i64>>,
 }
 
 impl Filter {
@@ -198,6 +200,7 @@ impl Filter {
             || self.camera.is_some()
             || self.lens.is_some()
             || self.keyword.is_some()
+            || self.only.is_some()
     }
 
     fn keeps(&self, row: &PhotoRow) -> bool {
@@ -212,6 +215,7 @@ impl Filter {
                 .keyword
                 .as_ref()
                 .is_none_or(|k| crate::library::keywords_ui::under(&row.meta.keywords, k))
+            && self.only.as_ref().is_none_or(|ids| ids.contains(&row.id))
     }
 
     /// The ids the grid shows, in its order. `rows` come in capture order. A collapsed

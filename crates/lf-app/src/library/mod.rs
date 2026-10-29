@@ -954,6 +954,7 @@ impl Library {
             } => self.auto_imported(root, folder, result, env),
             Msg::Geotagged { root, result } => self.geotagged(root, result, env),
             Msg::WebGalleryDone(result) => self.web_gallery_done(result, env),
+            Msg::Similar { root, of, result } => self.similar_found(root, of, result, env),
             Msg::Stacked { root, auto, result } => {
                 if auto {
                     self.auto_stack_done();
@@ -1660,6 +1661,7 @@ impl Library {
                 !develop && self.auto_stack.is_none() && !self.photos.is_empty() && self.can_add()
             }
             Action::StackPairs => !develop && !self.photos.is_empty() && self.can_add(),
+            Action::FindSimilar => !develop && self.selection.active().is_some(),
             Action::AssistedCulling | Action::FindPeople | Action::FindKeywords => {
                 !develop
                     && self.local_ai
@@ -1809,6 +1811,7 @@ impl Library {
             Action::ToggleStack => self.toggle_stack(env),
             Action::AutoStack => self.open_auto_stack(),
             Action::StackPairs => self.stack_pairs(env),
+            Action::FindSimilar => self.find_similar(env),
             Action::NewAlbum => self.open_album_dialog(crate::dialogs::album::Purpose::New),
             Action::NewSmartAlbum => {
                 self.open_album_dialog(crate::dialogs::album::Purpose::NewSmart)

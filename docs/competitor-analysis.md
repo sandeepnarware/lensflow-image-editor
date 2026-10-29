@@ -83,6 +83,7 @@ close or competitors ship new features.
 - Keyword list with hierarchy (Lightroom's Keyword List): done, the sidebar's Keywords.
 - Web gallery export (Lightroom's Web module, simple): done, Home → Web gallery.
 - Sync metadata (Lightroom's): done, the Metadata panel.
+- Find similar photos: done, Home → Stacks → Similar (by fingerprint).
 
 ### Tier 4: large or strategic
 

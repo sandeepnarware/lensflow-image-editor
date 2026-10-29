@@ -90,6 +90,23 @@ impl Default for Grouping {
 pub const BURST_DISTANCE: u32 = 16;
 /// The most bits duplicates may differ in (re-saved, resized or lightly edited copies).
 pub const DUPLICATE_DISTANCE: u32 = 4;
+/// "Find similar": photos at most this far from the one asked about.
+pub const SIMILAR_DISTANCE: u32 = 18;
+
+/// Of `hashes`, the photos like `of` (within [`SIMILAR_DISTANCE`]), nearest first, `of` itself
+/// first of all.
+pub fn similar(of: i64, hashes: &HashMap<i64, u64>) -> Vec<i64> {
+    let Some(&h) = hashes.get(&of) else {
+        return Vec::new();
+    };
+    let mut near: Vec<(u32, i64)> = hashes
+        .iter()
+        .map(|(&id, &x)| (if id == of { 0 } else { distance(h, x).max(1) }, id))
+        .filter(|(d, _)| *d <= SIMILAR_DISTANCE)
+        .collect();
+    near.sort();
+    near.into_iter().map(|(_, id)| id).collect()
+}
 
 /// Groups `photos` (in capture order) into stacks: each group of two or more, its top first
 /// (the sharpest when scored, else the first taken), the rest in capture order.
@@ -512,5 +529,24 @@ mod pair_tests {
             vec![(1, 2)],
             "another folder, already stacked together, and a PNG do not pair"
         );
+    }
+}
+
+#[cfg(test)]
+mod similar_tests {
+    use super::*;
+
+    #[test]
+    fn similar_photos_come_nearest_first_and_far_ones_are_left_out() {
+        let hashes: HashMap<i64, u64> = [
+            (1, 0b0000u64),
+            (2, 0b0111u64),
+            (3, 0b0001u64),
+            (4, u64::MAX),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(similar(1, &hashes), vec![1, 3, 2]);
+        assert!(similar(9, &hashes).is_empty(), "not fingerprinted");
     }
 }
