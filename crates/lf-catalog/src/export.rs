@@ -55,12 +55,15 @@ pub enum Format {
     Dng,
     /// JPEG XL, lossless; 16 bits a channel when `sixteen`, else 8.
     Jxl { sixteen: bool },
+    /// An HDR JPEG (Ultra HDR: a JPEG and its gain map, [`crate::ultrahdr`]); `quality`
+    /// 1..=100.
+    JpegHdr { quality: u8 },
 }
 
 impl Format {
     fn extension(self) -> &'static str {
         match self {
-            Format::Jpeg { .. } => "jpg",
+            Format::Jpeg { .. } | Format::JpegHdr { .. } => "jpg",
             Format::Png => "png",
             Format::WebP | Format::WebPLossy { .. } => "webp",
             Format::Avif { .. } => "avif",
@@ -486,6 +489,30 @@ fn export_one(
             Pixels::Eight(DynamicImage::ImageRgba8(img).to_rgb8())
         }
     };
+    // An HDR JPEG's gain map: from a second render, darker, of the same edit.
+    let gains = match (spec.format, &pixels) {
+        (Format::JpegHdr { .. }, Pixels::Eight(sdr)) => {
+            let mut darker = settings.clone();
+            darker.exposure -= f64::from(crate::ultrahdr::HEADROOM_STOPS);
+            let f = renderer.render_f16(&darker).map_err(gpu_fail)?;
+            let dark: Vec<f32> = f
+                .data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|p| [0, 1, 2].map(|i| p[i].to_f32().clamp(0.0, 1.0)))
+                .collect();
+            let (log, max) = crate::ultrahdr::log_gains(sdr.as_raw(), &dark);
+            let map = image::GrayImage::from_raw(
+                sdr.width(),
+                sdr.height(),
+                crate::ultrahdr::encode_gains(&log, max),
+            )
+            .expect("gain map size");
+            Some((map, max))
+        }
+        _ => None,
+    };
     drop(renderer);
     let (w, h) = pixels.dimensions();
     let (tw, th) = target_size(spec.size, w, h);
@@ -536,6 +563,14 @@ fn export_one(
             &row.path,
         ));
     }
+    if spec.space != crate::colour::OutputSpace::Srgb
+        && matches!(spec.format, Format::JpegHdr { .. })
+    {
+        return Err(fail(
+            &"HDR JPEG exports are sRGB only; choose sRGB or another format",
+            &row.path,
+        ));
+    }
     if spec.space != crate::colour::OutputSpace::Srgb && matches!(spec.format, Format::Jxl { .. }) {
         return Err(fail(
             &"JPEG XL exports are sRGB only; choose sRGB or another format",
@@ -582,6 +617,24 @@ fn export_one(
             if let Some(xmp) = &xmp {
                 bytes = insert_xmp(&bytes, xmp);
             }
+        }
+        (Format::JpegHdr { quality }, Pixels::Eight(img)) => {
+            let (map, max) = gains.expect("an HDR JPEG has its gain map");
+            let encoder = JpegEncoder::new_with_quality(&mut bytes, quality.clamp(1, 100));
+            tagged(encoder, &icc, None, DynamicImage::ImageRgb8(img))
+                .map_err(|e| encode_failed(&e))?;
+            if let Some(app1) = &app1 {
+                bytes = insert_exif(&bytes, app1);
+            }
+            // The gain map at half the photo's size each way (viewers enlarge it).
+            let (gw, gh) = (tw.div_ceil(2).max(1), th.div_ceil(2).max(1));
+            let map = image::imageops::resize(&map, gw, gh, image::imageops::FilterType::Triangle);
+            let mut gain = Vec::new();
+            // One channel: a grey gain map.
+            JpegEncoder::new_with_quality(&mut gain, 90)
+                .write_image(map.as_raw(), gw, gh, image::ExtendedColorType::L8)
+                .map_err(|e| encode_failed(&e))?;
+            bytes = crate::ultrahdr::assemble(&bytes, packet, &gain, max);
         }
         (Format::Png, Pixels::Eight(img)) => {
             tagged(

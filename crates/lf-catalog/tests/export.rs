@@ -833,6 +833,7 @@ fn every_format_carries_the_srgb_profile_and_png_and_webp_keep_the_exif() {
             Format::Tiff16
             | Format::Dng
             | Format::Jxl { .. }
+            | Format::JpegHdr { .. }
             | Format::WebPLossy { .. }
             | Format::Avif { .. } => {}
         }
@@ -1099,4 +1100,43 @@ fn a_jpeg_xl_export_is_lossless_at_8_and_16_bits() {
     sp.space = lf_catalog::colour::OutputSpace::AdobeRgb;
     let done = export::run(gpu, &c, &ids, &sp, &mut |_, _| ControlFlow::Continue(())).unwrap();
     assert_eq!(done.failed.len(), 1);
+}
+
+#[test]
+fn an_hdr_jpeg_carries_a_gain_map_for_its_highlights() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    // A dark half and a bright half; a +1.5 EV edit clips the bright half to white, while the
+    // render 2 EV darker still has it below white.
+    RgbaImage::from_fn(64, 32, |x, _| {
+        let v = if x < 32 { 60 } else { 200 };
+        image::Rgba([v, v, v, 255])
+    })
+    .save(src.path().join("h.png"))
+    .unwrap();
+    let (c, ids) = catalogue(src.path());
+    let mut brighter = lf_settings::EditSettings::default_settings();
+    brighter.exposure = 1.5;
+    lf_catalog::edits::set_settings(&c, ids[0], &brighter).unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let sp = spec(Format::JpegHdr { quality: 90 }, out.path());
+    let done = export::run(gpu, &c, &ids, &sp, &mut |_, _| ControlFlow::Continue(())).unwrap();
+    assert!(done.failed.is_empty(), "{:?}", done.failed);
+    let path = &done.exported[0].path;
+    assert_eq!(path.extension().unwrap(), "jpg");
+    let file = std::fs::read(path).unwrap();
+    let primary = image::load_from_memory(&file).unwrap();
+    assert_eq!((primary.width(), primary.height()), (64, 32));
+    let gain = lf_catalog::ultrahdr::find_gain_map(&file).expect("a gain map");
+    let map = image::load_from_memory(gain).unwrap().to_luma8();
+    assert_eq!((map.width(), map.height()), (32, 16));
+    assert!(map.get_pixel(4, 8).0[0] < 10, "the dark half: no gain");
+    assert!(
+        map.get_pixel(28, 8).0[0] > 200,
+        "the clipped half: the most gain"
+    );
+    assert!(String::from_utf8_lossy(gain).contains("hdrgm:GainMapMax"));
+    // One channel: the frame header's component count.
+    let sof = gain.windows(2).position(|w| w == [0xff, 0xc0]).unwrap();
+    assert_eq!(gain[sof + 9], 1, "a grey gain map");
 }

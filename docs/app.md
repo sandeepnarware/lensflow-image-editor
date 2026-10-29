@@ -1018,6 +1018,24 @@ each frame's weight its local sharpness (|Laplacian| of the grey image, box-aver
 1/150 of the frame, to the fourth power, so the sharpest frame clearly wins). Lining up is
 translation only: a lens whose framing breathes with focus may leave soft edges.
 
+### HDR JPEG export
+
+Export → JPEG HDR (`Format::JpegHdr { quality }`, `lf_catalog::ultrahdr`) writes an Ultra HDR
+file: the ordinary JPEG, then a grey gain map JPEG. The develop pass ends in 0..1, so the
+brighter rendition is a second `render_f16` of the edit 2 EV darker (`HEADROOM_STOPS`), back up
+in linear light: what clipped in the ordinary render still has detail there when the source has
+headroom (a raw file). `log_gains` takes the luminance ratio (offsets 1/64, clamped to 1..4)
+and applies its log2 only where the ordinary render's largest channel passes 0.75, fully from
+0.97 (a smoothstep), so midtones match on every screen and only highlights glow. Gains are
+stored as 8-bit recovery over 0..the largest log2 present (gamma 1), at half the photo's size.
+`assemble` puts the gain map's own XMP (`hdrgm:GainMapMin/Max`, `Gamma`, `OffsetSDR/HDR`,
+`HDRCapacityMin/Max`, `BaseRenditionIsHDR="False"`) into it, gives the primary an XMP packet with
+`hdrgm:Version="1.0"` and a GContainer directory (Primary, GainMap with its length) beside the
+photo's own title and keywords (a second `rdf:Description` in the same packet), and inserts an
+MPF APP2 index (CIPA DC-007: both images' sizes, the gain map's offset from the MPF TIFF
+header) after the primary's APPn segments. sRGB only. An 8-bit source has no headroom, so its
+gain map is all zero and the file shows the same everywhere.
+
 ### High resolution
 
 File → Merge → High resolution (`Action::MergeHighRes`, `MergeKind::HighRes`: 2 to 16 frames,

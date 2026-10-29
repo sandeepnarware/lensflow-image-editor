@@ -233,6 +233,11 @@ cargo test --workspace                   # includes the 228-render parity suite
 
 - HEIC opens through the system decoder (Windows: the HEIF and HEVC extensions; macOS: sips; Linux: heif-dec); AVIF input unsupported. rawler 0.8 gaps: Nikon HE/HE* NEF, DNG 1.7 JPEG XL, some
   Sony ARW / Phase One IIQ.
+- HDR JPEG exports (`Format::JpegHdr`, `lf_catalog::ultrahdr`) are Ultra HDR: the SDR JPEG, then a one-channel
+  gain map JPEG at half size; the primary has `hdrgm:Version` + a GContainer directory in XMP and an MPF APP2
+  index. The HDR rendition is a second render 2 EV darker brought back up, applied only above 0.75 brightness
+  (the develop pass clamps to 0..1, so there is no true HDR edit). Checked by our reader and Pillow's MPO parser,
+  not yet on an HDR screen.
 - JPEG XL exports (`Format::Jxl { sixteen }`, `export::jxl`) are lossless modular files from
   zune-jpegxl (it has no lossy mode), sRGB by the header's default, with no EXIF or XMP.
 - DNG exports (`containers::dng16`) are linear DNG 1.4 (`LinearRaw`, the sRGB matrix as ColorMatrix1, D65, neutral 1,1,1), sRGB only.

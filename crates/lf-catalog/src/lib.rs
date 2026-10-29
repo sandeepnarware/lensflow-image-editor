@@ -24,6 +24,7 @@ pub mod sidecar;
 pub mod stacks;
 pub mod tags;
 pub mod thumbs;
+pub mod ultrahdr;
 pub mod versions;
 
 pub use db::{Catalog, CatalogError, Folder, PhotoRow};

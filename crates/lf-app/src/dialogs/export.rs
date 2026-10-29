@@ -77,6 +77,7 @@ pub enum FormatKind {
     Tiff16,
     Dng,
     Jxl,
+    JpegHdr,
 }
 
 /// A watermark of text or of a logo picture.
@@ -202,6 +203,10 @@ impl ExportForm {
             }
             Format::Tiff16 => f.format = FormatKind::Tiff16,
             Format::Dng => f.format = FormatKind::Dng,
+            Format::JpegHdr { quality } => {
+                f.format = FormatKind::JpegHdr;
+                f.quality = quality.clamp(1, 100);
+            }
             Format::Jxl { sixteen } => {
                 f.format = FormatKind::Jxl;
                 f.jxl_sixteen = sixteen;
@@ -287,6 +292,9 @@ impl ExportForm {
             },
             FormatKind::Tiff16 => Format::Tiff16,
             FormatKind::Dng => Format::Dng,
+            FormatKind::JpegHdr => Format::JpegHdr {
+                quality: self.quality.clamp(1, 100),
+            },
             FormatKind::Jxl => Format::Jxl {
                 sixteen: self.jxl_sixteen,
             },
@@ -589,6 +597,8 @@ impl ExportDialog {
                 ui.label("Format");
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut f.format, FormatKind::Jpeg, "JPEG");
+                    ui.radio_value(&mut f.format, FormatKind::JpegHdr, "JPEG HDR")
+                        .on_hover_text("A JPEG whose highlights glow on HDR screens (a gain map); an ordinary JPEG everywhere else");
                     ui.radio_value(&mut f.format, FormatKind::Png, "PNG");
                     ui.radio_value(&mut f.format, FormatKind::WebP, "WebP");
                     ui.radio_value(&mut f.format, FormatKind::Avif, "AVIF")
@@ -614,7 +624,7 @@ impl ExportDialog {
                     ui.end_row();
                 }
                 let lossy = match f.format {
-                    FormatKind::Jpeg | FormatKind::Avif => true,
+                    FormatKind::Jpeg | FormatKind::JpegHdr | FormatKind::Avif => true,
                     FormatKind::WebP => !f.webp_lossless,
                     _ => false,
                 };
