@@ -793,6 +793,11 @@ lane as Compare renders (`Msg::SlideRendered`, by generation); the next one rend
 this one shows, and slides behind are let go. It moves on every 4 s once a photo is up;
 Space pauses, the arrows step (wrapping round), Esc or a click ends it.
 
+The info overlay (`I`, `Action::InfoOverlay`, `Develop::info_overlay`) paints
+`info::overlay_lines` (name; size and kind; the info strip's camera lines) bottom left over the
+preview on a translucent panel (`Develop::paint_info`), also when there is no preview canvas,
+and names it as one label for screen readers.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

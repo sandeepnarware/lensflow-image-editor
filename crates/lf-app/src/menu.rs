@@ -224,6 +224,7 @@ pub const RIBBON: &[Tab] = &[
                     Do(Action::Clipping),
                     Do(Action::FocusPeaking),
                     Do(Action::VisualizeSpots),
+                    Do(Action::InfoOverlay),
                     Do(Action::SoftProof),
                     Do(Action::ProofProfile),
                     Do(Action::Fit),
@@ -309,6 +310,7 @@ pub fn icon(action: Action) -> &'static str {
         Action::Slideshow => "▶",
         Action::SecondWindow => "🗗",
         Action::VisualizeSpots => "🔍",
+        Action::InfoOverlay => "📝",
         Action::SoftProof => "🖶",
         Action::ProofProfile => "🎨",
         Action::Fit => "⛶",
@@ -417,6 +419,7 @@ pub fn short_label(action: Action) -> &'static str {
         Action::Slideshow => "Slideshow",
         Action::SecondWindow => "2nd window",
         Action::VisualizeSpots => "Spots view",
+        Action::InfoOverlay => "Info",
         Action::SoftProof => "Soft proof",
         Action::ProofProfile => "Profile",
         Action::AiDenoise => "Denoise",
@@ -465,6 +468,7 @@ pub struct MenuState {
     pub proofing: bool,
     pub reference: bool,
     pub second_window: bool,
+    pub info: bool,
     pub context: Option<&'static str>,
 }
 
@@ -596,7 +600,8 @@ fn group_ui(ui: &mut egui::Ui, g: &Group, state: &MenuState, clicked: &mut Optio
                             || (*action == Action::VisualizeSpots && state.spots_view)
                             || (*action == Action::SoftProof && state.proofing)
                             || (*action == Action::ReferenceView && state.reference)
-                            || (*action == Action::SecondWindow && state.second_window);
+                            || (*action == Action::SecondWindow && state.second_window)
+                            || (*action == Action::InfoOverlay && state.info);
                         if button(ui, *action, enabled, on).clicked() {
                             *clicked = Some(*action);
                         }
@@ -827,6 +832,7 @@ mod tests {
             Action::Loupe,
             Action::SecondWindow,
             Action::VisualizeSpots,
+            Action::InfoOverlay,
             Action::SoftProof,
             Action::ProofProfile,
             Action::Fit,

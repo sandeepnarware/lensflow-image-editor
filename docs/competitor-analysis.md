@@ -57,6 +57,10 @@ close or competitors ship new features.
 - ~~Panorama fill edges (Lightroom)~~ (done: Merge to panorama → Fill edges (AI)).
 - ~~DNG export~~ (done: Export → DNG, linear) and ~~JPEG XL export~~ (done: Export → JPEG XL, lossless).
 
+### More conveniences (added 2026-10-29)
+
+- Info overlay over the photo (Lightroom's `I`): done, View → Info.
+
 ### Tier 4: large or strategic
 
 - Tethering: dropped 2026-10-28 (needs camera makers' SDKs). All three main rivals have

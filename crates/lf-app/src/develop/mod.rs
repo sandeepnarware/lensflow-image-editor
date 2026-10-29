@@ -137,6 +137,8 @@ pub struct Develop {
     spots_view: bool,
     /// The AI tools may be used (the library passes the gate's answer).
     local_ai: bool,
+    /// View → Info: the file's facts over the preview.
+    info_overlay: bool,
     /// A preset's adaptive AI masks still to find in the open photo.
     adaptive: extras::AdaptiveQueue,
     /// Soft-proofing through this ICC profile (View → Soft proof), and what the proof LUT was
@@ -192,6 +194,7 @@ impl Develop {
             spots_view: false,
             local_ai: false,
             adaptive: extras::AdaptiveQueue::default(),
+            info_overlay: false,
             proof: None,
             proof_key: None,
             before_held: false,
@@ -681,6 +684,15 @@ impl Develop {
         self.spots_view
     }
 
+    pub fn info_overlay(&self) -> bool {
+        self.info_overlay
+    }
+
+    /// View → Info (`I`): the file's facts over the preview.
+    pub fn toggle_info_overlay(&mut self) {
+        self.info_overlay = !self.info_overlay;
+    }
+
     /// View → Visualize spots.
     pub fn toggle_spots_view(&mut self) {
         self.spots_view = !self.spots_view;
@@ -1127,6 +1139,7 @@ impl Develop {
             centred(ui, rect, |ui| {
                 ui.label(RichText::new(NO_PREVIEW).color(theme::MUTED));
             });
+            self.paint_info(ui, rect);
             return;
         };
         let placement = self.viewport.placement(output, panel);
@@ -1207,7 +1220,37 @@ impl Develop {
             ui.painter().rect_filled(back, 4.0, theme::SURFACE);
             ui.painter().galley(at, galley, theme::INK);
         }
+        self.paint_info(ui, rect);
         self.update_histogram(ui.ctx(), toasts);
+    }
+
+    /// The info overlay (`I`), bottom left over the preview.
+    fn paint_info(&self, ui: &egui::Ui, rect: egui::Rect) {
+        if self.info_overlay
+            && let State::Ready(opened, _) = &self.state
+        {
+            let text = info::overlay_lines(
+                &opened.file_name,
+                opened.kind,
+                opened.full_width,
+                opened.full_height,
+                &opened.exif,
+            )
+            .join("\n");
+            let galley = ui.painter().layout_no_wrap(
+                text.clone(),
+                egui::FontId::proportional(13.0),
+                theme::INK,
+            );
+            let at = rect.left_bottom() + egui::vec2(12.0, -12.0 - galley.size().y);
+            let back = egui::Rect::from_min_size(at, galley.size()).expand(6.0);
+            ui.painter()
+                .rect_filled(back, 4.0, theme::SURFACE.gamma_multiply(0.85));
+            ui.painter().galley(at, galley, theme::INK);
+            // Readable by screen readers (and tests) as one label.
+            let info = ui.interact(back, ui.scope_id().with("info-overlay"), Sense::hover());
+            info.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &text));
+        }
     }
 
     /// Scroll zooms at the cursor, drag pans, double-click (and `Space`, through

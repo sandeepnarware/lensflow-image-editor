@@ -50,6 +50,8 @@ pub enum Action {
     SecondWindow,
     /// The preview as white edges on black, so dust spots show.
     VisualizeSpots,
+    /// The file's name, size and camera facts over the preview.
+    InfoOverlay,
     /// Show the photo as a printer and paper profile would print it.
     SoftProof,
     /// Choose the printer and paper profile soft-proofing uses.
@@ -180,6 +182,7 @@ impl Action {
             Action::Slideshow => "Slideshow",
             Action::SecondWindow => "Second window",
             Action::VisualizeSpots => "Visualize spots",
+            Action::InfoOverlay => "Info overlay",
             Action::SoftProof => "Soft proof",
             Action::ProofProfile => "Proof profile…",
             Action::Fit => "Fit",
@@ -293,6 +296,7 @@ pub struct Map(pub &'static [(Action, KeyboardShortcut)]);
 
 /// The window's keyboard map.
 pub const MAP: Map = Map(&[
+    (Action::InfoOverlay, key(Key::I)),
     (Action::ReferenceView, shift(Key::R)),
     (Action::Library, key(Key::G)),
     (Action::Develop, key(Key::D)),
@@ -464,6 +468,7 @@ mod tests {
     /// The plan's keyboard map (Global Constraints), entry by entry.
     fn plan() -> Vec<(Action, KeyboardShortcut)> {
         vec![
+            (Action::InfoOverlay, key(Key::I)),
             (Action::ReferenceView, shift(Key::R)),
             (Action::Library, key(Key::G)),
             (Action::Develop, key(Key::D)),

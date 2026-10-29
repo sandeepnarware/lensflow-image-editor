@@ -2931,3 +2931,29 @@ fn a_presets_ai_masks_are_found_again_with_their_settings() {
     assert_eq!(masks.0[0].local.exposure, -0.75);
     assert_eq!(masks.0[0].opacity, 60.0);
 }
+
+/// View → Info (`I`): the file's name and size over the preview, and gone again.
+#[test]
+fn the_info_overlay_shows_the_files_facts() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    let has = |h: &Harness<'static, State>| {
+        h.query_by_label_contains(
+            "p0.png
+300 × 200",
+        )
+        .is_some()
+    };
+    assert!(!has(&h));
+    h.key_press(Key::I);
+    h.step();
+    h.step();
+    assert!(has(&h), "shown");
+    h.key_press(Key::I);
+    h.step();
+    h.step();
+    assert!(!has(&h), "hidden");
+}

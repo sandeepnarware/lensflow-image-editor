@@ -172,6 +172,9 @@ photo you are working on with its edits (updated a moment after each change).
 Loupe (`E`, Library → Loupe): the active photo alone at full size. Click to see that
 spot at 100 % (click again to fit); `←`/`→` step through the photos keeping the zoom.
 
+Info overlay (`I`, View → Info): in Develop, the file's name, size and kind and what the
+camera recorded (camera, lens, exposure, date), over the bottom left of the photo.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

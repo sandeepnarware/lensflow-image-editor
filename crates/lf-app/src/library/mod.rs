@@ -1626,6 +1626,7 @@ impl Library {
             | Action::Clipping
             | Action::FocusPeaking
             | Action::VisualizeSpots
+            | Action::InfoOverlay
             | Action::SoftProof
             | Action::ProofProfile
             | Action::Fit
@@ -1763,6 +1764,7 @@ impl Library {
             Action::Clipping => self.develop.toggle_clipping(),
             Action::FocusPeaking => self.develop.toggle_peaking(),
             Action::VisualizeSpots => self.develop.toggle_spots_view(),
+            Action::InfoOverlay => self.develop.toggle_info_overlay(),
             Action::SoftProof => self.toggle_proof(env),
             Action::ProofProfile => self.pick_proof_profile(env),
             Action::Fit | Action::ActualSize | Action::ToggleZoom => self.develop.zoom(action),

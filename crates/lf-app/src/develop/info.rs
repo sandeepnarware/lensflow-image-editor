@@ -4,6 +4,23 @@
 use lf_raw::exif::ExifSummary;
 use lf_raw::open::Kind;
 
+/// The info overlay's lines (`I`): the file's name, size and kind, then what the camera
+/// recorded.
+pub fn overlay_lines(
+    file_name: &str,
+    kind: Kind,
+    width: u32,
+    height: u32,
+    exif: &ExifSummary,
+) -> Vec<String> {
+    let mut out = vec![
+        file_name.to_owned(),
+        format!("{}  ·  {}", dimensions(width, height), kind_badge(kind)),
+    ];
+    out.extend(lines(exif));
+    out
+}
+
 /// The kind badge.
 pub fn kind_badge(kind: Kind) -> &'static str {
     match kind {
