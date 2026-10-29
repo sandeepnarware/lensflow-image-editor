@@ -202,6 +202,10 @@ it takes, as Lightroom's Point Color.
 Stack RAW+JPEG pairs (Home → Stacks → RAW+JPEG): each shot taken as RAW+JPEG (the same name
 in the same folder) becomes a stack with the raw file on top, so the grid shows it once.
 
+Auto import (Home → Auto import…): a watched folder (where tethering software or a card reader
+drops photos) is looked at every few seconds; each new photo, once it has finished being
+written, is moved into a catalogued folder you choose and imported. Stays on until stopped.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

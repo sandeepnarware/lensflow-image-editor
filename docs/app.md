@@ -861,6 +861,15 @@ with `lf_catalog::stacks::raw_jpeg_pairs`: a raw file (one of `RAW_EXTENSIONS`) 
 skipped. Each pair is stacked on `Io` with the raw file on top (`Catalog::stack`, which takes
 them out of any other stack), and the toast says how many.
 
+Auto import (`Action::AutoImport`, `dialogs/auto_import.rs`, `library/auto_import_ui.rs`,
+`lf_catalog::auto_import`; `prefs.auto_import` while on) looks at the watched folder on the
+`Io` lane every 3 s (`follow_auto_import`, one look at a time). A photo (the import's own
+extensions) is ready when its size and modification time match the previous look and it is
+not empty (`ready`); it is moved into the destination under a free name (`-2`, `-3`…;
+across drives: copy, check the size, then remove), and the destination is rescanned
+(`Msg::AutoImported`; a toast says how many). The watched folder may not be, or be inside, a
+catalogued folder. A failure to read it is said once until it changes.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

@@ -5,6 +5,7 @@
 pub mod about;
 pub mod ai;
 pub mod album;
+pub mod auto_import;
 pub mod auto_stack;
 pub mod batch;
 pub mod export;

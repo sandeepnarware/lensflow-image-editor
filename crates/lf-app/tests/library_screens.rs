@@ -2986,3 +2986,36 @@ fn o_cycles_the_crop_overlay_and_it_is_kept() {
     h.step();
     assert!(h.query_by_label("Overlay: Golden ratio").is_some(), "kept");
 }
+
+/// Home → Auto import: a photo dropped in the watched folder is moved into the destination
+/// (a catalogued folder) once it stops changing, and catalogued there.
+#[test]
+fn auto_import_moves_a_dropped_photo_in_and_catalogues_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 1);
+    import_folder(&mut h, &shoot, 1);
+    let watch = dir.path().join("tether");
+    std::fs::create_dir(&watch).unwrap();
+    h.state_mut().prefs.auto_import = Some(lf_app::prefs::AutoImportPrefs {
+        watch: watch.clone(),
+        folder: shoot.clone(),
+    });
+    image::RgbaImage::from_pixel(64, 48, image::Rgba([10, 200, 30, 255]))
+        .save(watch.join("p0.png"))
+        .unwrap();
+    step_until(&mut h, "the dropped photo to be catalogued", |s| {
+        s.lib.photos().len() == 2
+    });
+    assert!(
+        !watch.join("p0.png").exists(),
+        "moved out of the watched folder"
+    );
+    assert!(
+        shoot.join("p0-2.png").exists(),
+        "under a free name beside the other"
+    );
+}

@@ -97,6 +97,16 @@ pub struct Prefs {
     pub proof_profile: Option<PathBuf>,
     /// Develop's Auto-sync: each change to the open photo goes to the other selected ones.
     pub auto_sync: bool,
+    /// Home → Auto import, while on: the watched folder and where its photos go.
+    pub auto_import: Option<AutoImportPrefs>,
+}
+
+/// Auto import's folders.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoImportPrefs {
+    pub watch: PathBuf,
+    /// A catalogued folder.
+    pub folder: PathBuf,
 }
 
 impl Default for Prefs {
@@ -111,6 +121,7 @@ impl Default for Prefs {
             last_ingest: None,
             external_editor: None,
             auto_sync: false,
+            auto_import: None,
             develop_quality: DevelopQuality::default(),
             proof_profile: None,
         }
@@ -185,6 +196,10 @@ mod tests {
             external_editor: Some(PathBuf::from("C:/Apps/Editor.exe")),
             auto_sync: true,
             develop_quality: DevelopQuality::Fast,
+            auto_import: Some(AutoImportPrefs {
+                watch: PathBuf::from("T:/tether"),
+                folder: PathBuf::from("D:/Photos/shoot"),
+            }),
             proof_profile: Some(PathBuf::from("C:/Profiles/lab-lustre.icc")),
         };
         prefs.save(&config).unwrap();

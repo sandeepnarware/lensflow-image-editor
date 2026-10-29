@@ -270,6 +270,12 @@ pub enum Msg {
         auto: bool,
         result: Result<Option<String>, String>,
     },
+    /// Auto import looked at its watched folder: how many photos it moved into `folder`.
+    AutoImported {
+        root: PathBuf,
+        folder: PathBuf,
+        result: Result<usize, String>,
+    },
     /// Auto-stacking read `done` of `total` photos.
     StackProgress { done: usize, total: usize },
     /// An AI tool moved on.
@@ -864,6 +870,7 @@ pub(crate) mod owners {
             | Msg::PlacesRead { .. }
             | Msg::AiDone(..)
             | Msg::Stacked { .. }
+            | Msg::AutoImported { .. }
             | Msg::StackProgress { .. }
             | Msg::AlbumPhotos { .. }
             | Msg::AlbumChanged { .. }
@@ -1020,6 +1027,11 @@ pub(crate) mod owners {
                 root: dir.join("elsewhere"),
                 auto: true,
                 result: Err("no".into()),
+            },
+            Msg::AutoImported {
+                root: dir.join("elsewhere"),
+                folder: dir.join("f"),
+                result: Ok(0),
             },
             Msg::StackProgress { done: 1, total: 2 },
             Msg::LensProfile {

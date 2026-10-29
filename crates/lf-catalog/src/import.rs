@@ -68,6 +68,11 @@ impl From<rusqlite::Error> for ImportError {
     }
 }
 
+/// Whether `path` is a photo the catalogue takes (by its extension).
+pub fn is_photo(path: &Path) -> bool {
+    supported(path)
+}
+
 fn supported(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     if name.ends_with(".lensflow.json") {

@@ -58,6 +58,7 @@ pub const RIBBON: &[Tab] = &[
                 &[
                     Do(Action::AddFolder),
                     Do(Action::ImportFromCard),
+                    Do(Action::AutoImport),
                     Do(Action::Export),
                     Do(Action::ExportToGallery),
                     Do(Action::Print),
@@ -290,6 +291,7 @@ pub fn icon(action: Action) -> &'static str {
     match action {
         Action::AddFolder => "📁",
         Action::ImportFromCard => "💾",
+        Action::AutoImport => "🔄",
         Action::Export => "📤",
         Action::ExportToGallery => "☁",
         Action::Print => "🖶",
@@ -385,6 +387,7 @@ pub fn short_label(action: Action) -> &'static str {
     match action {
         Action::AddFolder => "Add folder",
         Action::ImportFromCard => "From card",
+        Action::AutoImport => "Auto import",
         Action::Export => "Export",
         Action::ExportToGallery => "To gallery",
         Action::CopySettings => "Copy settings",
@@ -792,6 +795,7 @@ mod tests {
         for action in [
             Action::AddFolder,
             Action::ImportFromCard,
+            Action::AutoImport,
             Action::Metadata,
             Action::EditIn,
             Action::Print,

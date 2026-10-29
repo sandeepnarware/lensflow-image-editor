@@ -16,6 +16,8 @@ pub enum Action {
     AddFolder,
     /// Copy photos from a memory card (or any folder) into the studio's, then catalogue them.
     ImportFromCard,
+    /// A watched folder's new photos moved into a catalogued folder and imported, as they come.
+    AutoImport,
     Export,
     /// Upload the selected photos to a LensFlow gallery (while the plan allows it).
     ExportToGallery,
@@ -166,6 +168,7 @@ impl Action {
         match self {
             Action::AddFolder => "Add folder…",
             Action::ImportFromCard => "Import from card…",
+            Action::AutoImport => "Auto import…",
             Action::Export => "Export…",
             Action::ExportToGallery => "Export to gallery…",
             Action::Print => "Print…",

@@ -7,6 +7,7 @@
 
 pub mod ai_ui;
 pub mod albums_ui;
+pub mod auto_import_ui;
 pub mod compare;
 pub mod cull;
 pub mod cull_ui;
@@ -136,6 +137,9 @@ pub struct Library {
     rename: Option<crate::dialogs::rename::RenameDialog>,
     /// Auto-stack's dialog, while open or running.
     auto_stack: Option<crate::dialogs::auto_stack::AutoStackDialog>,
+    /// Auto import's polling, and its dialog while open.
+    auto_import: auto_import_ui::AutoImport,
+    auto_import_dialog: Option<crate::dialogs::auto_import::AutoImportDialog>,
     local_ai: bool,
     /// Compare, while open (it shows in place of the grid).
     compare: Option<compare::Compare>,
@@ -262,6 +266,8 @@ impl Library {
             start_ai_now: false,
             remove: None,
             auto_stack: None,
+            auto_import: auto_import_ui::AutoImport::default(),
+            auto_import_dialog: None,
             local_ai: false,
             compare: None,
             slideshow: None,
@@ -925,6 +931,11 @@ impl Library {
             Msg::RemoveRendered { id, result } => self.remove_rendered(id, result),
             Msg::AiDone(result) => self.ai_done(result, env),
             Msg::StackProgress { done, total } => self.stack_progress(done, total),
+            Msg::AutoImported {
+                root,
+                folder,
+                result,
+            } => self.auto_imported(root, folder, result, env),
             Msg::Stacked { root, auto, result } => {
                 if auto {
                     self.auto_stack_done();
@@ -1469,6 +1480,7 @@ impl Library {
             self.pick_dcp(env);
         }
         self.auto_sync(env);
+        self.follow_auto_import(ui.ctx(), env);
         match self.mode {
             Mode::Library if self.map.is_some() => {
                 egui::CentralPanel::default_margins().show(ui, |ui| self.map_ui(ui, env));
@@ -1520,6 +1532,7 @@ impl Library {
         self.ai_dialog(ui.ctx(), env);
         self.remove_dialog(ui.ctx(), env);
         self.auto_stack_dialog(ui.ctx(), env);
+        self.auto_import_dialog(ui.ctx(), env);
         self.reveal_active = false;
     }
 
@@ -1539,6 +1552,7 @@ impl Library {
             || self.album_dialog_open()
             || self.people_dialog_open()
             || self.rename.is_some()
+            || self.auto_import_dialog.is_some()
             || self.slideshow.is_some()
             || self.ai.is_some()
             || self.remove.is_some()
@@ -1554,6 +1568,7 @@ impl Library {
         match action {
             Action::AddFolder => self.can_add(),
             Action::ImportFromCard => self.can_add() || self.ingest.is_some(),
+            Action::AutoImport => self.root.is_some() && !self.folders.is_empty(),
             Action::Export => selected || self.export.is_some(),
             Action::ExportToGallery => {
                 (selected && self.gallery_allowed()) || self.gallery.is_some()
@@ -1669,6 +1684,7 @@ impl Library {
         match action {
             Action::AddFolder => self.add_folder(env),
             Action::ImportFromCard => self.open_ingest(env),
+            Action::AutoImport => self.open_auto_import(env),
             Action::Export => self.open_export(env),
             Action::ExportToGallery => self.open_gallery(env),
             Action::Undo => self.develop.undo(env.toasts),

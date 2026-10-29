@@ -68,6 +68,7 @@ close or competitors ship new features.
 - Defringe (purple and green amount and hue, Lightroom's): done, Develop → Defringe.
 - Point Color (Lightroom 2023): done, Develop → Point colour (four colours).
 - RAW+JPEG pairs shown as one (Lightroom's pairing): done, Home → Stacks → RAW+JPEG.
+- Auto import from a watched folder (Lightroom's; a stand-in for tethering through the camera maker's own software): done, Home → Auto import.
 
 ### Tier 4: large or strategic
 

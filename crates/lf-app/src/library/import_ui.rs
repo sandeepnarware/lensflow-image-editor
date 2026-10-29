@@ -53,6 +53,8 @@ pub enum Purpose {
     PrintPdf,
     /// One of "Import from a card"'s folders; its own tickets.
     Ingest(crate::dialogs::ingest::Pick),
+    /// Auto import's watched folder; the dialog's own tickets.
+    AutoImportWatch,
 }
 
 /// A folder that exists and can be read.
@@ -213,7 +215,7 @@ impl Library {
             Purpose::ExportTo => "Export to this folder",
             Purpose::Watermark => "Choose a logo for the watermark",
             Purpose::ExportProfile => "Choose an ICC profile",
-            Purpose::Ingest(_) => "Choose a folder",
+            Purpose::Ingest(_) | Purpose::AutoImportWatch => "Choose a folder",
             Purpose::LutFile => "Choose a .cube LUT",
             Purpose::DcpFile => "Choose a .dcp camera profile",
             Purpose::SkyFile => "Choose a photo of a sky",
@@ -315,6 +317,13 @@ impl Library {
             }
             return;
         }
+        if purpose == Purpose::AutoImportWatch {
+            match result {
+                Ok(chosen) => self.auto_import_watch_chosen(ticket, chosen.map(|c| c.path)),
+                Err(e) => env.toasts.push(Level::Warning, e),
+            }
+            return;
+        }
         if let Purpose::Ingest(pick) = purpose {
             match result {
                 Ok(chosen) => self.ingest_picked(pick, ticket, chosen.map(|c| c.path), env),
@@ -357,6 +366,7 @@ impl Library {
             | Purpose::Watermark
             | Purpose::ExportProfile
             | Purpose::Ingest(_)
+            | Purpose::AutoImportWatch
             | Purpose::LutFile
             | Purpose::DcpFile
             | Purpose::SkyFile
