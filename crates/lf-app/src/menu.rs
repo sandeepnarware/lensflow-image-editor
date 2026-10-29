@@ -153,7 +153,10 @@ pub const RIBBON: &[Tab] = &[
                     Do(Action::Label(None)),
                 ],
             ),
-            group("View", &[Do(Action::Compare), Do(Action::Loupe)]),
+            group(
+                "View",
+                &[Do(Action::Compare), Do(Action::Survey), Do(Action::Loupe)],
+            ),
         ],
     },
     Tab {
@@ -333,6 +336,7 @@ pub fn icon(action: Action) -> &'static str {
         Action::Metadata => "📝",
         Action::Compare => "⚖",
         Action::Loupe => "🔍",
+        Action::Survey => "⚖",
         Action::Map => "🗺",
         Action::AiDenoise => "✨",
         Action::AiLensBlur => "◎",
@@ -859,6 +863,7 @@ mod tests {
             Action::FocusPeaking,
             Action::Slideshow,
             Action::Loupe,
+            Action::Survey,
             Action::SecondWindow,
             Action::VisualizeSpots,
             Action::InfoOverlay,

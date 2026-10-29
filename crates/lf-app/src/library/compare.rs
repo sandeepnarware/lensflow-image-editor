@@ -28,9 +28,12 @@ pub const EDGE: u32 = 3000;
 pub const LOUPE_EDGE: u32 = 8192;
 /// The most photos compared at once.
 pub const MAX: usize = 4;
+/// The most photos in Survey (`N`): the selection in a grid, each with × to leave it.
+pub const MAX_SURVEY: usize = 12;
+pub const LEAVE: &str = "×";
 pub const BACK: &str = "Back to grid";
 pub const LOUPE_HINT: &str = "Click for 1:1 at that point (and back), drag to pan, scroll to zoom; arrows step through the photos.";
-pub const HINT: &str = "Scroll to zoom, drag to pan (all together); click a photo to make it active; double-click for fit ⇄ 1:1.";
+pub const HINT: &str = "Scroll to zoom, drag to pan (all together); click a photo to make it active; double-click for fit or 1:1.";
 
 /// Rendered pixels on their way to the window.
 pub struct Pixels(pub RgbaImage);
@@ -44,6 +47,21 @@ impl std::fmt::Debug for Pixels {
 /// Whether `n` selected photos can be compared.
 pub fn can_compare(n: usize) -> bool {
     (2..=MAX).contains(&n)
+}
+
+/// Whether `n` selected photos can be surveyed.
+pub fn can_survey(n: usize) -> bool {
+    (2..=MAX_SURVEY).contains(&n)
+}
+
+/// The columns and rows `n` photos are laid out in: side by side up to three, then the
+/// squarest grid a little wider than tall.
+pub fn grid_of(n: usize) -> (usize, usize) {
+    if n <= 3 {
+        return (n.max(1), 1);
+    }
+    let cols = (n as f64).sqrt().ceil() as usize;
+    (cols, n.div_ceil(cols))
 }
 
 /// Renders photo `id` with its saved edits at up to [`EDGE`] pixels.
@@ -107,6 +125,8 @@ pub struct Compare {
     centre: Vec2,
     /// The loupe: one photo, full size, stepping through the grid.
     pub loupe: bool,
+    /// Survey: each photo can be taken out (its ×).
+    pub survey: bool,
 }
 
 impl Compare {
@@ -118,6 +138,7 @@ impl Compare {
             zoom: 1.0,
             centre: Vec2::splat(0.5),
             loupe: false,
+            survey: false,
         }
     }
 }
@@ -148,12 +169,31 @@ impl Library {
         self.compare.is_some() && self.mode == Mode::Library
     }
 
-    /// `C`: compares the selected photos (two to four), in the grid's order.
-    pub(super) fn open_compare(&mut self, env: &mut Env) {
-        let ids = self.selected_in_order();
-        if !can_compare(ids.len()) {
+    pub fn surveying(&self) -> Option<usize> {
+        self.compare
+            .as_ref()
+            .filter(|c| c.survey)
+            .map(|c| c.ids.len())
+    }
+
+    /// `N`: Survey, the selected photos (two to twelve) in a grid.
+    pub(super) fn open_survey(&mut self, env: &mut Env) {
+        if !can_survey(self.selection.current.len()) {
             return;
         }
+        self.open_compare_of(env, true);
+    }
+
+    /// `C`: compares the selected photos (two to four), in the grid's order.
+    pub(super) fn open_compare(&mut self, env: &mut Env) {
+        if !can_compare(self.selection.current.len()) {
+            return;
+        }
+        self.open_compare_of(env, false);
+    }
+
+    fn open_compare_of(&mut self, env: &mut Env, survey: bool) {
+        let ids = self.selected_in_order();
         let Some(root) = self.root.clone() else {
             return;
         };
@@ -180,7 +220,27 @@ impl Library {
         if let Some(&first) = ids.first() {
             self.selection.set_active(first);
         }
-        self.compare = Some(Compare::new(ids, generation));
+        let mut compare = Compare::new(ids, generation);
+        compare.survey = survey;
+        self.compare = Some(compare);
+    }
+
+    /// Survey's × on `id`: it leaves the survey and the selection; with one left, back to
+    /// the grid.
+    fn leave_survey(&mut self, id: i64) {
+        let Some(c) = &mut self.compare else {
+            return;
+        };
+        c.ids.retain(|&i| i != id);
+        c.cells.remove(&id);
+        let rest = c.ids.clone();
+        self.selection.select(&rest);
+        if let Some(&first) = rest.first() {
+            self.selection.set_active(first);
+        }
+        if rest.len() < 2 {
+            self.close_compare();
+        }
     }
 
     /// The loupe's photo, while it is open.
@@ -321,7 +381,9 @@ impl Library {
         });
         ui.add_space(4.0);
         let n = compare.ids.len();
-        let (cols, rows) = if n == 4 { (2, 2) } else { (n, 1) };
+        let (cols, rows) = grid_of(n);
+        let survey = compare.survey;
+        let mut leave = None;
         let area = ui.available_rect_before_wrap();
         let caption = 22.0;
         let gap = 6.0;
@@ -411,6 +473,18 @@ impl Library {
                     theme::INK,
                 );
             }
+            if survey {
+                let at = Rect::from_min_size(
+                    Pos2::new(picture.right() - 26.0, picture.top() + 4.0),
+                    Vec2::splat(22.0),
+                );
+                let x = ui
+                    .put(at, egui::Button::new(LEAVE).small())
+                    .on_hover_text("Take this photo out of the survey");
+                if x.clicked() {
+                    leave = Some(id);
+                }
+            }
             if response.clicked() || response.drag_started() {
                 clicked = Some(id);
             }
@@ -451,6 +525,9 @@ impl Library {
         if back {
             self.close_compare();
         }
+        if let Some(id) = leave {
+            self.leave_survey(id);
+        }
     }
 }
 
@@ -477,6 +554,17 @@ fn one_to_one(compare: &Compare, area: Rect, cols: usize, rows: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn survey_grids_grow_squarely() {
+        assert_eq!(grid_of(2), (2, 1));
+        assert_eq!(grid_of(3), (3, 1));
+        assert_eq!(grid_of(4), (2, 2));
+        assert_eq!(grid_of(5), (3, 2));
+        assert_eq!(grid_of(9), (3, 3));
+        assert_eq!(grid_of(12), (4, 3));
+        assert!(can_survey(12) && !can_survey(13) && !can_survey(1));
+    }
 
     #[test]
     fn two_to_four_photos_can_be_compared() {

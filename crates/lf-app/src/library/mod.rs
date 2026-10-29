@@ -1615,6 +1615,10 @@ impl Library {
             Action::Loupe => {
                 !develop && (self.compare.is_some() || self.selection.active().is_some())
             }
+            Action::Survey => {
+                !develop
+                    && (self.compare.is_some() || compare::can_survey(self.selection.current.len()))
+            }
             Action::AiDenoise
             | Action::AiUpscale
             | Action::AiRetouch
@@ -1749,6 +1753,8 @@ impl Library {
             Action::Metadata => self.toggle_metadata(),
             Action::Map if self.map.is_some() => self.map = None,
             Action::Map => self.open_map(env),
+            Action::Survey if self.compare.is_some() => self.close_compare(),
+            Action::Survey => self.open_survey(env),
             Action::Loupe if self.compare.is_some() => self.close_compare(),
             Action::Loupe => {
                 if let Some(id) = self.selection.active() {

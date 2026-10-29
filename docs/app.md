@@ -884,6 +884,11 @@ The grid's cell size is `Library::cell` (`prefs.grid_cell`, 110..420 points, 200
 set by the slider under the filter bar and saved when a drag ends; `grid::show`, `cell_box` and
 `cells_in` (the marquee) all take it.
 
+Survey (`Action::Survey`, `Compare::survey`) is Compare with up to `MAX_SURVEY` (12) photos laid
+out by `compare::grid_of` (side by side up to three, then the squarest grid a little wider than
+tall); each cell has × (`leave_survey`: out of the survey and the selection; one left closes
+it). Compare's hint lost its "⇄", which egui's fonts lack (Compare panicked on opening).
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

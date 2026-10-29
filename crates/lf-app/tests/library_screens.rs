@@ -3071,3 +3071,32 @@ fn rotate_right_turns_the_selected_photos_in_the_grid() {
         ids.iter().all(|&id| turned(id))
     });
 }
+
+/// Survey (`N`): the selected photos in a grid; ✕ takes one out (and out of the selection).
+#[test]
+fn survey_shows_the_selection_and_x_takes_one_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 5);
+    import_folder(&mut h, &shoot, 5);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    h.state_mut().lib.selection.select(&ids);
+    h.key_press(Key::N);
+    h.step();
+    h.step();
+    assert_eq!(h.state().lib.surveying(), Some(5));
+    h.query_all_by_label(lf_app::library::compare::LEAVE)
+        .next()
+        .unwrap()
+        .click();
+    h.step();
+    h.step();
+    assert_eq!(h.state().lib.surveying(), Some(4));
+    assert_eq!(h.state().lib.selection.current.len(), 4);
+    h.key_press(Key::Escape);
+    h.step();
+    assert_eq!(h.state().lib.surveying(), None);
+}

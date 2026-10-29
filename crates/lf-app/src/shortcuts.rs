@@ -75,6 +75,8 @@ pub enum Action {
     Compare,
     /// The active photo alone at full size (click for 1:1).
     Loupe,
+    /// Two to twelve selected photos in a grid, each with × to take it out.
+    Survey,
     /// Where the photos shown were taken, on a map.
     Map,
     // AI (on this computer)
@@ -209,6 +211,7 @@ impl Action {
             Action::Metadata => "Metadata panel",
             Action::Compare => "Compare",
             Action::Loupe => "Loupe",
+            Action::Survey => "Survey",
             Action::Map => "Map",
             Action::AiDenoise => "AI Denoise…",
             Action::AiLensBlur => "Lens blur…",
@@ -325,6 +328,7 @@ pub struct Map(pub &'static [(Action, KeyboardShortcut)]);
 
 /// The window's keyboard map.
 pub const MAP: Map = Map(&[
+    (Action::Survey, key(Key::N)),
     (Action::RotateLeft, cmd(Key::OpenBracket)),
     (Action::RotateRight, cmd(Key::CloseBracket)),
     (Action::ExportPrevious, cmd_alt_shift(Key::E)),
@@ -502,6 +506,7 @@ mod tests {
     /// The plan's keyboard map (Global Constraints), entry by entry.
     fn plan() -> Vec<(Action, KeyboardShortcut)> {
         vec![
+            (Action::Survey, key(Key::N)),
             (Action::RotateLeft, cmd(Key::OpenBracket)),
             (Action::RotateRight, cmd(Key::CloseBracket)),
             (Action::ExportPrevious, cmd_alt_shift(Key::E)),

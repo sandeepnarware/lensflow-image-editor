@@ -215,6 +215,9 @@ turns a quarter (or, in Develop, the open one), its crop turning with it.
 Thumbnail size (the slider over the grid): smaller thumbnails to see more at once, larger to
 judge them; remembered.
 
+Survey (`N`, Library → Survey): two to twelve selected photos in a grid, zoomed and panned
+together; × on a photo takes it out of the survey and the selection.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

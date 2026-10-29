@@ -72,6 +72,7 @@ close or competitors ship new features.
 - Export with previous (Lightroom's): done, `Ctrl+Alt+Shift+E`.
 - Rotate in the Library grid (Lightroom's `Ctrl+[` / `Ctrl+]`): done.
 - Thumbnail size slider (Lightroom's grid slider): done.
+- Survey view (Lightroom's `N`): done, Library → Survey.
 
 ### Tier 4: large or strategic
 
