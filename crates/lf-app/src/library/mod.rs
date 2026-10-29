@@ -1607,6 +1607,7 @@ impl Library {
             Action::AutoStack => {
                 !develop && self.auto_stack.is_none() && !self.photos.is_empty() && self.can_add()
             }
+            Action::StackPairs => !develop && !self.photos.is_empty() && self.can_add(),
             Action::AssistedCulling | Action::FindPeople | Action::FindKeywords => {
                 !develop
                     && self.local_ai
@@ -1744,6 +1745,7 @@ impl Library {
             Action::Unstack => self.unstack_selected(env),
             Action::ToggleStack => self.toggle_stack(env),
             Action::AutoStack => self.open_auto_stack(),
+            Action::StackPairs => self.stack_pairs(env),
             Action::NewAlbum => self.open_album_dialog(crate::dialogs::album::Purpose::New),
             Action::NewSmartAlbum => {
                 self.open_album_dialog(crate::dialogs::album::Purpose::NewSmart)

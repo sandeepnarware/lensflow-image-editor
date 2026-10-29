@@ -158,6 +158,49 @@ pub fn group(photos: &[Candidate], how: Grouping) -> Vec<Vec<i64>> {
     out.into_iter().map(|(_, ids)| ids).collect()
 }
 
+/// Raw files' extensions (lower case), for pairing a raw file with the JPEG shot beside it.
+pub const RAW_EXTENSIONS: [&str; 24] = [
+    "3fr", "arw", "cr2", "cr3", "crw", "dcr", "dng", "erf", "iiq", "k25", "kdc", "mef", "mos",
+    "mrw", "nef", "nrw", "orf", "pef", "raf", "rw2", "rwl", "sr2", "srf", "srw",
+];
+
+/// RAW+JPEG pairs among `photos` (id, path, stack id): a raw file and a JPEG with the same
+/// name in the same folder (the camera's two copies of one shot), raw first, in `photos`'
+/// order. Pairs already stacked together are left out.
+pub fn raw_jpeg_pairs(photos: &[(i64, &std::path::Path, Option<i64>)]) -> Vec<(i64, i64)> {
+    let key = |p: &std::path::Path| {
+        (
+            p.parent().map(|d| d.to_path_buf()),
+            p.file_stem()
+                .map(|s| s.to_string_lossy().to_lowercase())
+                .unwrap_or_default(),
+        )
+    };
+    let ext = |p: &std::path::Path| {
+        p.extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default()
+    };
+    let mut jpegs: HashMap<_, (i64, Option<i64>)> = HashMap::new();
+    for (id, path, stack) in photos {
+        if matches!(ext(path).as_str(), "jpg" | "jpeg") {
+            jpegs.entry(key(path)).or_insert((*id, *stack));
+        }
+    }
+    let mut out = Vec::new();
+    for (id, path, stack) in photos {
+        if !RAW_EXTENSIONS.contains(&ext(path).as_str()) {
+            continue;
+        }
+        if let Some((jpeg, jstack)) = jpegs.get(&key(path))
+            && !(stack.is_some() && stack == jstack)
+        {
+            out.push((*id, *jpeg));
+        }
+    }
+    out
+}
+
 impl Catalog {
     /// Puts `ids` (two or more) in a new collapsed stack topped by `top` (one of them; else
     /// the first). They leave any stack they were in. Returns the new stack's id.
@@ -444,5 +487,30 @@ mod tests {
             },
         );
         assert!(tight.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod pair_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn a_raw_and_its_jpeg_in_one_folder_pair_up() {
+        let photos = [
+            (1, Path::new("/s/DSC_1.NEF"), None),
+            (2, Path::new("/s/DSC_1.JPG"), None),
+            (3, Path::new("/s/DSC_2.nef"), None),
+            (4, Path::new("/other/DSC_2.jpg"), None),
+            (5, Path::new("/s/DSC_3.CR3"), Some(9)),
+            (6, Path::new("/s/dsc_3.jpeg"), Some(9)),
+            (7, Path::new("/s/DSC_4.png"), None),
+            (8, Path::new("/s/DSC_4.dng"), None),
+        ];
+        assert_eq!(
+            raw_jpeg_pairs(&photos),
+            vec![(1, 2)],
+            "another folder, already stacked together, and a PNG do not pair"
+        );
     }
 }

@@ -855,6 +855,12 @@ saturation (0.15..0.4 times it) and brightness (0.2..0.5 times it), and not on n
 weighted hue shift (±30°), saturation scale and luminance (towards white or black) are summed.
 Points with no shift are not sent (`Points::active`), so with none the pass is the web's.
 
+Stack RAW+JPEG pairs (`Action::StackPairs`, `Library::stack_pairs`) pairs the folder's photos
+with `lf_catalog::stacks::raw_jpeg_pairs`: a raw file (one of `RAW_EXTENSIONS`) and a .jpg or
+.jpeg with the same stem, case aside, in the same folder; pairs already stacked together are
+skipped. Each pair is stacked on `Io` with the raw file on top (`Catalog::stack`, which takes
+them out of any other stack), and the toast says how many.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

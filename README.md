@@ -199,6 +199,9 @@ Point colour (Develop): pick up to four colours in the photo ("Pick a colour", t
 shift each one's hue, saturation and luminance, with a Range for how wide a family of colours
 it takes, as Lightroom's Point Color.
 
+Stack RAW+JPEG pairs (Home → Stacks → RAW+JPEG): each shot taken as RAW+JPEG (the same name
+in the same folder) becomes a stack with the raw file on top, so the grid shows it once.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

@@ -100,6 +100,8 @@ pub enum Action {
     ToggleStack,
     /// Find bursts and duplicates and stack them.
     AutoStack,
+    /// Every RAW+JPEG pair of the folder stacked, the raw file on top.
+    StackPairs,
     // Albums
     /// Make an album (with the selected photos).
     NewAlbum,
@@ -211,6 +213,7 @@ impl Action {
             Action::Unstack => "Unstack",
             Action::ToggleStack => "Expand / collapse stack",
             Action::AutoStack => "Auto-stack…",
+            Action::StackPairs => "Stack RAW+JPEG pairs",
             Action::NewAlbum => "New album…",
             Action::NewSmartAlbum => "New smart album…",
             Action::AddToAlbum => "Add to album…",

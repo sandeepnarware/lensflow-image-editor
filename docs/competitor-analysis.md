@@ -67,6 +67,7 @@ close or competitors ship new features.
 - Targeted adjustment for Colour mix (Lightroom's TAT): done.
 - Defringe (purple and green amount and hue, Lightroom's): done, Develop → Defringe.
 - Point Color (Lightroom 2023): done, Develop → Point colour (four colours).
+- RAW+JPEG pairs shown as one (Lightroom's pairing): done, Home → Stacks → RAW+JPEG.
 
 ### Tier 4: large or strategic
 

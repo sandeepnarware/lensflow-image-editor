@@ -20,6 +20,17 @@ enum Change {
     Collapse { stack: i64, collapsed: bool },
 }
 
+pub const NO_PAIRS: &str = "No RAW+JPEG pairs were found in this folder.";
+
+/// "3 RAW+JPEG pairs stacked."
+pub fn paired(n: usize) -> String {
+    if n == 1 {
+        "1 RAW+JPEG pair stacked.".to_owned()
+    } else {
+        format!("{} RAW+JPEG pairs stacked.", crate::catalog_ext::count(n))
+    }
+}
+
 impl Library {
     /// Whether `Stack` may run: two or more photos selected in the grid.
     pub(super) fn can_stack(&self) -> bool {
@@ -121,6 +132,39 @@ impl Library {
                 .push(Level::Error, format!("The stack could not be saved. {e}")),
         }
         self.reload_photos(env);
+    }
+
+    /// Home → Stack RAW+JPEG: every photo of the folder shot as RAW+JPEG becomes a stack, the
+    /// raw file on top (as Lightroom shows such a pair as one photo).
+    pub(super) fn stack_pairs(&mut self, env: &mut Env) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let photos: Vec<(i64, &std::path::Path, Option<i64>)> = self
+            .photos
+            .iter()
+            .map(|p| (p.id, p.path.as_path(), p.stack.as_ref().map(|s| s.id)))
+            .collect();
+        let pairs = lf_catalog::stacks::raw_jpeg_pairs(&photos);
+        if pairs.is_empty() {
+            env.toasts.push(Level::Info, NO_PAIRS);
+            return;
+        }
+        env.jobs.spawn(Lane::Io, "stack pairs", move || {
+            let result = Catalog::open(&root)
+                .and_then(|c| {
+                    for (raw, jpeg) in &pairs {
+                        c.stack(&[*raw, *jpeg], *raw)?;
+                    }
+                    Ok(Some(paired(pairs.len())))
+                })
+                .map_err(|e| e.to_string());
+            Msg::Stacked {
+                root,
+                auto: false,
+                result,
+            }
+        });
     }
 
     /// Home → Auto-stack…: the selection when several photos are selected, else every photo
