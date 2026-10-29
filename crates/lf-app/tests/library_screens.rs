@@ -3406,3 +3406,43 @@ fn the_painter_gives_clicked_photos_its_keyword() {
         "the selection is left alone"
     );
 }
+
+/// Smart previews: once made, a photo whose file is gone still opens in Develop (from its
+/// preview), and its edits are kept.
+#[test]
+fn a_photo_opens_from_its_smart_preview_when_its_file_is_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 1);
+    import_folder(&mut h, &shoot, 1);
+    let (id, path) = {
+        let p = &h.state().lib.photos()[0];
+        (p.id, p.path.clone())
+    };
+    let root = dir.path().join("catalogue");
+    h.state_mut().lib.selection.click(id);
+    assert!(run_action(&mut h, Action::SmartPreviews));
+    step_until(&mut h, "the smart preview", |_| {
+        lf_app::smart_preview::has(&root, id)
+    });
+    std::fs::remove_file(&path).unwrap();
+    h.key_press(Key::D);
+    step_until(&mut h, "the photo to open", |s| s.lib.develop().is_ready());
+    assert!(h.state().lib.develop().opened().unwrap().smart_preview);
+    {
+        let st = h.state_mut();
+        st.lib.develop_mut().edit(|s| s.exposure = 0.5);
+        st.lib.develop_mut().commit(&mut st.toasts);
+    }
+    let c = lf_catalog::Catalog::open(&root).unwrap();
+    assert_eq!(
+        lf_catalog::edits::get_settings(&c, id)
+            .unwrap()
+            .unwrap()
+            .exposure,
+        0.5
+    );
+}

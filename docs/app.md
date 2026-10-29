@@ -968,6 +968,15 @@ replaced; another action holding the key loses it; an unknown action or key skip
 by the key handling, the ribbon's tooltips and Help. Help → Keyboard shortcuts' "Change…" waits
 for the next key (Esc cancels; `App::keys_capture`).
 
+Smart previews (`smart_preview.rs`, `Action::SmartPreviews`): each photo developed as the
+catalogue says at up to 2560 px (`lf_raw::open::open`; an 8-bit picture becomes a frame through
+`Developed::from_rgba8`) and kept in `<catalogue>/.lensflow/previews/` in the frame cache's
+format, named by `CacheKey::named("photo-<id>")`. When a photo's file is missing and it has one,
+Develop's open uses it (`OpenedPhoto::smart_preview`: no sidecar reconcile, no as-shot kelvin, a
+note in the info strip) and `photo_path` is cleared so no sidecar is written; the catalogue keeps
+the edits and, being newer, rewrites the sidecar on the next open of the original. Library lets a
+missing photo open when it has a preview.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

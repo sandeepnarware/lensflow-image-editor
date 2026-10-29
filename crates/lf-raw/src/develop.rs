@@ -44,6 +44,29 @@ const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
 /// Part of the frame cache key: bump whenever develop output changes for the same input.
 pub const DEVELOP_ALGO_VERSION: u32 = 2;
 
+impl Developed {
+    /// An 8-bit picture (already upright) as a developed frame: the same gamma-encoded values,
+    /// as halves; `full` is the photo's size before `img` was made smaller.
+    pub fn from_rgba8(img: &RgbaImage, full: (u32, u32)) -> Developed {
+        let data = img
+            .as_raw()
+            .iter()
+            .map(|&v| f16::from_f32(f32::from(v) / 255.0))
+            .collect();
+        Developed {
+            frame: FloatFrame {
+                width: img.width(),
+                height: img.height(),
+                data,
+            },
+            full_width: full.0,
+            full_height: full.1,
+            reduced: (img.width(), img.height()) != full,
+            orientation_applied: true,
+        }
+    }
+}
+
 /// A developed picture.
 #[derive(Debug, Clone)]
 pub struct Developed {

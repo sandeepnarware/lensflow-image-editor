@@ -97,6 +97,8 @@ pub struct OpenedPhoto {
     pub file_name: String,
     /// How long opening took.
     pub millis: u128,
+    /// Opened from its smart preview (the file is offline): no sidecar is written.
+    pub smart_preview: bool,
 }
 
 impl fmt::Debug for OpenedPhoto {
@@ -144,11 +146,18 @@ pub fn run(req: Request) -> Msg {
 
 fn open_photo(req: &Request) -> Result<OpenedPhoto, String> {
     let started = Instant::now();
+    // The file is offline: its smart preview, if it has one.
+    let smart = !req.path.exists() && crate::smart_preview::has(&req.root, req.photo_id);
     let catalog =
         Catalog::open(&req.root).map_err(|e| format!("The catalogue could not be read ({e})."))?;
     // An edit made on another machine shows on reopen; a damaged sidecar is recorded and
     // skipped, never reconciled as if absent.
-    let sidecar_error = match edits::reconcile_on_open(&catalog, req.photo_id, &req.path) {
+    let reconciled = if smart {
+        Ok(OnOpen::Reconciled(lf_catalog::Source::Db))
+    } else {
+        edits::reconcile_on_open(&catalog, req.photo_id, &req.path)
+    };
+    let sidecar_error = match reconciled {
         Ok(OnOpen::Reconciled(_)) => None,
         Ok(OnOpen::Damaged(message)) => Some(message),
         Err(e) => {
@@ -164,11 +173,15 @@ fn open_photo(req: &Request) -> Result<OpenedPhoto, String> {
         .unwrap_or_else(EditSettings::default_settings);
     drop(catalog);
     let develop = DevelopSettings::from_settings(&settings);
-    let opened = match &req.cache {
-        Some(cache) => open_cached(&req.path, req.quality, &develop, req.max_edge, cache),
-        None => lf_raw::open::open(&req.path, req.quality, &develop, req.max_edge),
-    }
-    .map_err(|e| e.to_string())?;
+    let opened = if smart {
+        crate::smart_preview::open(&req.root, req.photo_id, &req.path)?
+    } else {
+        match &req.cache {
+            Some(cache) => open_cached(&req.path, req.quality, &develop, req.max_edge, cache),
+            None => lf_raw::open::open(&req.path, req.quality, &develop, req.max_edge),
+        }
+        .map_err(|e| e.to_string())?
+    };
     let sample = super::auto::Sample::of(&opened.picture);
     let renderer = lf_raw::render::renderer_for(&req.gpu, &opened).map_err(|e| e.to_string())?;
     let Opened {
@@ -189,7 +202,12 @@ fn open_photo(req: &Request) -> Result<OpenedPhoto, String> {
         full_height,
         reduced,
         sample,
-        as_shot_kelvin: lf_raw::open::as_shot_kelvin(&req.path),
+        as_shot_kelvin: if smart {
+            None
+        } else {
+            lf_raw::open::as_shot_kelvin(&req.path)
+        },
+        smart_preview: smart,
         develop,
         settings,
         sidecar_error,

@@ -958,6 +958,17 @@ impl Library {
             } => self.auto_imported(root, folder, result, env),
             Msg::Geotagged { root, result } => self.geotagged(root, result, env),
             Msg::WebGalleryDone(result) => self.web_gallery_done(result, env),
+            Msg::SmartPreviews(result) => match result {
+                Ok((made, failed)) => env.toasts.push(
+                    if failed == 0 {
+                        Level::Success
+                    } else {
+                        Level::Warning
+                    },
+                    crate::library::smart_previews_text(made, failed),
+                ),
+                Err(e) => env.toasts.push(Level::Error, e),
+            },
             Msg::Similar { root, of, result } => self.similar_found(root, of, result, env),
             Msg::Stacked { root, auto, result } => {
                 if auto {
@@ -1339,7 +1350,12 @@ impl Library {
         let Some(photo) = self.photo(id) else {
             return;
         };
-        if photo.missing {
+        if photo.missing
+            && !self
+                .root
+                .as_deref()
+                .is_some_and(|r| crate::smart_preview::has(r, id))
+        {
             env.toasts.push(
                 Level::Warning,
                 "This photo is missing from its folder, so it cannot be opened. Reconnect the \
@@ -1667,6 +1683,7 @@ impl Library {
             Action::StackPairs => !develop && !self.photos.is_empty() && self.can_add(),
             Action::FindSimilar => !develop && self.selection.active().is_some(),
             Action::Painter => !develop && !self.photos.is_empty(),
+            Action::SmartPreviews => !develop && !self.photos.is_empty() && self.root.is_some(),
             Action::AssistedCulling | Action::FindPeople | Action::FindKeywords => {
                 !develop
                     && self.local_ai
@@ -1818,6 +1835,7 @@ impl Library {
             Action::StackPairs => self.stack_pairs(env),
             Action::FindSimilar => self.find_similar(env),
             Action::Painter => self.toggle_painter(),
+            Action::SmartPreviews => self.build_smart_previews(env),
             Action::NewAlbum => self.open_album_dialog(crate::dialogs::album::Purpose::New),
             Action::NewSmartAlbum => {
                 self.open_album_dialog(crate::dialogs::album::Purpose::NewSmart)
@@ -2326,6 +2344,35 @@ impl Library {
         });
     }
 
+    /// Library → Smart previews: a preview of every selected photo (or the folder's), so they
+    /// open while their drive is away; on the `Long` lane.
+    fn build_smart_previews(&mut self, env: &mut Env) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let ids: Vec<i64> = if self.selection.current.len() > 1 {
+            self.selected_in_order()
+        } else {
+            self.photos.iter().map(|p| p.id).collect()
+        };
+        let photos: Vec<(i64, PathBuf)> = ids
+            .iter()
+            .filter_map(|id| self.photo(*id))
+            .filter(|p| !p.missing)
+            .map(|p| (p.id, p.path.clone()))
+            .collect();
+        env.toasts.push(Level::Info, MAKING_PREVIEWS);
+        env.jobs.spawn(Lane::Long, "smart previews", move || {
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            Msg::SmartPreviews(crate::smart_preview::build(
+                &root,
+                &photos,
+                |_, _| {},
+                &stop,
+            ))
+        });
+    }
+
     /// `Ctrl+[` / `Ctrl+]`: a quarter turn of the open photo (one history step), or of every
     /// selected photo in the grid (their edits on the `Long` lane, as a paste is).
     fn turn_photos(&mut self, dir: lf_settings::geometry::TurnDir, env: &mut Env) {
@@ -2631,6 +2678,17 @@ pub fn remove_folder_text(photos: usize) -> String {
          deleted: the photos and the edit files beside them stay where they are.",
         count(photos)
     )
+}
+
+pub const MAKING_PREVIEWS: &str = "Making smart previews…";
+
+/// "12 smart previews made." (and how many photos could not be read).
+pub fn smart_previews_text(made: usize, failed: usize) -> String {
+    let mut t = format!("{} made.", count(made).replace("photo", "smart preview"));
+    if failed > 0 {
+        t.push_str(&format!(" {} could not be read.", count(failed)));
+    }
+    t
 }
 
 #[cfg(test)]

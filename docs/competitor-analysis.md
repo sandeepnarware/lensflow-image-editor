@@ -86,6 +86,7 @@ close or competitors ship new features.
 - Find similar photos: done, Home → Stacks → Similar (by fingerprint).
 - Painter tool (Lightroom's spray can): done, Home → Selection → Painter.
 - Customizable keyboard shortcuts (Capture One's): done, Help → Keyboard shortcuts.
+- Smart previews for offline editing (Lightroom's): done, Home → Photos → Previews.
 
 ### Tier 4: large or strategic
 

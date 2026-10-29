@@ -261,6 +261,10 @@ Your own keyboard shortcuts (Help → Keyboard shortcuts): "Change…" beside an
 the key you want (with Ctrl, Shift or Alt); it is that action's alone from then on. "Reset all"
 goes back to the defaults.
 
+Smart previews (Home → Photos → Previews): smaller copies (up to 2560 px) of the selected photos
+(or the folder's) kept in the catalogue, so a photo whose drive is not connected still opens in
+Develop and can be edited; its sidecar is written when the original is back.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

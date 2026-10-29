@@ -926,6 +926,10 @@ impl Develop {
                         self.session.warn_damaged(photo_id, &photo.file_name, &path);
                     }
                 }
+                if photo.smart_preview {
+                    // The original is offline: edits stay in the catalogue alone.
+                    self.photo_path = None;
+                }
                 self.state = State::Ready(photo, photo_id);
                 if reopened {
                     // The settings may have changed again while it decoded (Linear, then
@@ -936,24 +940,6 @@ impl Develop {
                 self.last_before = None;
                 self.navigator_drawn = None;
                 self.hover_settings = None;
-                self.hover_settings = None;
-                self.readout_img = None;
-                self.readout_img = None;
-                self.navigator_drawn = None;
-                self.hover_settings = None;
-                self.hover_settings = None;
-                self.readout_img = None;
-                self.readout_img = None;
-                self.last_before = None;
-                self.navigator_drawn = None;
-                self.hover_settings = None;
-                self.hover_settings = None;
-                self.readout_img = None;
-                self.readout_img = None;
-                self.navigator_drawn = None;
-                self.hover_settings = None;
-                self.hover_settings = None;
-                self.readout_img = None;
                 self.readout_img = None;
                 self.last_histogram = None;
                 self.settings_changed();
@@ -1041,7 +1027,9 @@ impl Develop {
             for line in info::lines(&opened.exif) {
                 ui.label(RichText::new(line).color(theme::MUTED));
             }
-            if opened.reduced {
+            if opened.smart_preview {
+                ui.label(RichText::new(crate::smart_preview::NOTE).color(theme::WARNING));
+            } else if opened.reduced {
                 let edge = opened.renderer.width.max(opened.renderer.height);
                 ui.label(RichText::new(info::reduced_note(edge)).color(theme::WARNING));
             }

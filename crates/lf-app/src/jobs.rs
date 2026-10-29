@@ -282,6 +282,8 @@ pub enum Msg {
         of: i64,
         result: Result<Vec<i64>, String>,
     },
+    /// Smart previews made, and photos that could not be read.
+    SmartPreviews(Result<(usize, usize), String>),
     /// Web gallery: the site's page, or why it could not be made.
     WebGalleryDone(Result<PathBuf, String>),
     /// "Tag from GPX track": how many photos were placed, of how many.
@@ -893,6 +895,7 @@ pub(crate) mod owners {
             | Msg::AutoImported { .. }
             | Msg::Geotagged { .. }
             | Msg::WebGalleryDone(..)
+            | Msg::SmartPreviews(..)
             | Msg::Similar { .. }
             | Msg::StackProgress { .. }
             | Msg::AlbumPhotos { .. }
@@ -1066,6 +1069,7 @@ pub(crate) mod owners {
                 result: Ok((0, 0)),
             },
             Msg::WebGalleryDone(Err("no".into())),
+            Msg::SmartPreviews(Ok((0, 0))),
             Msg::Similar {
                 root: dir.join("elsewhere"),
                 of: 1,

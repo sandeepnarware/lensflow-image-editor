@@ -121,6 +121,8 @@ pub enum Action {
     FindSimilar,
     /// Click or drag across photos to give them a keyword, rating, label or flag.
     Painter,
+    /// Smaller copies kept in the catalogue, so photos open while their drive is away.
+    SmartPreviews,
     // Albums
     /// Make an album (with the selected photos).
     NewAlbum,
@@ -243,6 +245,7 @@ impl Action {
             Action::StackPairs => "Stack RAW+JPEG pairs",
             Action::FindSimilar => "Find similar photos",
             Action::Painter => "Painter",
+            Action::SmartPreviews => "Build smart previews",
             Action::NewAlbum => "New album…",
             Action::NewSmartAlbum => "New smart album…",
             Action::AddToAlbum => "Add to album…",

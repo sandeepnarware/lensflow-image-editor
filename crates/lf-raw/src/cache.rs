@@ -109,6 +109,17 @@ impl CacheKey {
         })
     }
 
+    /// A key by name alone (not by a file's content): for frames kept on purpose, such as a
+    /// photo's smart preview, found again by its name.
+    pub fn named(name: &str) -> CacheKey {
+        let mut hasher = Sha256::new();
+        hasher.update(b"named:");
+        hasher.update(name.as_bytes());
+        CacheKey {
+            name: format!("{}.lff", hex::encode(hasher.finalize())),
+        }
+    }
+
     /// The entry's file name.
     pub fn file_name(&self) -> &str {
         &self.name
