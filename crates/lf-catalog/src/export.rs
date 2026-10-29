@@ -51,6 +51,8 @@ pub enum Format {
     Avif { quality: u8 },
     /// 16-bit RGB.
     Tiff16,
+    /// A linear DNG (16-bit, linear sRGB light), for raw editors.
+    Dng,
 }
 
 impl Format {
@@ -61,6 +63,7 @@ impl Format {
             Format::WebP | Format::WebPLossy { .. } => "webp",
             Format::Avif { .. } => "avif",
             Format::Tiff16 => "tif",
+            Format::Dng => "dng",
         }
     }
 }
@@ -460,7 +463,7 @@ fn export_one(
     };
     let mut renderer = lf_raw::render::renderer_for(gpu, &opened).map_err(gpu_fail)?;
     let pixels = match spec.format {
-        Format::Tiff16 => {
+        Format::Tiff16 | Format::Dng => {
             let f = renderer.render_f16(&settings).map_err(gpu_fail)?;
             let data: Vec<u16> = f
                 .data
@@ -527,6 +530,12 @@ fn export_one(
     {
         return Err(fail(
             &"AVIF exports are sRGB only; choose sRGB or another format",
+            &row.path,
+        ));
+    }
+    if spec.space != crate::colour::OutputSpace::Srgb && spec.format == Format::Dng {
+        return Err(fail(
+            &"DNG exports are in the camera's own colour (sRGB here); choose sRGB",
             &row.path,
         ));
     }
@@ -633,6 +642,24 @@ fn export_one(
             };
             bytes = crate::containers::tiff16(w, h, img.as_raw(), &icc, packet, &tags)
                 .map_err(|e| encode_failed(&e))?;
+        }
+        (Format::Dng, Pixels::Sixteen(img)) => {
+            let (w, h) = img.dimensions();
+            // Linear light, as a raw file holds it.
+            let linear: Vec<u16> = img
+                .as_raw()
+                .iter()
+                .map(|&v| ((f64::from(v) / 65535.0).powf(2.2) * 65535.0).round() as u16)
+                .collect();
+            let tags = crate::containers::TiffTags {
+                artist: facts.artist.clone(),
+                copyright: facts.copyright.clone(),
+                description: None,
+                make: facts.make.clone(),
+                model: facts.model.clone(),
+            };
+            bytes =
+                crate::containers::dng16(w, h, &linear, &tags).map_err(|e| encode_failed(&e))?;
         }
         _ => unreachable!("the render matches the format"),
     }

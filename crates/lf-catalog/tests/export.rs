@@ -830,7 +830,7 @@ fn every_format_carries_the_srgb_profile_and_png_and_webp_keep_the_exif() {
                 assert_eq!(bytes.windows(6).filter(|w| *w == b"Exif\0\0").count(), 1);
             }
             // Not in this loop: `lossy_webp_avif_png_and_tiff_carry_what_they_can` covers them.
-            Format::Tiff16 | Format::WebPLossy { .. } | Format::Avif { .. } => {}
+            Format::Tiff16 | Format::Dng | Format::WebPLossy { .. } | Format::Avif { .. } => {}
         }
         // The pixels decode, at the photo's size.
         let img = image::open(path).unwrap();
@@ -1023,4 +1023,39 @@ fn an_export_in_adobe_rgb_is_converted_and_carries_that_profile() {
     .unwrap();
     assert_eq!(report.exported.len(), 0);
     assert!(report.failed[0].1.to_string().contains("sRGB only"));
+}
+
+/// A DNG export is a raw file of the edited photo: our own raw decoder reads it, and developed
+/// plainly (linear, no curve) it gives the photo's colours back.
+#[test]
+fn a_dng_export_develops_back_to_the_photo() {
+    use lf_settings::{DevelopSettings, Highlights, Profile};
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    RgbaImage::from_pixel(64, 48, image::Rgba([110, 160, 200, 255]))
+        .save(src.path().join("c.png"))
+        .unwrap();
+    let (c, ids) = catalogue(src.path());
+    let out = tempfile::tempdir().unwrap();
+    let sp = spec(Format::Dng, out.path());
+    let done = export::run(gpu, &c, &ids, &sp, &mut |_, _| ControlFlow::Continue(())).unwrap();
+    assert!(done.failed.is_empty(), "{:?}", done.failed);
+    let path = &done.exported[0].path;
+    assert_eq!(path.extension().unwrap(), "dng");
+    let raw = lf_raw::decode::decode_raw(path).expect("a raw file");
+    assert_eq!((raw.width, raw.height), (64, 48));
+    let plain = DevelopSettings {
+        profile: Profile::Linear,
+        highlights: Highlights::Clip,
+        dcp: None,
+    };
+    let d = lf_raw::develop::develop(&raw, lf_raw::demosaic::Quality::Best, &plain, 4096).unwrap();
+    let i = ((24 * d.frame.width + 32) * 4) as usize;
+    let px: Vec<f32> = d.frame.data[i..i + 3]
+        .iter()
+        .map(|v| v.to_f32() * 255.0)
+        .collect();
+    for (got, want) in px.iter().zip([110.0, 160.0, 200.0]) {
+        assert!((got - want).abs() < 3.0, "{px:?}");
+    }
 }

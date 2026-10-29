@@ -54,7 +54,7 @@ close or competitors ship new features.
 - ~~Contact sheets~~ (done: Print's 9, 20 and 48 a page, with a sheet title, page numbers and Details captions) and ~~slideshows~~ (done: View → Slideshow).
 - ~~Film negative conversion (Capture One 16.7, Negative Lab Pro)~~ (done: Develop → Film negative).
 - Pixel-shift and high-resolution merges.
-- DNG and JPEG XL export.
+- ~~DNG export~~ (done: Export → DNG, linear) and JPEG XL export.
 
 ### Tier 4: large or strategic
 

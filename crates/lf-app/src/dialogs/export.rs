@@ -75,6 +75,7 @@ pub enum FormatKind {
     WebP,
     Avif,
     Tiff16,
+    Dng,
 }
 
 /// A watermark of text or of a logo picture.
@@ -196,6 +197,7 @@ impl ExportForm {
                 f.quality = quality.clamp(1, 100);
             }
             Format::Tiff16 => f.format = FormatKind::Tiff16,
+            Format::Dng => f.format = FormatKind::Dng,
         }
         f.sharpen = spec.sharpen;
         if let Some(mark) = &spec.watermark {
@@ -276,6 +278,7 @@ impl ExportForm {
                 quality: self.quality.clamp(1, 100),
             },
             FormatKind::Tiff16 => Format::Tiff16,
+            FormatKind::Dng => Format::Dng,
         };
         let watermark = if self.watermark {
             let stamp = match self.stamp {
@@ -580,6 +583,8 @@ impl ExportDialog {
                     ui.radio_value(&mut f.format, FormatKind::Avif, "AVIF")
                         .on_hover_text("Smallest files at the same look; newer browsers and apps");
                     ui.radio_value(&mut f.format, FormatKind::Tiff16, "TIFF 16-bit");
+                    ui.radio_value(&mut f.format, FormatKind::Dng, "DNG")
+                        .on_hover_text("A linear DNG of the edited photo, for raw editors");
                 });
                 ui.end_row();
                 if f.format == FormatKind::WebP {

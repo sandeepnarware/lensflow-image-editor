@@ -219,3 +219,130 @@ mod tests {
         assert!(matches!(back, image::DynamicImage::ImageRgb16(_)));
     }
 }
+
+/// What a DNG export says about the photo's colour: the camera's RGB is linear sRGB, so the
+/// colour matrix (XYZ D65 to camera) is XYZ to linear sRGB, and a neutral is (1, 1, 1).
+const XYZ_D65_TO_LINEAR_SRGB: [f64; 9] = [
+    3.240_454_2,
+    -1.537_138_5,
+    -0.498_531_4,
+    -0.969_266,
+    1.876_010_8,
+    0.041_556,
+    0.055_643_4,
+    -0.204_025_9,
+    1.057_225_2,
+];
+
+/// A linear DNG (1.4) of `data` (`width` × `height` × 3, 16-bit linear sRGB light): a
+/// `LinearRaw` image any raw editor develops, with `make`/`model` as its camera when given.
+pub fn dng16(width: u32, height: u32, data: &[u16], tags: &TiffTags) -> Result<Vec<u8>, String> {
+    use tiff::encoder::{Rational, SRational, TiffEncoder, colortype::RGB16};
+    use tiff::tags::Tag;
+    let text = |e: tiff::TiffError| e.to_string();
+    let camera = [tags.make.as_deref(), tags.model.as_deref()]
+        .into_iter()
+        .flatten()
+        .filter(|v| v.is_ascii() && !v.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let camera = if camera.is_empty() {
+        "LensFlow export".to_owned()
+    } else {
+        camera
+    };
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = TiffEncoder::new(Cursor::new(&mut bytes)).map_err(text)?;
+        let mut image = encoder.new_image::<RGB16>(width, height).map_err(text)?;
+        let dir = image.encoder();
+        dir.write_tag(Tag::NewSubfileType, 0u32).map_err(text)?;
+        // LinearRaw: three samples a pixel, already demosaiced, in the camera's (here sRGB's)
+        // linear space.
+        dir.write_tag(Tag::PhotometricInterpretation, 34892u16)
+            .map_err(text)?;
+        dir.write_tag(Tag::Unknown(50706), &[1u8, 4, 0, 0][..])
+            .map_err(text)?;
+        dir.write_tag(Tag::Unknown(50707), &[1u8, 1, 0, 0][..])
+            .map_err(text)?;
+        dir.write_tag(Tag::Unknown(50708), camera.as_str())
+            .map_err(text)?;
+        dir.write_tag(
+            Tag::Make,
+            tags.make
+                .as_deref()
+                .filter(|m| m.is_ascii())
+                .unwrap_or("LensFlow"),
+        )
+        .map_err(text)?;
+        dir.write_tag(Tag::Model, camera.as_str()).map_err(text)?;
+        let matrix: Vec<SRational> = XYZ_D65_TO_LINEAR_SRGB
+            .iter()
+            .map(|v| SRational {
+                n: (v * 1_000_000.0).round() as i32,
+                d: 1_000_000,
+            })
+            .collect();
+        dir.write_tag(Tag::Unknown(50721), &matrix[..])
+            .map_err(text)?;
+        // Calibrated under D65; the white balance is already done (neutral is 1, 1, 1).
+        dir.write_tag(Tag::Unknown(50778), 21u16).map_err(text)?;
+        let neutral: [Rational; 3] = std::array::from_fn(|_| Rational { n: 1, d: 1 });
+        dir.write_tag(Tag::Unknown(50728), &neutral[..])
+            .map_err(text)?;
+        dir.write_tag(Tag::Unknown(50717), 65535u32).map_err(text)?;
+        if let Some(v) = tags
+            .copyright
+            .as_deref()
+            .filter(|v| v.is_ascii() && !v.is_empty())
+        {
+            dir.write_tag(Tag::Copyright, v).map_err(text)?;
+        }
+        if let Some(v) = tags
+            .artist
+            .as_deref()
+            .filter(|v| v.is_ascii() && !v.is_empty())
+        {
+            dir.write_tag(Tag::Artist, v).map_err(text)?;
+        }
+        image.write_data(data).map_err(text)?;
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod dng_tests {
+    use super::*;
+
+    #[test]
+    fn a_dng_reads_back_as_linear_rgb_with_its_colour_matrix() {
+        // A gradient: red rising across, blue down.
+        let (w, h) = (16u32, 8u32);
+        let mut data = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                data.extend([x as u16 * 4000, 20_000, y as u16 * 8000]);
+            }
+        }
+        let tags = TiffTags {
+            make: Some("Canon".into()),
+            model: Some("EOS R5".into()),
+            ..TiffTags::default()
+        };
+        let bytes = dng16(w, h, &data, &tags).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.dng");
+        std::fs::write(&path, &bytes).unwrap();
+        let raw = lf_raw::decode::decode_raw(&path).expect("a raw decoder reads it");
+        assert_eq!((raw.width, raw.height), (w, h));
+        assert!(matches!(raw.cfa, lf_raw::Cfa::Rgb), "{:?}", raw.cfa);
+        // The samples are the ones written (less any black level, here none).
+        let at = |x: u32, y: u32, c: usize| raw.data[((y * w + x) * 3) as usize + c];
+        assert_eq!(at(5, 3, 0), 20_000);
+        assert_eq!(at(5, 3, 1), 20_000);
+        assert_eq!(at(5, 3, 2), 24_000);
+        let m = raw.xyz_to_cam.expect("its colour matrix");
+        assert!((m[0][0] - 3.2404542).abs() < 1e-3, "{m:?}");
+        assert_eq!(raw.wb[0], raw.wb[1], "neutral white balance");
+    }
+}
