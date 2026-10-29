@@ -182,6 +182,12 @@ photos takes them out (they are never matched to that person again); Forget drop
 and leaves the faces to be named again. Names are found by the search box. A photo is
 scanned once, until its file changes; nothing leaves the computer.
 
+Keywords (AI → Find keywords): suggests up to five words per photo from a list of about
+two hundred (beach, cake, bride, sunset, dog...), so the search box finds photos nobody has
+keyworded. Suggestions are kept apart from your keywords and never written to sidecars or
+exports; the Metadata panel shows them under "Suggested by AI", and a click keeps one as an
+ordinary keyword. The word list is `crates/lf-ai/data/keywords.txt`.
+
 The window needs a graphics adapter. With no driver it runs on a software
 adapter (WARP on Windows, lavapipe on Linux) and says "No graphics driver found:
 previews will be slow."

@@ -21,6 +21,7 @@ pub mod print;
 pub mod scores;
 pub mod sidecar;
 pub mod stacks;
+pub mod tags;
 pub mod thumbs;
 pub mod versions;
 

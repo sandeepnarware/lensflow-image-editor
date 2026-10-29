@@ -708,6 +708,18 @@ shows a person's photos in place of a folder (`Msg::PersonPhotos`) and changes t
 (`Msg::PeopleChanged`). `PhotoRow::people` carries the names, so the search box and smart
 albums' words find them.
 
+AI keywords (AI → Find keywords, `AiTool::FindKeywords`, `ai_job::find_keywords` on `Long`)
+render photos without a fresh look as shot at 512 px. `lf_ai::keywords::Tagger` runs CLIP
+ViT-B/32's image model (int8, 224 × 224 centre square, CLIP's mean and std) and compares the
+unit embedding with each word's text embedding, worked out ahead of time over six prompt
+templates by `scripts/keywords/embed.py` (needs CLIP's text model and tokenizer; the app
+never does) and shipped as `data/keywords.f16`. A word is suggested at cosine 0.27 or more
+with at least 8 % of the softmax (scale 100) over the list, five at most. `lf_catalog::tags`
+(schema v13: `ai_keywords`, `tag_scans` keyed to size and mtime) keeps them apart from
+`keywords`, so they never reach sidecars or XMP; `PhotoRow::ai_keywords` carries them to
+search, and the Metadata panel's "Suggested by AI" turns one into a keyword
+(`Change::AddKeywords`).
+
 `crates/lf-ai/tests/models.rs` runs the real models when `LF_AI_DIR` names a folder holding
 them (`LF_AI_DOWNLOAD=1` fetches them there); otherwise those tests return at once.
 

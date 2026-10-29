@@ -24,6 +24,7 @@ pub const SEVERAL: &str = "Several values";
 pub const ADD_KEYWORDS: &str = "Add keywords";
 pub const ADD_HINT: &str = "Add keywords, separated by commas";
 pub const IN_FOLDER: &str = "Keywords in this folder";
+pub const SUGGESTED: &str = "Suggested by AI";
 pub const SAVE_FAILED: &str = "Could not save the metadata.";
 
 /// What the panel keeps between frames: the text being typed, for the photos it was
@@ -201,6 +202,34 @@ impl Library {
             }
             self.meta.adding.clear();
             add.request_focus();
+        }
+
+        // AI keywords of the selection not yet among its keywords: a click keeps one.
+        let mut suggested: Vec<String> = Vec::new();
+        for id in &ids {
+            if let Some(row) = self.photo(*id) {
+                for w in &row.ai_keywords {
+                    let taken = keywords.iter().any(|(k, _)| k.eq_ignore_ascii_case(w));
+                    if !taken && !suggested.iter().any(|s| s.eq_ignore_ascii_case(w)) {
+                        suggested.push(w.clone());
+                    }
+                }
+            }
+        }
+        if !suggested.is_empty() {
+            ui.add_space(6.0);
+            ui.label(RichText::new(SUGGESTED).color(theme::MUTED));
+            ui.horizontal_wrapped(|ui| {
+                for word in &suggested {
+                    if ui
+                        .small_button(format!("+ {word}"))
+                        .on_hover_text("Keep as a keyword of the selected photos")
+                        .clicked()
+                    {
+                        changes.push(Change::AddKeywords(vec![word.clone()]));
+                    }
+                }
+            });
         }
 
         // The folder's keywords: a click puts one on the selection.

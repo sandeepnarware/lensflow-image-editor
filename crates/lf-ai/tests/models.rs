@@ -216,3 +216,29 @@ fn faces_are_described_as_unit_vectors_that_tell_pictures_apart() {
     let other = id.describe(&img, &face_at(400.0, 300.0)).expect("describe");
     assert!(lf_ai::identity::cosine(&a, &other) < 0.99, "another place");
 }
+
+#[test]
+fn the_landscape_fixture_is_keyworded_as_a_landscape() {
+    let Some(engine) = engine(&lf_ai::keywords::KEYWORD_MODELS) else {
+        return;
+    };
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/sources/landscape.png"
+    );
+    let img = Rgb::from_rgba8(&image::open(path).expect("fixture").to_rgba8());
+    let mut tagger = lf_ai::keywords::Tagger::new(&engine).expect("tagger");
+    let words: Vec<&str> = tagger
+        .tag(&img)
+        .expect("tag")
+        .iter()
+        .map(|s| s.word)
+        .collect();
+    assert!(!words.is_empty() && words.len() <= lf_ai::keywords::MAX_WORDS);
+    assert!(
+        words
+            .iter()
+            .any(|w| ["hills", "landscape", "countryside", "field", "mountains"].contains(w)),
+        "{words:?}"
+    );
+}

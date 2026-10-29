@@ -12,6 +12,7 @@ pub mod cull;
 pub mod faces;
 pub mod identity;
 pub mod inpaint;
+pub mod keywords;
 pub mod restore;
 pub mod segment;
 pub mod tiles;

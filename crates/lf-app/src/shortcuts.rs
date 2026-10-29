@@ -65,6 +65,8 @@ pub enum Action {
     AssistedCulling,
     /// Find the faces in photos and group them into people to name.
     FindPeople,
+    /// Suggest keywords for photos, for search.
+    FindKeywords,
     // Stacks
     /// Gather the selected photos into a stack under the active one.
     Stack,
@@ -164,6 +166,7 @@ impl Action {
             Action::AiRemoveObjects => "Remove objects…",
             Action::AssistedCulling => "Assisted culling…",
             Action::FindPeople => "Find people…",
+            Action::FindKeywords => "Find keywords…",
             Action::Stack => "Group into stack",
             Action::Unstack => "Unstack",
             Action::ToggleStack => "Expand / collapse stack",

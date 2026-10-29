@@ -6,7 +6,8 @@
 //!
 //! The licences: ONNX Runtime MIT; IS-Net (subject) Apache-2.0; SkySeg MIT; SCUNet
 //! Apache-2.0; Real-ESRGAN BSD-3-Clause; LaMa Apache-2.0; YuNet MIT;
-//! open-closed-eye-0001 Apache-2.0; MediaPipe selfie multiclass Apache-2.0; SFace Apache-2.0.
+//! open-closed-eye-0001 Apache-2.0; MediaPipe selfie multiclass Apache-2.0; SFace Apache-2.0;
+//! CLIP ViT-B/32 MIT.
 //! See `NOTICE`.
 
 use sha2::{Digest, Sha256};
@@ -152,6 +153,16 @@ pub const IDENTITY: Asset = Asset {
     url: "https://huggingface.co/opencv/face_recognition_sface/resolve/3d7082438a6e4551e840c9b2bb60b71e8da4b524/face_recognition_sface_2021dec.onnx",
     size: 38_696_353,
     sha256: "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+    unpack: Unpack::File,
+};
+
+/// CLIP ViT-B/32's image model (OpenAI, MIT; int8-quantised ONNX by Xenova): a photo as 512
+/// numbers in the space the keyword list's text descriptions share, at 224 × 224.
+pub const CLIP_VISION: Asset = Asset {
+    file: "clip-vit-base-patch32-vision-int8.onnx",
+    url: "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/6b7c523703ae26e39be4b03774966f8571c7f523/onnx/vision_model_quantized.onnx",
+    size: 89_117_001,
+    sha256: "583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0ab9839299",
     unpack: Unpack::File,
 };
 

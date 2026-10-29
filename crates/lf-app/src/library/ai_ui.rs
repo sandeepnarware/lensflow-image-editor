@@ -161,6 +161,22 @@ impl Library {
         self.ai = Some(AiDialog::new(ids, tool, download));
     }
 
+    /// AI → Find keywords: the selection when several photos are selected, else every photo
+    /// the grid shows.
+    pub(super) fn open_find_keywords(&mut self) {
+        let ids = if self.selection.current.len() > 1 {
+            self.selected_in_order()
+        } else {
+            self.order.clone()
+        };
+        if ids.is_empty() || self.ai.is_some() {
+            return;
+        }
+        let tool = AiTool::FindKeywords;
+        let download = self.ai_engine().to_download(&tool.models());
+        self.ai = Some(AiDialog::new(ids, tool, download));
+    }
+
     /// The photos the finished culling run says look wrong.
     fn cull_issues(&self) -> Vec<i64> {
         match self.ai.as_ref().map(|d| &d.stage) {
@@ -181,6 +197,13 @@ impl Library {
                 ..
             })
         ) {
+            self.reload_photos(env);
+        }
+        // New suggestions: the rows (which carry them for search) are read again.
+        if let Ok(Report {
+            keywords: Some(_), ..
+        }) = &result
+        {
             self.reload_photos(env);
         }
         // New faces: the People list (and the rows' names) are read again.

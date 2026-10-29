@@ -290,6 +290,22 @@ CREATE TABLE face_scans (
     mtime INTEGER NOT NULL
 );
 "#,
+    // AI keywords (`crate::tags`): suggested words, apart from the user's keywords, and which
+    // files have been looked at for them.
+    r#"
+CREATE TABLE ai_keywords (
+    photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+    keyword TEXT NOT NULL COLLATE NOCASE,
+    score REAL NOT NULL,
+    PRIMARY KEY (photo_id, keyword)
+);
+CREATE INDEX ai_keywords_word ON ai_keywords(keyword);
+CREATE TABLE tag_scans (
+    photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+    file_size INTEGER NOT NULL,
+    mtime INTEGER NOT NULL
+);
+"#,
 ];
 
 pub struct Catalog {
@@ -539,6 +555,8 @@ pub struct PhotoRow {
     pub stack: Option<Stack>,
     /// The named people in it, by name ([`crate::people`]).
     pub people: Vec<String>,
+    /// Words AI keywording suggested for it, surest first ([`crate::tags`]).
+    pub ai_keywords: Vec<String>,
 }
 
 pub(crate) const PHOTO_COLUMNS: &str =
@@ -560,7 +578,9 @@ pub(crate) const PHOTO_COLUMNS: &str =
      (SELECT k.collapsed FROM stacks k WHERE k.id = p.stack_id),
      (SELECT group_concat(name, char(31)) FROM
          (SELECT DISTINCT n.name FROM faces f JOIN people n ON n.id = f.person_id
-          WHERE f.photo_id = p.id ORDER BY n.name))";
+          WHERE f.photo_id = p.id ORDER BY n.name)),
+     (SELECT group_concat(keyword, char(31)) FROM
+         (SELECT keyword FROM ai_keywords a WHERE a.photo_id = p.id ORDER BY score DESC))";
 
 pub(crate) fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
     Ok(PhotoRow {
@@ -622,6 +642,10 @@ pub(crate) fn photo_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoRow> {
         },
         people: r
             .get::<_, Option<String>>(32)?
+            .map(|k| k.split('\u{1f}').map(str::to_owned).collect())
+            .unwrap_or_default(),
+        ai_keywords: r
+            .get::<_, Option<String>>(33)?
             .map(|k| k.split('\u{1f}').map(str::to_owned).collect())
             .unwrap_or_default(),
     })

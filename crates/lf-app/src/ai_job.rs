@@ -40,6 +40,8 @@ pub enum AiTool {
     /// Faces found, described and grouped into people in the catalogue
     /// ([`lf_ai::identity`], [`lf_catalog::people`]).
     FindPeople,
+    /// Words suggested for each photo, for search ([`lf_ai::keywords`], [`lf_catalog::tags`]).
+    FindKeywords,
 }
 
 impl AiTool {
@@ -54,6 +56,7 @@ impl AiTool {
             AiTool::Mask { target } => target.models().to_vec(),
             AiTool::Cull => lf_ai::cull::CULL_MODELS.to_vec(),
             AiTool::FindPeople => lf_ai::identity::IDENTITY_MODELS.to_vec(),
+            AiTool::FindKeywords => lf_ai::keywords::KEYWORD_MODELS.to_vec(),
         }
     }
 
@@ -76,6 +79,7 @@ impl AiTool {
             },
             AiTool::Cull => "Assisted culling",
             AiTool::FindPeople => "Find people",
+            AiTool::FindKeywords => "Find keywords",
         }
     }
 
@@ -87,7 +91,9 @@ impl AiTool {
             AiTool::Retouch { .. } => ("Retouched".into(), "tif"),
             AiTool::Cutout => ("Cutout".into(), "png"),
             AiTool::Remove => ("Removed".into(), "tif"),
-            AiTool::Mask { .. } | AiTool::Cull | AiTool::FindPeople => (String::new(), ""),
+            AiTool::Mask { .. } | AiTool::Cull | AiTool::FindPeople | AiTool::FindKeywords => {
+                (String::new(), "")
+            }
         }
     }
 }
@@ -118,6 +124,17 @@ pub struct Report {
     pub culled: Option<Culled>,
     /// Find people: what the scan found.
     pub people: Option<PeopleFound>,
+    /// Find keywords: what was suggested.
+    pub keywords: Option<KeywordsFound>,
+}
+
+/// What Find keywords suggested.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct KeywordsFound {
+    /// Photos looked at by this run (the rest were before).
+    pub tagged: usize,
+    /// The commonest suggested words over the photos asked, most first (at most 8).
+    pub common: Vec<(String, usize)>,
 }
 
 /// What Find people found.
@@ -191,6 +208,9 @@ pub fn run(
     }
     if tool == AiTool::FindPeople {
         return find_people(&gpu, engine, &catalog, ids, &mut progress, stop);
+    }
+    if tool == AiTool::FindKeywords {
+        return find_keywords(&gpu, engine, &catalog, ids, &mut progress, stop);
     }
     let mut report = Report::default();
     let count = ids.len();
@@ -295,7 +315,7 @@ fn one(
             let done = lf_ai::faces::smooth_skin(&img, &faces, amount);
             write_tiff16(&out, &done)?;
         }
-        AiTool::Mask { .. } | AiTool::Cull | AiTool::FindPeople => {
+        AiTool::Mask { .. } | AiTool::Cull | AiTool::FindPeople | AiTool::FindKeywords => {
             return Err("Not a file.".to_owned());
         }
         AiTool::Remove => {
@@ -514,6 +534,78 @@ fn find_people(
     found.named = list.iter().filter(|p| p.name.is_some()).count();
     found.groups = list.len() - found.named;
     report.people = Some(found);
+    Ok(report)
+}
+
+/// Find keywords: looks at the photos of `ids` not keyworded as their files are now (as shot,
+/// at [`lf_ai::keywords::SCAN_EDGE`]) and records the words suggested. A photo that cannot be
+/// read is reported and the others go on.
+fn find_keywords(
+    gpu: &Arc<Gpu>,
+    engine: &Engine,
+    catalog: &Catalog,
+    ids: &[i64],
+    progress: &mut impl FnMut(Step),
+    stop: &AtomicBool,
+) -> Result<Report, String> {
+    let mut tagger = lf_ai::keywords::Tagger::new(engine).map_err(|e| e.to_string())?;
+    let todo = catalog.untagged(ids).map_err(|e| e.to_string())?;
+    let mut report = Report::default();
+    let mut found = KeywordsFound::default();
+    let count = todo.len();
+    let as_shot = EditSettings::default_settings();
+    for (index, (id, path)) in todo.iter().enumerate() {
+        if stop.load(Ordering::SeqCst) {
+            return Err(lf_ai::AiError::Stopped.to_string());
+        }
+        progress(Step::Photo {
+            index,
+            count,
+            done: 0,
+            total: 1,
+        });
+        let tagged = render_at(
+            gpu,
+            path,
+            &as_shot,
+            lf_ai::keywords::SCAN_EDGE,
+            Quality::Preview,
+        )
+        .and_then(|img| tagger.tag(&img).map_err(|e| e.to_string()))
+        .and_then(|words| {
+            let words: Vec<(String, f32)> = words
+                .into_iter()
+                .map(|s| (s.word.to_owned(), s.score))
+                .collect();
+            catalog
+                .set_ai_keywords(*id, &words)
+                .map_err(|e| e.to_string())
+        });
+        match tagged {
+            Ok(()) => found.tagged += 1,
+            Err(e) => {
+                let name = crate::develop::open::file_name(path);
+                log::warn!("finding keywords failed on {name}: {e}");
+                report.failed.push((name, e));
+            }
+        }
+    }
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for &id in ids {
+        let Some(row) = catalog.photo(id).map_err(|e| e.to_string())? else {
+            continue;
+        };
+        for word in row.ai_keywords {
+            match counts.iter_mut().find(|(w, _)| *w == word) {
+                Some((_, n)) => *n += 1,
+                None => counts.push((word, 1)),
+            }
+        }
+    }
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    counts.truncate(8);
+    found.common = counts;
+    report.keywords = Some(found);
     Ok(report)
 }
 

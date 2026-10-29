@@ -1,0 +1,214 @@
+# The words AI keywording can suggest: the keyword, a tab, and what the photo would be of
+# ("a photo of <that>"). Edit this list, then run scripts/keywords/embed.py to remake
+# keywords.f16 beside it (the CLIP text model is only needed for that, never by the app).
+wedding	a wedding
+bride	a bride in a wedding dress
+groom	a groom in a suit
+wedding dress	a wedding dress
+wedding rings	wedding rings
+wedding cake	a wedding cake
+bouquet	a bouquet of flowers
+ceremony	a wedding ceremony
+first dance	a couple dancing at a wedding
+couple	a couple together
+engagement	an engaged couple
+kiss	two people kissing
+portrait	a portrait of a person
+headshot	a headshot
+selfie	a selfie
+man	a man
+woman	a woman
+child	a child
+baby	a baby
+newborn	a newborn baby
+family	a family
+group	a group of people
+crowd	a crowd of people
+friends	friends together
+teenager	a teenager
+elderly	an elderly person
+smile	a smiling person
+laughing	people laughing
+hands	hands
+eyes	a close-up of eyes
+party	a party
+birthday	a birthday party
+birthday cake	a birthday cake
+celebration	a celebration
+concert	a concert
+stage	a performer on stage
+dancing	people dancing
+speech	a person giving a speech
+conference	a conference
+meeting	a business meeting
+graduation	a graduation
+sports	a sports game
+football	a football match
+running	a person running
+swimming	a person swimming
+cycling	a person on a bicycle
+yoga	a person doing yoga
+fitness	a gym workout
+fashion	a fashion photo shoot
+model	a fashion model
+makeup	makeup
+hair	a hairstyle
+jewellery	jewellery
+watch	a wristwatch
+shoes	shoes
+dress	a dress
+suit	a suit
+product	a product photo
+food	food
+cake	a cake
+dessert	a dessert
+bread	bread
+pizza	a pizza
+burger	a burger
+salad	a salad
+fruit	fruit
+vegetables	vegetables
+coffee	a cup of coffee
+tea	a cup of tea
+wine	a glass of wine
+beer	beer
+cocktail	a cocktail
+drinks	drinks
+restaurant	a restaurant
+kitchen	a kitchen
+breakfast	breakfast
+dinner	a dinner table
+dog	a dog
+puppy	a puppy
+cat	a cat
+kitten	a kitten
+horse	a horse
+bird	a bird
+fish	a fish
+butterfly	a butterfly
+insect	an insect
+cow	a cow
+sheep	sheep
+wildlife	wild animals
+pet	a pet
+beach	a beach
+sea	the sea
+ocean	the ocean
+waves	ocean waves
+sand	sand
+lake	a lake
+river	a river
+waterfall	a waterfall
+mountains	mountains
+hills	green hills
+forest	a forest
+trees	trees
+tree	a tree
+jungle	a jungle
+desert	a desert
+snow	snow
+winter	a winter scene
+autumn	autumn leaves
+spring	spring blossom
+summer	a summer day
+field	a field
+meadow	a meadow
+garden	a garden
+park	a park
+flowers	flowers
+flower	a flower
+rose	a rose
+grass	grass
+leaves	leaves
+sky	the sky
+clouds	clouds
+sunset	a sunset
+sunrise	a sunrise
+night	a night scene
+stars	a starry night sky
+moon	the moon
+rain	rain
+fog	fog
+storm	a storm
+rainbow	a rainbow
+landscape	a landscape
+nature	nature
+island	an island
+coast	a coastline
+cliff	a cliff
+countryside	the countryside
+city	a city
+cityscape	a city skyline
+street	a street
+road	a road
+bridge	a bridge
+building	a building
+architecture	architecture
+skyscraper	a skyscraper
+house	a house
+church	a church
+temple	a temple
+castle	a castle
+monument	a monument
+museum	a museum
+interior	a room interior
+living room	a living room
+bedroom	a bedroom
+office	an office
+hotel	a hotel
+shop	a shop
+market	a market
+car	a car
+motorcycle	a motorcycle
+bicycle	a bicycle
+bus	a bus
+train	a train
+airplane	an airplane
+boat	a boat
+ship	a ship
+harbour	a harbour
+airport	an airport
+travel	a travel photo
+holiday	a holiday
+camping	camping
+hiking	hiking
+candles	candles
+lights	string lights
+fireworks	fireworks
+christmas	christmas
+decoration	decorations
+balloons	balloons
+gift	a gift
+table setting	a table setting
+venue	an event venue
+church interior	the inside of a church
+book	a book
+laptop	a laptop
+phone	a phone
+camera	a camera
+music	a musical instrument
+guitar	a guitar
+piano	a piano
+art	a work of art
+painting	a painting
+sculpture	a sculpture
+graffiti	graffiti
+text	text and writing
+sign	a sign
+logo	a logo
+document	a document
+screenshot	a screenshot
+black and white	a black and white photo
+silhouette	a silhouette
+reflection	a reflection
+shadow	shadows
+close-up	a close-up
+macro	a macro photo
+aerial	an aerial view
+underwater	an underwater scene
+backlight	a backlit scene
+bokeh	bokeh
+long exposure	a long exposure
+pattern	a pattern
+texture	a texture
+minimal	a minimal composition

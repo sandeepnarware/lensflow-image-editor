@@ -1507,7 +1507,7 @@ impl Library {
             Action::AutoStack => {
                 !develop && self.auto_stack.is_none() && !self.photos.is_empty() && self.can_add()
             }
-            Action::AssistedCulling | Action::FindPeople => {
+            Action::AssistedCulling | Action::FindPeople | Action::FindKeywords => {
                 !develop
                     && self.local_ai
                     && self.ai.is_none()
@@ -1600,6 +1600,7 @@ impl Library {
             Action::AiRemoveObjects => self.open_remove(env),
             Action::AssistedCulling => self.open_cull(),
             Action::FindPeople => self.open_find_people(),
+            Action::FindKeywords => self.open_find_keywords(),
             Action::Stack => self.stack_selected(env),
             Action::Unstack => self.unstack_selected(env),
             Action::ToggleStack => self.toggle_stack(env),

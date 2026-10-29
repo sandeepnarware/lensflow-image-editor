@@ -20,9 +20,9 @@ and 2d tasks 1–2 are built; packaging tasks 3–5 are in flight.
 | `lf-raw` | Magic-byte kind sniffing, rawler decode, demosaic (bilinear/AHD/X-Trans/preview bin), WB + colour + highlight handling, f16 headroom, EXIF, frame cache, `lf-render` example. | `src/open.rs`, `src/develop.rs` |
 | `lf-grade` | CPU maths for "Match a reference": measure, correct, calibrate (injected renderer), strength/exposure, contact sheet. | `src/lib.rs` |
 | `lf-merge` | CPU merging: exposure fusion (Mertens, with ghost removal), focus stacking through Laplacian pyramids, median-threshold-bitmap alignment; panoramas (`panorama.rs`: cylinder fit, NCC registration, gain and feather blending). No GPU, no catalogue. | `src/lib.rs` |
-| `lf-ai` | Local AI through ONNX Runtime (loaded at run time, never linked): pinned downloads (`assets.rs`), tiles, denoise and upscale (`restore.rs`), subject and sky masks (`segment.rs`), removal (`inpaint.rs`), faces and skin retouch (`faces.rs`), telling people apart (`identity.rs`). | `src/lib.rs`, `src/assets.rs` |
+| `lf-ai` | Local AI through ONNX Runtime (loaded at run time, never linked): pinned downloads (`assets.rs`), tiles, denoise and upscale (`restore.rs`), subject and sky masks (`segment.rs`), removal (`inpaint.rs`), faces and skin retouch (`faces.rs`), telling people apart (`identity.rs`), keywords (`keywords.rs`, CLIP + `data/keywords.{txt,f16}`). | `src/lib.rs`, `src/assets.rs` |
 | `lf-account` | Blocking reqwest/rustls LensFlow client: sign-in + 2FA, token store, entitlement gate/offline grace, desktop grade, presets sync, download link. | `src/client.rs`, `src/entitlement.rs` |
-| `lf-catalog` | SQLite catalogue (bundled, WAL, schema v12), sidecars, edit history (cap 50), versions, import, thumbnails, export, presets. Never touches pixels directly. | `src/db.rs`, `src/edits.rs`, `src/export.rs` |
+| `lf-catalog` | SQLite catalogue (bundled, WAL, schema v13), sidecars, edit history (cap 50), versions, import, thumbnails, export, presets. Never touches pixels directly. | `src/db.rs`, `src/edits.rs`, `src/export.rs` |
 | `lf-fixtures` | Loads `tests/fixtures` goldens and applies the parity thresholds. | `src/lib.rs` |
 | `lf-app` | The `lensflow-image-editor` binary: eframe/egui-wgpu window, lanes, session, Develop/Library UI, dialogs, the console's `grade` (`grade_cli.rs`, before any window), release plumbing. | `src/main.rs` → `src/app.rs` |
 
@@ -154,6 +154,10 @@ cargo test --workspace                   # includes the 228-render parity suite
   (schema v12: `people`, `faces`, `face_scans`; `regroup_faces`, groups keyed by their first face),
   `AiTool::FindPeople`, `library/people_ui.rs` (sidebar People, `Msg::{People, PersonPhotos, PeopleChanged}`),
   `Action::FindPeople`; `PhotoRow::people` makes names searchable.
+  AI keywords: `lf_ai::keywords` (CLIP image model; the word list's text embeddings are made offline by
+  `scripts/keywords/embed.py` into `crates/lf-ai/data/keywords.f16`), `lf_catalog::tags` (schema v13:
+  `ai_keywords`, `tag_scans`; never in sidecars or XMP), `PhotoRow::ai_keywords` (searched),
+  `AiTool::FindKeywords`, `Action::FindKeywords`, the Metadata panel's "Suggested by AI".
   AI masks: `Shape::Image` (RLE + base64 coverage; subject, sky, people, face/body skin, hair, clothes via `lf_ai::segment::Target`) in `lf_settings::masks`, drawn into the brush layers; `ai_job::mask`.
   LUT looks: `lf_settings::lut` (`.cube` parser, `desktop.lut`), `lf_pipeline::lut` (process-wide
   registry, 3D texture at bindings 15–16, `lut_amount` uniform), `luts.rs` (`.lensflow/luts/`).

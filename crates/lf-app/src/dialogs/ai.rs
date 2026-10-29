@@ -28,6 +28,7 @@ pub const ABOUT_SKY: &str = "Finds the sky and adds it as a mask, ready for its 
 pub const ABOUT_CULL: &str = "Checks each photo for blur, missed focus on the eyes and closed eyes, so the likely rejects can be found at once. Nothing is flagged until you say so.";
 pub const ABOUT_FIND_PEOPLE: &str = "Finds the faces in each photo and groups the ones that look like the same person. Name a group under People to find that person in every photo; new photos of them are matched as they are scanned.";
 pub const SHOW_PEOPLE: &str = "Show people";
+pub const ABOUT_FIND_KEYWORDS: &str = "Looks at each photo and suggests words for what it shows (beach, cake, bride, sunset...), so the search box finds photos nobody has keyworded. Suggestions stay apart from your own keywords; the Metadata panel lets you keep them.";
 pub const REJECT_THEM: &str = "Reject them";
 pub const SHOW_THEM: &str = "Show them";
 pub const ABOUT_REMOVE: &str = "Fills what was painted from its surroundings and saves the photo beside the original as a new 16-bit TIFF.";
@@ -171,6 +172,7 @@ impl AiDialog {
             AiTool::Mask { .. } => ABOUT_PEOPLE,
             AiTool::Cull => ABOUT_CULL,
             AiTool::FindPeople => ABOUT_FIND_PEOPLE,
+            AiTool::FindKeywords => ABOUT_FIND_KEYWORDS,
         };
         ui.label(RichText::new(about).color(theme::MUTED));
         ui.add_space(8.0);
@@ -199,7 +201,8 @@ impl AiDialog {
             | AiTool::Mask { .. }
             | AiTool::Remove
             | AiTool::Cull
-            | AiTool::FindPeople => {}
+            | AiTool::FindPeople
+            | AiTool::FindKeywords => {}
         }
         ui.add_space(8.0);
         if let Some(text) = download_text(self.download) {
@@ -270,6 +273,16 @@ fn done_ui(ui: &mut egui::Ui, result: &Result<Report, String>) {
             ..
         }) => {
             ui.label(people_text(p));
+            for (name, why) in failed {
+                ui.label(RichText::new(format!("{name}: {why}")).color(theme::WARNING));
+            }
+        }
+        Ok(Report {
+            keywords: Some(k),
+            failed,
+            ..
+        }) => {
+            ui.label(keywords_text(k));
             for (name, why) in failed {
                 ui.label(RichText::new(format!("{name}: {why}")).color(theme::WARNING));
             }
@@ -349,6 +362,27 @@ pub fn people_text(p: &crate::ai_job::PeopleFound) -> String {
     format!("{scanned}{groups}")
 }
 
+/// What Find keywords suggested, in a sentence or two.
+pub fn keywords_text(k: &crate::ai_job::KeywordsFound) -> String {
+    let looked = match k.tagged {
+        0 => "Every photo was already looked at.".to_owned(),
+        1 => "Looked at 1 photo.".to_owned(),
+        n => format!("Looked at {} photos.", count(n)),
+    };
+    if k.common.is_empty() {
+        return format!("{looked} No words stood out.");
+    }
+    let words: Vec<String> = k
+        .common
+        .iter()
+        .map(|(w, n)| format!("{w} ({})", count(*n)))
+        .collect();
+    format!(
+        "{looked} Most common: {}. Type a word in the search box to find them.",
+        words.join(", ")
+    )
+}
+
 fn capitalised(s: &str) -> String {
     let mut c = s.chars();
     c.next()
@@ -404,6 +438,23 @@ mod tests {
         assert_eq!(
             people_text(&p),
             "Every photo was already scanned. 1 group of faces is waiting for a name under People."
+        );
+    }
+
+    #[test]
+    fn finding_keywords_says_what_it_found() {
+        use crate::ai_job::KeywordsFound;
+        let k = KeywordsFound {
+            tagged: 3,
+            common: vec![("beach".into(), 2), ("sea".into(), 1)],
+        };
+        assert_eq!(
+            keywords_text(&k),
+            "Looked at 3 photos. Most common: beach (2), sea (1). Type a word in the search box to find them."
+        );
+        assert_eq!(
+            keywords_text(&KeywordsFound::default()),
+            "Every photo was already looked at. No words stood out."
         );
     }
 
