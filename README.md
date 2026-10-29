@@ -224,6 +224,10 @@ what it changed ("Exposure", "Crop", "Masks +2"); click one to go back (or forwa
 Camera and lens filters (the filter bar): show only the photos from one camera or through one
 lens, when the folder has more than one.
 
+Quick develop (View → Quick develop, in the Library): the selected photos nudged without
+opening Develop: exposure, contrast, the tone sliders, white balance, vibrance, saturation and
+clarity by a small or large step either way, each from the photo's own value; Reset all.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

@@ -71,6 +71,8 @@ pub enum Action {
     ToggleZoom,
     /// Show or hide the Library's Metadata panel (title, caption, keywords).
     Metadata,
+    /// Show or hide Quick Develop: the selection nudged without opening Develop.
+    QuickDevelop,
     /// Two to four selected photos side by side, zoomed together.
     Compare,
     /// The active photo alone at full size (click for 1:1).
@@ -212,6 +214,7 @@ impl Action {
             Action::Compare => "Compare",
             Action::Loupe => "Loupe",
             Action::Survey => "Survey",
+            Action::QuickDevelop => "Quick develop",
             Action::Map => "Map",
             Action::AiDenoise => "AI Denoise…",
             Action::AiLensBlur => "Lens blur…",

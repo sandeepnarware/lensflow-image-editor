@@ -36,6 +36,8 @@ pub enum Recipe {
     Sync(Value),
     /// A quarter turn (the Library's Rotate left or right): the crop turns with the photo.
     Turn(lf_settings::geometry::TurnDir),
+    /// Quick Develop: one setting moved by an amount from each photo's own value.
+    Nudge(&'static str, f64),
 }
 
 impl Recipe {
@@ -45,6 +47,7 @@ impl Recipe {
             Recipe::Paste(partial) => apply(onto, partial),
             Recipe::Look(look) => apply_look(onto, &clipboard_settings(look)),
             Recipe::Sync(patch) => crate::sync::apply(onto, patch),
+            Recipe::Nudge(key, delta) => crate::library::quick_develop::nudge(onto, key, *delta),
             Recipe::Turn(dir) => {
                 let mut s = onto.clone();
                 crate::develop::tools::crop::turn(&mut s, *dir);

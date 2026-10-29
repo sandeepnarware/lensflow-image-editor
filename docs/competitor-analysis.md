@@ -75,6 +75,7 @@ close or competitors ship new features.
 - Survey view (Lightroom's `N`): done, Library → Survey.
 - History panel (Lightroom's): done, Develop → History.
 - Metadata filter by camera and lens (Lightroom's Library filter): done.
+- Quick Develop in the Library (Lightroom's): done, View → Quick develop.
 
 ### Tier 4: large or strategic
 

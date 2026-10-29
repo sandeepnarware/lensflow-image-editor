@@ -3145,3 +3145,32 @@ fn history_jumps_to_a_step() {
         "the contrast step is still ahead"
     );
 }
+
+/// Library → Quick develop: Exposure ">>" adds a stop to every selected photo.
+#[test]
+fn quick_develop_nudges_the_selection() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 2);
+    import_folder(&mut h, &shoot, 2);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    h.state_mut().lib.selection.select(&ids);
+    assert!(run_action(&mut h, Action::QuickDevelop));
+    h.step();
+    h.step();
+    h.get_by_label("Exposure >>").click();
+    h.step();
+    let root = dir.path().join("catalogue");
+    let exposure = |id: i64| {
+        let c = lf_catalog::Catalog::open(&root).unwrap();
+        lf_catalog::edits::get_settings(&c, id)
+            .unwrap()
+            .map_or(0.0, |s| s.exposure)
+    };
+    step_until(&mut h, "both photos a stop brighter", |_| {
+        ids.iter().all(|&id| exposure(id) == 1.0)
+    });
+}

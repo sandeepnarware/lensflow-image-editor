@@ -900,6 +900,13 @@ The filter bar's camera and lens lists (`Filter::{camera, lens}`, `cull_ui::pick
 folder's distinct EXIF names (`cull_ui::distinct`), shown when there are two or more (or one is
 chosen); a photo is kept when its `PhotoRow::camera` / `lens` is the one chosen.
 
+Quick develop (`library/quick_develop.rs`, `Action::QuickDevelop`) is a window over the grid
+with one row per setting (`ROWS`: key, name, small and large step, range). A click runs
+`batch::run` on `Long` over the selection with `Recipe::Nudge(key, delta)` (`quick_develop::nudge`:
+the photo's own value plus the step, kept in range, rounded to thousandths), one history step a
+photo; "Reset all" is a paste of the defaults without geometry. Answers come back as
+`Msg::Turned` (rows and thumbnails read again; failures in one toast).
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

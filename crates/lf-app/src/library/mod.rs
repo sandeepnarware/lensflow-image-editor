@@ -24,6 +24,7 @@ pub mod merge_ui;
 pub mod meta_ui;
 pub mod people_ui;
 pub mod print_ui;
+pub mod quick_develop;
 pub mod reference;
 pub mod second_window;
 pub mod selection;
@@ -217,6 +218,8 @@ pub struct Library {
     columns: usize,
     /// The grid's thumbnail size (`prefs.grid_cell`), a cell's edge in points.
     pub cell: f32,
+    /// Library → Quick develop, while open.
+    quick_develop: bool,
     last_scroll: f32,
     /// Copied edits (`Ctrl+Shift+C`).
     clipboard: Clipboard,
@@ -306,6 +309,7 @@ impl Library {
             loading: None,
             reveal_active: false,
             columns: 1,
+            quick_develop: false,
             cell: prefs.grid_cell.clamp(grid::MIN_CELL, grid::MAX_CELL),
             last_scroll: 0.0,
             clipboard: Clipboard::default(),
@@ -1537,6 +1541,9 @@ impl Library {
         self.remove_dialog(ui.ctx(), env);
         self.auto_stack_dialog(ui.ctx(), env);
         self.auto_import_dialog(ui.ctx(), env);
+        if self.mode == Mode::Library {
+            self.quick_develop_ui(ui.ctx(), env);
+        }
         self.reveal_active = false;
     }
 
@@ -1606,6 +1613,7 @@ impl Library {
             }
             Action::SelectAll | Action::Previous | Action::Next => !self.order.is_empty(),
             Action::Metadata => !develop,
+            Action::QuickDevelop => !develop,
             Action::Map => !develop && (self.map.is_some() || !self.order.is_empty()),
             Action::Compare => {
                 !develop
@@ -1751,6 +1759,7 @@ impl Library {
                 }
             }
             Action::Metadata => self.toggle_metadata(),
+            Action::QuickDevelop => self.toggle_quick_develop(),
             Action::Map if self.map.is_some() => self.map = None,
             Action::Map => self.open_map(env),
             Action::Survey if self.compare.is_some() => self.close_compare(),
@@ -2337,7 +2346,7 @@ impl Library {
         if let Some((_, why)) = failed.first() {
             env.toasts.push(
                 Level::Warning,
-                format!("{} could not be turned. {why}", count(failed.len())),
+                format!("{} could not be changed. {why}", count(failed.len())),
             );
         }
     }
