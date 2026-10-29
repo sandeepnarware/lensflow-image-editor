@@ -10,6 +10,7 @@
 pub mod assets;
 pub mod cull;
 pub mod faces;
+pub mod features;
 pub mod identity;
 pub mod inpaint;
 pub mod keywords;

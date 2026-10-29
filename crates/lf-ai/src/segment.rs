@@ -32,11 +32,17 @@ pub enum Target {
     FaceSkin,
     BodySkin,
     Clothes,
+    /// The eyes' openings ([`crate::features`]).
+    Eyes,
+    Irises,
+    /// The lips, the mouth's opening left out.
+    Lips,
+    Teeth,
 }
 
 impl Target {
     /// Every target, in the order the mask tool offers them.
-    pub const ALL: [Target; 7] = [
+    pub const ALL: [Target; 11] = [
         Target::Subject,
         Target::Sky,
         Target::People,
@@ -44,12 +50,31 @@ impl Target {
         Target::BodySkin,
         Target::Hair,
         Target::Clothes,
+        Target::Eyes,
+        Target::Irises,
+        Target::Lips,
+        Target::Teeth,
     ];
+
+    /// A part of a face, found from its landmarks rather than by segmenting.
+    pub fn face_part(self) -> Option<crate::features::Part> {
+        use crate::features::Part;
+        match self {
+            Target::Eyes => Some(Part::Eyes),
+            Target::Irises => Some(Part::Irises),
+            Target::Lips => Some(Part::Lips),
+            Target::Teeth => Some(Part::Teeth),
+            _ => None,
+        }
+    }
 
     pub fn models(self) -> &'static [Asset] {
         match self {
             Target::Subject => &SUBJECT_MODELS,
             Target::Sky => &SKY_MODELS,
+            Target::Eyes | Target::Irises | Target::Lips | Target::Teeth => {
+                &crate::features::FEATURE_MODELS
+            }
             _ => &PEOPLE_MODELS,
         }
     }
@@ -64,6 +89,10 @@ impl Target {
             Target::FaceSkin => "face-skin",
             Target::BodySkin => "body-skin",
             Target::Clothes => "clothes",
+            Target::Eyes => "eyes",
+            Target::Irises => "irises",
+            Target::Lips => "lips",
+            Target::Teeth => "teeth",
         }
     }
 
@@ -77,6 +106,10 @@ impl Target {
             Target::FaceSkin => "Face skin",
             Target::BodySkin => "Body skin",
             Target::Clothes => "Clothes",
+            Target::Eyes => "Eyes",
+            Target::Irises => "Irises",
+            Target::Lips => "Lips",
+            Target::Teeth => "Teeth",
         }
     }
 
@@ -90,6 +123,10 @@ impl Target {
             Target::FaceSkin => "face",
             Target::BodySkin => "skin",
             Target::Clothes => "clothing",
+            Target::Eyes => "eye",
+            Target::Irises => "iris",
+            Target::Lips => "mouth",
+            Target::Teeth => "teeth",
         }
     }
 
@@ -102,7 +139,7 @@ impl Target {
             // Accessories (glasses, hats, bags) go with the clothes.
             Target::Clothes => &[4, 5],
             Target::People => &[1, 2, 3, 4, 5],
-            Target::Subject | Target::Sky => &[],
+            _ => &[],
         }
     }
 
@@ -164,6 +201,9 @@ pub fn mask(
     w: usize,
     h: usize,
 ) -> Result<Gray, AiError> {
+    if let Some(part) = target.face_part() {
+        return crate::features::mask(engine, part, img, w, h);
+    }
     let (model, name) = match target {
         Target::Subject => (assets::SUBJECT, "input_image"),
         Target::Sky => (assets::SKY, "input.1"),

@@ -728,8 +728,18 @@ correction) becomes `AiTool::ObjectMask { u, v }`, run like the other AI masks
 asks Segment Anything's multi-mask decoder with the point and SAM's padding point, keeps the
 mask it rates best and softens its logits with a sigmoid.
 
+Face-part masks (Masks → Face: Eyes, Irises, Lips, Teeth) are `Target`s whose
+`face_part()` sends `segment::mask` to `lf_ai::features`: YuNet's faces are cut out as
+MediaPipe does (a square 1.5 × the box, turned so the eyes are level, 256 px), the face
+landmarker answers 478 points (skipped when its presence logit is negative), and MediaPipe's
+outlines are filled at the mask's size with 4 × 4 samples per pixel. Irises are circles
+through each iris ring, kept inside the eye openings; lips are the outer outline less the
+mouth's opening; teeth are the opening weighted by how light and colourless each pixel is.
+
 `crates/lf-ai/tests/models.rs` runs the real models when `LF_AI_DIR` names a folder holding
-them (`LF_AI_DOWNLOAD=1` fetches them there); otherwise those tests return at once.
+them (`LF_AI_DOWNLOAD=1` fetches them there); otherwise those tests return at once. Run them
+with `--test-threads=1` (parallel tests would download into one folder at once). The face-part
+test also needs `LF_AI_FACE_PHOTO`: a PNG of a real face.
 
 ### Import from a card
 

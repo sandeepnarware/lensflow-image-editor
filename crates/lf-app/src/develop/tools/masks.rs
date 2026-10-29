@@ -31,6 +31,7 @@ pub const REMOVE: &str = "Remove mask";
 pub const INVERT: &str = "Invert";
 /// Before the people buttons (People, Face skin, Body skin, Hair, Clothes).
 pub const PEOPLE: &str = "People:";
+pub const FACE: &str = "Face:";
 pub const AI_OFF: &str = "The AI tools need the studio in good standing.";
 pub const SELECT_OBJECT: &str = "Select object";
 pub const PICK_OBJECT: &str = "Click the object to mask (Esc cancels).";

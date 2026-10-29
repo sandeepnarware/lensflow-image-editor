@@ -7,7 +7,7 @@
 //! The licences: ONNX Runtime MIT; IS-Net (subject) Apache-2.0; SkySeg MIT; SCUNet
 //! Apache-2.0; Real-ESRGAN BSD-3-Clause; LaMa Apache-2.0; YuNet MIT;
 //! open-closed-eye-0001 Apache-2.0; MediaPipe selfie multiclass Apache-2.0; SFace Apache-2.0;
-//! CLIP ViT-B/32 MIT; MobileSAM Apache-2.0.
+//! CLIP ViT-B/32 MIT; MobileSAM Apache-2.0; MediaPipe Face Mesh V2 Apache-2.0.
 //! See `NOTICE`.
 
 use sha2::{Digest, Sha256};
@@ -182,6 +182,16 @@ pub const SAM_DECODER: Asset = Asset {
     url: "https://huggingface.co/Acly/MobileSAM/resolve/0d3b403339b4674a82493d5e97964dd78089ddc8/sam_mask_decoder_multi.onnx",
     size: 16_496_559,
     sha256: "8976b90a87ba50a6a72217a5ff994f7d25ce16f2229fcc1ed259e1294c622ffe",
+    unpack: Unpack::File,
+};
+
+/// MediaPipe's face landmarker (Face Mesh V2, Google, Apache-2.0): 478 points on a face cut
+/// out at 256 × 256. Google's float16 model converted to ONNX with its weights unchanged.
+pub const FACE_MESH: Asset = Asset {
+    file: "face_landmarks.onnx",
+    url: "https://huggingface.co/naklitechie/face-landmarks-onnx/resolve/575c33816c840c5b156398adb485e4f8d138adc2/face_landmarks.onnx",
+    size: 4_920_995,
+    sha256: "f38c3321ceffbc9e95103480ad38cc3f52e7e1bde2bcee7cd9355d0b9138ac0c",
     unpack: Unpack::File,
 };
 

@@ -1013,6 +1013,10 @@ fn masks_panel(
                 ui.end_row();
                 ui.label(egui::RichText::new(masks::PEOPLE).color(crate::theme::MUTED));
             }
+            if target == lf_ai::segment::Target::Eyes {
+                ui.end_row();
+                ui.label(egui::RichText::new(masks::FACE).color(crate::theme::MUTED));
+            }
             let button = ui.add_enabled(tool.ai_allowed, egui::Button::new(target.button()));
             if button.on_disabled_hover_text(masks::AI_OFF).clicked() {
                 tool.ai_request = Some(target);

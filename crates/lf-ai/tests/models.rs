@@ -270,3 +270,42 @@ fn a_click_on_a_disc_masks_the_disc() {
     assert!(at(10, 10) < 0.2, "a corner: {}", at(10, 10));
     assert!(at(60, 200) < 0.2, "the ground: {}", at(60, 200));
 }
+
+/// Needs a real photo of a face (the fixtures have none): `LF_AI_FACE_PHOTO` names one.
+#[test]
+fn a_faces_eyes_are_above_its_lips() {
+    let Some(engine) = engine(&lf_ai::features::FEATURE_MODELS) else {
+        return;
+    };
+    let Some(path) = std::env::var_os("LF_AI_FACE_PHOTO") else {
+        eprintln!("skipped: set LF_AI_FACE_PHOTO to a photo of a face");
+        return;
+    };
+    let img = Rgb::from_rgba8(&image::open(path).expect("photo").to_rgba8());
+    let (w, h) = (img.w / 2, img.h / 2);
+    let centre_y = |m: &lf_ai::Gray| {
+        let (mut sum, mut n) = (0.0f32, 0.0f32);
+        for (i, v) in m.data.iter().enumerate() {
+            sum += v * (i / m.w) as f32;
+            n += v;
+        }
+        (n > 0.0).then(|| sum / n)
+    };
+    let eyes = lf_ai::segment::mask(&engine, Target::Eyes, &img, w, h).expect("eyes");
+    let lips = lf_ai::segment::mask(&engine, Target::Lips, &img, w, h).expect("lips");
+    let irises = lf_ai::segment::mask(&engine, Target::Irises, &img, w, h).expect("irises");
+    let (Some(ey), Some(ly)) = (centre_y(&eyes), centre_y(&lips)) else {
+        panic!("no eyes or no lips found in the portrait");
+    };
+    assert!(ey < ly, "eyes at {ey}, lips at {ly}");
+    let area = |m: &lf_ai::Gray| m.data.iter().sum::<f32>();
+    assert!(
+        area(&irises) > 0.0 && area(&irises) < area(&eyes),
+        "irises sit in the eyes"
+    );
+    assert!(
+        area(&lips) < (w * h) as f32 * 0.05,
+        "lips are small: {}",
+        area(&lips)
+    );
+}
