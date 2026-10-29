@@ -21,7 +21,8 @@ tool, and Guided Upright (draw two edges that should be upright, or level, and t
 perspective follows). It keeps one history step per gesture, with undo and redo, and writes
 sidecars after a quiet second. It also has looks and studio presets synced with
 LensFlow (the one applied last has an Amount slider, 0–200 %, until the photo is edited
-another way); Auto-sync (with several photos selected, each change in Develop is made on
+another way; a preset can keep its AI masks, which are found again in each photo it is
+applied to, with their own settings); Auto-sync (with several photos selected, each change in Develop is made on
 all of them, except their crop, spots and masks: Home → Settings → Auto-sync, or the box
 in Develop); a Calibration section (the red, green and blue primaries' hue and saturation,
 and a shadows tint); DNG camera profiles for RAW photos (`.dcp`, imported from the RAW

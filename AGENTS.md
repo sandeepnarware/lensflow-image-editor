@@ -191,6 +191,8 @@ cargo test --workspace                   # includes the 228-render parity suite
   the frame cache key hashes the profile's bytes. None ship; `LF_DCP_DIR` runs real ones in `lf-raw/tests/develop.rs`.
   Preset Amount: `lf_settings::amount::blend` (0–200 %), `develop::extras::Applied` (the look or preset
   applied last; one history step per drag).
+  Adaptive presets: `lf_settings::adaptive` (`desktop.adaptiveMasks` in the preset JSON), `extras::AdaptiveQueue`,
+  `Develop::{queue_adaptive, take_ai_mask_request(busy), ai_job_ended}`.
   Edit in external editor: `edit_in.rs`, `library/edit_in_ui.rs`, `prefs.external_editor`.
   Print to PDF: `lf_catalog::print` (hand-written PDF, JPEGs as DCTDecode), `print_job.rs`,
   `dialogs/print.rs`, `library/print_ui.rs`.

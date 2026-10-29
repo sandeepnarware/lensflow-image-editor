@@ -1459,7 +1459,7 @@ impl Library {
         if let Some(q) = self.develop.take_lens_profile_request(env.toasts) {
             self.find_lens_profile(q, env);
         }
-        if let Some(tool) = self.develop.take_ai_mask_request() {
+        if let Some(tool) = self.develop.take_ai_mask_request(self.ai.is_some()) {
             self.open_ai(tool);
         }
         if self.develop.take_lut_import() {

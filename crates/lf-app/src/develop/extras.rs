@@ -43,6 +43,28 @@ pub struct Applied {
 }
 
 pub const AMOUNT: &str = "Amount";
+pub const ADAPTIVE_OFF: &str =
+    "This preset's AI masks were left out: the AI tools need the studio in good standing.";
+
+/// A preset's adaptive masks on their way into the open photo.
+#[derive(Default)]
+pub struct AdaptiveQueue {
+    pub queue: std::collections::VecDeque<lf_settings::adaptive::AdaptiveMask>,
+    /// The one being found now (its settings go to the mask when it comes).
+    pub waiting: Option<lf_settings::adaptive::AdaptiveMask>,
+}
+
+/// The AI target a mask's `what` names, if it can be found again in another photo.
+pub fn target_of(what: &str) -> Option<lf_ai::segment::Target> {
+    lf_ai::segment::Target::ALL
+        .into_iter()
+        .find(|t| t.key() == what)
+}
+
+/// The AI masks of `masks` that a preset can carry (found again by target).
+pub fn adaptive_of(masks: &lf_settings::masks::Masks) -> Vec<lf_settings::adaptive::AdaptiveMask> {
+    lf_settings::adaptive::from_masks(masks, |w| target_of(w).is_some())
+}
 
 #[derive(Default)]
 pub struct Extras {
@@ -221,6 +243,23 @@ impl Develop {
         ui.separator();
     }
 
+    /// A preset's adaptive AI masks, to be found in the open photo one by one
+    /// ([`Develop::take_ai_mask_request`]); without the AI tools they are skipped, said once.
+    pub fn queue_adaptive(&mut self, preset: &serde_json::Value, toasts: &mut Toasts) {
+        let list: Vec<_> = lf_settings::adaptive::from_preset(preset)
+            .into_iter()
+            .filter(|m| target_of(&m.what).is_some())
+            .collect();
+        if list.is_empty() {
+            return;
+        }
+        if !self.local_ai {
+            toasts.push(Level::Info, ADAPTIVE_OFF);
+            return;
+        }
+        self.adaptive.queue = list.into();
+    }
+
     /// Applies a look or preset (`next`, at 100 %) and offers its Amount.
     fn apply_with_amount(&mut self, name: String, next: EditSettings, toasts: &mut Toasts) {
         let Some(edit) = self.session.edit() else {
@@ -299,10 +338,17 @@ impl Develop {
                     let next =
                         crate::clipboard::Recipe::Look(row.settings.clone()).apply(&edit.settings);
                     self.apply_with_amount(row.name.clone(), next, toasts);
+                    self.queue_adaptive(&row.settings, toasts);
                 }
             }
             Some(presets::PresetAction::Save) => {
-                self.extras.presets.saving = Some(save_preset::SavePresetDialog::default());
+                let has_ai = self.session.edit().is_some_and(|e| {
+                    !adaptive_of(&lf_settings::masks::Masks::from_settings(&e.settings)).is_empty()
+                });
+                self.extras.presets.saving = Some(save_preset::SavePresetDialog {
+                    ai_masks: has_ai.then_some(true),
+                    ..Default::default()
+                });
             }
             Some(presets::PresetAction::Delete(i)) => {
                 self.extras.presets.deleting = rows.get(i).cloned();
@@ -354,11 +400,19 @@ impl Develop {
         match dialog.show(ctx) {
             save_preset::SaveAction::None => {}
             save_preset::SaveAction::Cancel => self.extras.presets.saving = None,
-            save_preset::SaveAction::Save { name, groups } => {
+            save_preset::SaveAction::Save {
+                name,
+                groups,
+                ai_masks,
+            } => {
                 let Some(settings) = self.session.edit().map(|e| e.settings.clone()) else {
                     return;
                 };
-                let partial = pick_groups(&settings, &groups);
+                let mut partial = pick_groups(&settings, &groups);
+                if ai_masks {
+                    let list = adaptive_of(&lf_settings::masks::Masks::from_settings(&settings));
+                    lf_settings::adaptive::write_into_preset(&mut partial, &list);
+                }
                 match self.save_preset(studio, &name, &partial) {
                     Ok(true) => {
                         self.extras.presets.saving = None;

@@ -208,6 +208,12 @@ impl Library {
 
     /// The run ended: said in the dialog, and the new photos catalogued.
     pub(super) fn ai_done(&mut self, result: Result<Report, String>, env: &mut Env) {
+        self.ai_done_inner(result, env);
+        // Masks were added above; an adaptive mask still awaited now was not found.
+        self.develop.ai_job_ended();
+    }
+
+    fn ai_done_inner(&mut self, result: Result<Report, String>, env: &mut Env) {
         // New scores: the rows are read again so the grid shows them.
         if matches!(
             &result,

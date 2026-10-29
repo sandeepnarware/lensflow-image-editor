@@ -137,6 +137,8 @@ pub struct Develop {
     spots_view: bool,
     /// The AI tools may be used (the library passes the gate's answer).
     local_ai: bool,
+    /// A preset's adaptive AI masks still to find in the open photo.
+    adaptive: extras::AdaptiveQueue,
     /// Soft-proofing through this ICC profile (View → Soft proof), and what the proof LUT was
     /// last built for (profile, look, amount).
     proof: Option<PathBuf>,
@@ -189,6 +191,7 @@ impl Develop {
             peaking: false,
             spots_view: false,
             local_ai: false,
+            adaptive: extras::AdaptiveQueue::default(),
             proof: None,
             proof_key: None,
             before_held: false,
@@ -576,7 +579,17 @@ impl Develop {
 
     /// An AI mask asked for since the last call (a button, or a click with Select object):
     /// the tool to run.
-    pub fn take_ai_mask_request(&mut self) -> Option<crate::ai_job::AiTool> {
+    pub fn take_ai_mask_request(&mut self, busy: bool) -> Option<crate::ai_job::AiTool> {
+        // A preset's adaptive masks, one at a time while no other AI job runs.
+        if !busy
+            && self.adaptive.waiting.is_none()
+            && self.is_ready()
+            && let Some(next) = self.adaptive.queue.pop_front()
+        {
+            let target = extras::target_of(&next.what)?;
+            self.adaptive.waiting = Some(next);
+            return Some(crate::ai_job::AiTool::Mask { target });
+        }
         match &mut self.tools.active {
             Some(tools::Active::Masks(tool)) => tool
                 .ai_request
@@ -594,17 +607,31 @@ impl Develop {
         }
     }
 
+    /// An AI job ended: an adaptive mask it was finding and did not bring (nothing found, or
+    /// it failed) is let go, so the rest of the preset's masks carry on.
+    pub fn ai_job_ended(&mut self) {
+        self.adaptive.waiting = None;
+    }
+
     /// Adds an AI mask (found for the open photo) as a new mask, one history step, picked in
     /// the Masks tool when it is open.
     pub fn add_ai_mask(&mut self, shape: lf_settings::masks::Shape, toasts: &mut Toasts) {
-        use lf_settings::masks::{Local, Mask, Masks, Range};
-        let mask = Mask {
-            shape,
-            invert: false,
-            opacity: 100.0,
-            hidden: false,
-            range: Range::All,
-            local: Local::default(),
+        use lf_settings::masks::{Local, Mask, Masks, Range, Shape};
+        // A preset's adaptive mask brings its own settings.
+        let template = match (&shape, &self.adaptive.waiting) {
+            (Shape::Image { what, .. }, Some(t)) if *what == t.what => self.adaptive.waiting.take(),
+            _ => None,
+        };
+        let mask = match template {
+            Some(t) => t.with_shape(shape),
+            None => Mask {
+                shape,
+                invert: false,
+                opacity: 100.0,
+                hidden: false,
+                range: Range::All,
+                local: Local::default(),
+            },
         };
         self.commit(toasts);
         let mut refused = None;
@@ -706,6 +733,10 @@ impl Develop {
         let same = self.photo_id() == Some(photo.id);
         if same && !matches!(self.state, State::Failed(..)) && !self.wants_reopen() {
             return;
+        }
+        if !same {
+            // A preset's adaptive masks were for the photo left.
+            self.adaptive = extras::AdaptiveQueue::default();
         }
         if self.check_lost() {
             return;

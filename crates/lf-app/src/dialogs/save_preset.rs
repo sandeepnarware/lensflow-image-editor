@@ -14,6 +14,8 @@ pub const HINT: &str = "e.g. Wedding warm";
 pub const SAVE: &str = "Save preset";
 pub const CANCEL: &str = "Cancel";
 pub const TAKEN: &str = "You already have a preset with this name.";
+pub const AI_MASKS: &str = "AI masks (found again on each photo)";
+pub const AI_MASKS_HINT: &str = "The sky, subject or people masks keep their settings and are found again in each photo the preset is applied to";
 /// The longest name the server accepts.
 pub const MAX_NAME: usize = 80;
 
@@ -21,7 +23,12 @@ pub const MAX_NAME: usize = 80;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SaveAction {
     None,
-    Save { name: String, groups: Vec<GroupKey> },
+    Save {
+        name: String,
+        groups: Vec<GroupKey>,
+        /// Keep the photo's AI masks as adaptive ones.
+        ai_masks: bool,
+    },
     Cancel,
 }
 
@@ -31,6 +38,8 @@ pub struct SavePresetDialog {
     pub groups: Vec<GroupKey>,
     /// Why the last save was refused (a name already taken).
     pub error: Option<String>,
+    /// The photo has AI masks: whether the preset keeps them (`None`: it has none).
+    pub ai_masks: Option<bool>,
 }
 
 impl Default for SavePresetDialog {
@@ -39,6 +48,7 @@ impl Default for SavePresetDialog {
             name: String::new(),
             groups: DEFAULT_COPY_GROUPS.to_vec(),
             error: None,
+            ai_masks: None,
         }
     }
 }
@@ -69,9 +79,13 @@ impl SavePresetDialog {
             }
             ui.add_space(8.0);
             group_picker::show(ui, &mut self.groups, None);
+            if let Some(keep) = &mut self.ai_masks {
+                ui.checkbox(keep, AI_MASKS).on_hover_text(AI_MASKS_HINT);
+            }
             ui.add_space(12.0);
             let name = clean_name(&self.name);
-            let can = !name.is_empty() && !self.groups.is_empty();
+            let masks = self.ai_masks == Some(true);
+            let can = !name.is_empty() && (!self.groups.is_empty() || masks);
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             ui.horizontal(|ui| {
                 if (ui.add_enabled(can, egui::Button::new(SAVE)).clicked() || (enter && can))
@@ -80,6 +94,7 @@ impl SavePresetDialog {
                     action = SaveAction::Save {
                         name: name.clone(),
                         groups: self.groups.clone(),
+                        ai_masks: masks,
                     };
                 }
                 if ui.button(CANCEL).clicked() {

@@ -760,6 +760,17 @@ so the sharp subject does not halo into the background. Discs are read through r
 sums; a radius over 12 px is blurred on a picture made smaller by as much. 24 MP takes about
 12 s in release on this machine.
 
+Adaptive presets (`lf_settings::adaptive`): "Save as preset" offers "AI masks (found again on
+each photo)" when the photo has AI masks whose `what` is an `lf_ai::segment::Target` (a
+click-picked object cannot be found again; hidden masks are left out). They go into the preset's
+JSON as `desktop.adaptiveMasks` (what to find, invert, opacity, local sliders, range; no
+coverage), which the web's `applyLook` never reads and the server stores as it is. Applying the
+preset queues them (`Develop::queue_adaptive`; skipped with a note when the AI tools are not
+allowed); `take_ai_mask_request(busy)` hands out one `AiTool::Mask` at a time while no other AI
+job runs, and `add_ai_mask` gives the mask that comes back the preset's settings when its
+`what` matches the one awaited. A mask not found (the job ends without it, `ai_job_ended`) is
+let go and the next one is asked for; opening another photo drops the queue.
+
 Reference view (`Shift+R`, View → Reference view, `library/reference.rs`) splits Develop's
 preview area in two (`reference::split`): on the left a reference photo, fitted, with its saved
 edits (rendered once by `compare::render` on `Open`, `Msg::ReferenceRendered`); on the right

@@ -2869,3 +2869,65 @@ fn the_second_window_follows_the_active_photo() {
     assert!(run_action(&mut h, Action::SecondWindow));
     assert!(!h.state().lib.second_window_open());
 }
+
+/// An adaptive preset: its AI masks are asked for in the open photo one by one, each arriving
+/// with the preset's own settings.
+#[test]
+fn a_presets_ai_masks_are_found_again_with_their_settings() {
+    use lf_ai::segment::Target;
+    use lf_app::ai_job::AiTool;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    let preset = serde_json::json!({
+        "v": 2,
+        "desktop": {"adaptiveMasks": [
+            {"what": "sky", "local": {"exposure": -0.75}, "opacity": 60.0},
+            {"what": "object"},
+            {"what": "subject", "invert": true}
+        ]}
+    });
+    {
+        let s = h.state_mut();
+        // Without the AI tools nothing is asked for.
+        s.lib.develop_mut().queue_adaptive(&preset, &mut s.toasts);
+        assert_eq!(s.lib.develop_mut().take_ai_mask_request(false), None);
+        s.lib.develop_mut().set_local_ai(true);
+        s.lib.develop_mut().queue_adaptive(&preset, &mut s.toasts);
+        assert_eq!(s.lib.develop_mut().take_ai_mask_request(true), None, "busy");
+        assert_eq!(
+            s.lib.develop_mut().take_ai_mask_request(false),
+            Some(AiTool::Mask {
+                target: Target::Sky
+            })
+        );
+        assert_eq!(
+            s.lib.develop_mut().take_ai_mask_request(false),
+            None,
+            "one at a time"
+        );
+        let sky = lf_settings::masks::Shape::Image {
+            what: "sky".into(),
+            width: 2,
+            height: 1,
+            data: lf_settings::masks::encode_coverage(&[255, 0]),
+        };
+        s.lib.develop_mut().add_ai_mask(sky, &mut s.toasts);
+        // The object cannot be found again: the subject is next.
+        assert_eq!(
+            s.lib.develop_mut().take_ai_mask_request(false),
+            Some(AiTool::Mask {
+                target: Target::Subject
+            })
+        );
+        // Nothing found: the job ends and the queue is done.
+        s.lib.develop_mut().ai_job_ended();
+        assert_eq!(s.lib.develop_mut().take_ai_mask_request(false), None);
+    }
+    let masks = lf_settings::masks::Masks::from_settings(&settings(&h));
+    assert_eq!(masks.0.len(), 1);
+    assert_eq!(masks.0[0].local.exposure, -0.75);
+    assert_eq!(masks.0[0].opacity, 60.0);
+}
