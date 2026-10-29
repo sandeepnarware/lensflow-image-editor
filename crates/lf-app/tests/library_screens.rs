@@ -3446,3 +3446,31 @@ fn a_photo_opens_from_its_smart_preview_when_its_file_is_gone() {
         0.5
     );
 }
+
+/// Lens blur's depth, found by AI, becomes the blur's (with its sliders), never a mask.
+#[test]
+fn a_found_depth_goes_to_the_lens_blur_not_the_masks() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    let depth = lf_settings::masks::Shape::Image {
+        what: "depth".into(),
+        width: 2,
+        height: 1,
+        data: lf_settings::masks::encode_coverage(&[0, 255]),
+    };
+    {
+        let st = h.state_mut();
+        st.lib.develop_mut().add_ai_mask(depth, &mut st.toasts);
+    }
+    let s = settings(&h);
+    assert!(lf_settings::masks::Masks::from_settings(&s).0.is_empty());
+    let blur = lf_settings::lens_blur::LensBlur::from_settings(&s).unwrap();
+    assert_eq!(blur.values(), Some(vec![0, 255]));
+    assert_eq!(
+        blur.amount,
+        lf_settings::lens_blur::LensBlur::default().amount
+    );
+}

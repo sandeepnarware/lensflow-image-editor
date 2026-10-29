@@ -30,6 +30,7 @@ fn harness(raw: bool) -> Harness<'static, State> {
                     picking_wb: false,
                     targeting_hsl: false,
                     picking_point: false,
+                    ai_allowed: false,
                     luts: &[],
                     profiles: &s.profiles,
                 };
@@ -214,6 +215,7 @@ fn recorded() -> Harness<'static, Recorded> {
                     picking_wb: false,
                     targeting_hsl: false,
                     picking_point: false,
+                    ai_allowed: false,
                     luts: &[],
                     profiles: &[],
                 };
@@ -361,6 +363,7 @@ fn auto_tone_auto_white_balance_and_the_eyedropper_button() {
                     picking_wb: false,
                     targeting_hsl: false,
                     picking_point: false,
+                    ai_allowed: false,
                     luts: &[],
                     profiles: &[],
                 };
@@ -516,4 +519,28 @@ fn point_colour_picks_shows_and_removes_a_colour() {
     h.get_by_label(panels::point_colour::REMOVE).click();
     h.run();
     assert!(Points::from_settings(&h.state().settings).0.is_empty());
+}
+
+/// Lens blur: without a depth, only "Find depth (AI)"; with one, its sliders.
+#[test]
+fn lens_blur_asks_for_a_depth_then_shows_its_sliders() {
+    use lf_settings::lens_blur::LensBlur;
+    let mut h = harness(false);
+    h.run();
+    h.get_by_label(panels::lens_blur::TITLE).click();
+    h.run();
+    assert!(h.query_by_label(panels::lens_blur::FIND).is_some());
+    assert!(h.query_by_label("Focus").is_none());
+    LensBlur::write_into(
+        Some(&LensBlur {
+            width: 2,
+            height: 1,
+            depth: lf_settings::masks::encode_coverage(&[0, 255]),
+            ..LensBlur::default()
+        }),
+        &mut h.state_mut().settings,
+    );
+    h.run();
+    assert!(h.query_by_label("Focus").is_some());
+    assert!(h.query_by_label(panels::lens_blur::FIND_AGAIN).is_some());
 }

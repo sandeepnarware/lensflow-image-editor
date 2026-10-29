@@ -95,6 +95,7 @@ impl AiTool {
                 Target::Irises => "Select irises",
                 Target::Lips => "Select lips",
                 Target::Teeth => "Select teeth",
+                Target::Depth => "Find depth",
             },
             AiTool::ObjectMask { .. } => "Select object",
             AiTool::Cull => "Assisted culling",

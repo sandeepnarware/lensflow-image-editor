@@ -84,6 +84,7 @@ struct Uniforms {
     point_n: vec4<f32>,     // desktop only: Point colour points in use (0: the web's pass)
     point_a: array<vec4<f32>, 4>, // each point's hue, saturation, brightness, range
     point_b: array<vec4<f32>, 4>, // its hue shift (degrees), saturation and luminance shifts
+    blur: vec4<f32>,        // desktop only: lens blur radius, focus, half band, on (0: none)
 }
 
 @group(0) @binding(0) var u_img: texture_2d<f32>;    // the photo (after spots)
@@ -239,15 +240,55 @@ fn lens_to_source(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.5 + x * f, 0.5 + y * f);
 }
 
+// The brush texture's layers: one per mask, then the lens blur's depth.
+const LAYERS: f32 = 9.0;
+
+// Desktop only: the lens blur's depth at `muv` (0 far .. 1 near), from the last layer.
+fn depth_at(muv: vec2<f32>) -> f32 {
+    let rows = f32(textureDimensions(u_brush).y) / LAYERS;
+    let edge = 0.5 / rows;
+    let v = (LAYERS - 1.0 + clamp(muv.y, edge, 1.0 - edge)) / LAYERS;
+    return textureSampleLevel(u_brush, s_brush, vec2<f32>(clamp(muv.x, 0.0, 1.0), v), 0.0).r;
+}
+
+// How blurred a pixel at depth `d` is (0 sharp .. 1 fully): beyond the sharp band about the
+// focus, growing over a quarter of the depth range.
+fn blur_of(d: f32) -> f32 {
+    return smoothstep(u.blur.z, u.blur.z + 0.25, abs(d - u.blur.y));
+}
+
+// Desktop only: lens blur (`lf_settings::lens_blur`): a disc of 16 samples (a Vogel spiral) as
+// wide as the pixel's blur, averaged in linear light so highlights bloom; a nearer, sharper
+// sample counts for little, so a sharp subject does not smear into the blur behind it.
+fn lens_blur(uv: vec2<f32>, muv: vec2<f32>) -> vec3<f32> {
+    let centre = sample_2d(u_img, s_img, uv).rgb;
+    let d = depth_at(muv);
+    let k = blur_of(d);
+    if (k < 0.02) { return centre; }
+    let r = u.blur.x * k;
+    var acc = vec3<f32>(0.0);
+    var total = 0.0;
+    for (var i = 0; i < 16; i++) {
+        let t = (f32(i) + 0.5) / 16.0;
+        let a = f32(i) * 2.39996323;
+        let o = vec2<f32>(cos(a) / u.aspect, sin(a)) * sqrt(t) * r;
+        let sd = depth_at(muv + o);
+        let w = select(1.0, 0.15, sd > d && blur_of(sd) < k * 0.5);
+        acc += to_linear(sample_2d(u_img, s_img, uv + o).rgb) * w;
+        total += w;
+    }
+    return to_gamma(acc / max(total, 1e-4));
+}
+
 // Desktop only: how much mask `m` applies at `muv` (photo UV; `p` is it with x × aspect), 0..1.
 // The same formula as `lf_settings::masks::weight`; a brush reads its painted layer.
 fn mask_weight(m: MaskU, p: vec2<f32>, muv: vec2<f32>) -> f32 {
     var w: f32;
     if (m.kind.x > 1.5) {
         // Brush: its own layer, kept off its neighbours' rows.
-        let rows = f32(textureDimensions(u_brush).y) / 8.0;
+        let rows = f32(textureDimensions(u_brush).y) / LAYERS;
         let edge = 0.5 / rows;
-        let v = (m.shape.x + clamp(muv.y, edge, 1.0 - edge)) / 8.0;
+        let v = (m.shape.x + clamp(muv.y, edge, 1.0 - edge)) / LAYERS;
         w = textureSampleLevel(u_brush, s_brush, vec2<f32>(clamp(muv.x, 0.0, 1.0), v), 0.0).r;
     } else if (m.kind.x < 0.5) {
         // Linear: full behind the start line, none past the end line.
@@ -478,6 +519,7 @@ fn fs_develop(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     var c = sample_2d(u_img, s_img, uv).rgb;
+    if (u.blur.w != 0.0) { c = lens_blur(uv, muv); }
     if (u.lens_on != 0u) {
         // Lateral chromatic aberration: red and blue from a little further in or out.
         if (u.lens.z != 0.0 || u.lens.w != 0.0) {

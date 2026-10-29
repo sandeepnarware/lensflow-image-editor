@@ -14,6 +14,7 @@ pub mod effects;
 pub mod grading;
 pub mod hsl;
 pub mod lens;
+pub mod lens_blur;
 pub mod light;
 pub mod looks;
 pub mod lut;
@@ -114,6 +115,8 @@ pub struct PanelOutput {
     pub target_hsl: bool,
     /// Point colour's "Pick a colour" was clicked: open (or leave) its picker.
     pub pick_point: bool,
+    /// Lens blur's "Find depth (AI)" was clicked.
+    pub find_depth: bool,
     /// "Import .cube…" was clicked.
     pub import_lut: bool,
     /// "Import .dcp…" was clicked.
@@ -143,6 +146,8 @@ pub struct PanelContext<'a> {
     pub targeting_hsl: bool,
     /// Point colour's picker is on.
     pub picking_point: bool,
+    /// The AI tools may run (Lens blur's depth).
+    pub ai_allowed: bool,
     /// The LUT looks loaded (`lf_pipeline::lut::names`).
     pub luts: &'a [String],
     /// The camera profiles loaded (`lf_raw::dcp::names`: name, camera).
@@ -297,6 +302,24 @@ pub fn show(
         }
     }
     out.absorb(r);
+    let mut r = SliderResponse::default();
+    let mut find = false;
+    if section(ui, "lens-blur", lens_blur::TITLE, false, |ui| {
+        let (br, f) = lens_blur::show(ui, s, ctx.ai_allowed);
+        r = br;
+        find = f;
+    }) {
+        let before = s.clone();
+        lens_blur::reset(s);
+        if *s != before {
+            r = SliderResponse {
+                changed: true,
+                released: true,
+            };
+        }
+    }
+    out.absorb(r);
+    out.find_depth |= find;
     let mut r = SliderResponse::default();
     let mut pick = false;
     if section(ui, "point-colour", point_colour::TITLE, false, |ui| {

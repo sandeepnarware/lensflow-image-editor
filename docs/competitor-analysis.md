@@ -39,7 +39,7 @@ close or competitors ship new features.
 | Camera-matching profiles (camera looks, ~~DCP profiles~~ (done: RAW → Camera profile, user-imported), ~~colour calibration~~ (done: Develop → Calibration)) | All |
 | HDR editing and output for HDR screens, ~~gain-map JPEG~~ (done: Export → JPEG HDR, highlights only); HDR editing and gain-map AVIF still to do | Lightroom |
 | Reflection, ~~wire~~ (done: Remove objects → Select wires) and ~~people removal~~ (done: Remove objects → Select people) (one-click distractions) | Lightroom 15.6 |
-| ~~Lens blur (AI depth of field)~~ (done: AI → Enhance → Lens blur, as a new photo); ~~depth mask~~ (done: Masks → Foreground, Background) | Lightroom |
+| ~~Lens blur (AI depth of field)~~ (done: AI → Enhance → Lens blur, as a new photo; and live: Develop → Lens blur); ~~depth mask~~ (done: Masks → Foreground, Background) | Lightroom |
 | ~~Layers (stacked local edits with opacity)~~ (done: masks have opacity, show/hide and Duplicate) | Capture One, Luminar |
 | ~~Upright Guided (draw lines)~~ (done: Develop → Guided), ~~Level, Auto~~ (done: Lens corrections → Upright) | Lightroom |
 | New-camera support: rawler can't open Nikon HE/HE* NEF, DNG 1.7 JPEG XL, some Sony ARW / Phase One IIQ | All, updated monthly |
@@ -87,6 +87,7 @@ close or competitors ship new features.
 - Painter tool (Lightroom's spray can): done, Home → Selection → Painter.
 - Customizable keyboard shortcuts (Capture One's): done, Help → Keyboard shortcuts.
 - Smart previews for offline editing (Lightroom's): done, Home → Photos → Previews.
+- Non-destructive (live) lens blur with a depth map: done, Develop → Lens blur.
 
 ### Tier 4: large or strategic
 

@@ -93,6 +93,9 @@ pub struct Uniforms {
     /// saturation, luminance, unused).
     pub point_a: [[f32; 4]; 4],
     pub point_b: [[f32; 4]; 4],
+    /// Desktop only: lens blur's radius at full blur (a share of the height), focus, half the
+    /// sharp band, and 1 when on (0: the web's pass exactly).
+    pub blur: [f32; 4],
 }
 
 /// One local adjustment as `develop.wgsl`'s `MaskU` takes it (seven 16-byte rows).
@@ -192,7 +195,7 @@ impl MaskUniform {
 const _: () = {
     use std::mem::{offset_of, size_of};
     assert!(size_of::<MaskUniform>() == 112);
-    assert!(size_of::<Uniforms>() == 624 + 16 + MAX_MASKS * 112 + 32 + 64 + 32 + 32 + 144);
+    assert!(size_of::<Uniforms>() == 624 + 16 + MAX_MASKS * 112 + 32 + 64 + 32 + 32 + 144 + 16);
     assert!(offset_of!(Uniforms, wb) == 128);
     assert!(offset_of!(Uniforms, pixel) == 232);
     assert!(offset_of!(Uniforms, hsl) == 240);
@@ -333,6 +336,9 @@ impl Uniforms {
             neg_dmax: negative.map_or([1.0; 4], |n| {
                 [n.dmax[0] as f32, n.dmax[1] as f32, n.dmax[2] as f32, 1.0]
             }),
+            blur: lf_settings::lens_blur::LensBlur::from_settings(s)
+                .filter(|_| f.develop)
+                .map_or([0.0; 4], |b| b.uniform()),
             point_n: [points.len().min(4) as f32, 0.0, 0.0, 0.0],
             point_a,
             point_b,

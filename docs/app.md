@@ -977,6 +977,15 @@ note in the info strip) and `photo_path` is cleared so no sidecar is written; th
 the edits and, being newer, rewrites the sidecar on the next open of the original. Library lets a
 missing photo open when it has a preview.
 
+Live lens blur (`lf_settings::lens_blur`, `desktop.lensBlur`; `panels/lens_blur.rs`): "Find depth
+(AI)" runs `AiTool::Mask { Target::Depth }` (Depth Anything's map itself, 0 far .. 1 near, at the
+mask size), and `Develop::add_ai_mask` keeps a "depth" result as the blur's (its sliders kept),
+never as a mask. The depth goes to the GPU as a ninth layer of the brush texture
+(`brush::LAYERS`, the shader's `LAYERS`); the develop shader's input stage (`lens_blur`) blurs
+each pixel by `blur_of` its depth (beyond half the Range about the Focus, over a quarter of the
+depth range) with a 16-sample Vogel disc up to 2.5 % of the height at Amount 100, in linear light,
+a nearer sharper sample counting 0.15. `blur.w` is 0 when off, so the pass is the web's.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

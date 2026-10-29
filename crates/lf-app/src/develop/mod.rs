@@ -143,6 +143,8 @@ pub struct Develop {
     local_ai: bool,
     /// View → Info: the file's facts over the preview.
     info_overlay: bool,
+    /// Lens blur's "Find depth (AI)" was clicked (the library runs it).
+    depth_asked: bool,
     /// The History section's rows.
     history: history_panel::HistoryUi,
     /// A look or preset under the pointer: the preview shows the photo with it (nothing is
@@ -218,6 +220,7 @@ impl Develop {
             local_ai: false,
             adaptive: extras::AdaptiveQueue::default(),
             info_overlay: false,
+            depth_asked: false,
             history: history_panel::HistoryUi::default(),
             hover_settings: None,
             hover_drawn: None,
@@ -622,6 +625,11 @@ impl Develop {
     /// An AI mask asked for since the last call (a button, or a click with Select object):
     /// the tool to run.
     pub fn take_ai_mask_request(&mut self, busy: bool) -> Option<crate::ai_job::AiTool> {
+        if std::mem::take(&mut self.depth_asked) {
+            return Some(crate::ai_job::AiTool::Mask {
+                target: lf_ai::segment::Target::Depth,
+            });
+        }
         // A preset's adaptive masks, one at a time while no other AI job runs.
         if !busy
             && self.adaptive.waiting.is_none()
@@ -659,6 +667,30 @@ impl Develop {
     /// the Masks tool when it is open.
     pub fn add_ai_mask(&mut self, shape: lf_settings::masks::Shape, toasts: &mut Toasts) {
         use lf_settings::masks::{Local, Mask, Masks, Range, Shape};
+        // A depth is Lens blur's, not a mask: kept with the blur's own sliders.
+        if let Shape::Image {
+            what,
+            width,
+            height,
+            data,
+        } = &shape
+            && what == "depth"
+        {
+            let blur = lf_settings::lens_blur::LensBlur {
+                width: *width,
+                height: *height,
+                depth: data.clone(),
+                ..self
+                    .session
+                    .edit()
+                    .and_then(|e| lf_settings::lens_blur::LensBlur::from_settings(&e.settings))
+                    .unwrap_or_default()
+            };
+            self.commit(toasts);
+            self.edit(|s| lf_settings::lens_blur::LensBlur::write_into(Some(&blur), s));
+            self.commit(toasts);
+            return;
+        }
         // A preset's adaptive mask brings its own settings.
         let template = match (&shape, &self.adaptive.waiting) {
             (Shape::Image { what, .. }, Some(t)) if *what == t.what => self.adaptive.waiting.take(),
@@ -1124,6 +1156,7 @@ impl Develop {
             picking_wb: self.tools.kind() == Some(ToolKind::WhiteBalance),
             targeting_hsl: self.tools.kind() == Some(ToolKind::Targeted),
             picking_point: self.tools.kind() == Some(ToolKind::PointColour),
+            ai_allowed: self.local_ai,
         };
         let panels = &mut self.panels;
         let mut out = PanelOutput::default();
@@ -1145,6 +1178,7 @@ impl Develop {
         if out.pick_point {
             self.toggle_tool(ToolKind::PointColour, toasts);
         }
+        self.depth_asked |= out.find_depth;
         // The targeted adjustment follows the property the panel shows.
         if let Some(tools::Active::Targeted(t)) = &mut self.tools.active {
             t.mode = self.panels.hsl_mode;

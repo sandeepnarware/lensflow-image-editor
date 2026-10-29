@@ -265,6 +265,10 @@ Smart previews (Home → Photos → Previews): smaller copies (up to 2560 px) of
 (or the folder's) kept in the catalogue, so a photo whose drive is not connected still opens in
 Develop and can be edited; its sidecar is written when the original is back.
 
+Lens blur as an edit (Develop → Lens blur): "Find depth (AI)" once, then Amount, Focus (the depth
+kept sharp) and Range blur the background (or foreground) live, and stay editable, unlike AI →
+Lens blur, which writes a new photo.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

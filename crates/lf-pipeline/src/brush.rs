@@ -13,6 +13,10 @@ use crate::texture::Target;
 use lf_settings::EditSettings;
 use lf_settings::masks::{MAX_MASKS, Masks, Shape, decode_coverage, image_weight, rasterize};
 
+/// The layers stacked in the texture: one per mask, then the lens blur's depth
+/// ([`lf_settings::lens_blur`]) in the last.
+pub const LAYERS: usize = MAX_MASKS + 1;
+
 /// The long edge of one mask's layer, in pixels.
 pub const LAYER_EDGE: u32 = 512;
 
@@ -39,7 +43,7 @@ impl BrushTexture {
     /// The layer size for a `width`×`height` working photo: its shape, the long edge
     /// [`LAYER_EDGE`] at most and short enough for eight to stack within the device's limit.
     pub fn layer_size(gpu: &Gpu, width: u32, height: u32) -> (u32, u32) {
-        let limit = gpu.max_edge() / MAX_MASKS as u32;
+        let limit = gpu.max_edge() / LAYERS as u32;
         let long = LAYER_EDGE.min(limit).min(width.max(height)).max(1);
         let k = f64::from(long) / f64::from(width.max(height).max(1));
         let side = |v: u32| ((f64::from(v) * k).round() as u32).max(1);
@@ -55,10 +59,12 @@ impl BrushTexture {
         height: u32,
     ) -> Result<(), PipelineError> {
         let masks = Masks::from_settings(s);
-        if !masks
-            .0
-            .iter()
-            .any(|m| matches!(m.shape, Shape::Brush { .. } | Shape::Image { .. }))
+        let blur = lf_settings::lens_blur::LensBlur::from_settings(s);
+        if blur.is_none()
+            && !masks
+                .0
+                .iter()
+                .any(|m| matches!(m.shape, Shape::Brush { .. } | Shape::Image { .. }))
         {
             return Ok(());
         }
@@ -72,15 +78,21 @@ impl BrushTexture {
                 _ => None,
             })
             .collect();
+        let depth_key = blur.as_ref().map(|b| {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (b.width, b.height, &b.depth).hash(&mut h);
+            h.finish()
+        });
         let key = format!(
-            "{lw}x{lh}:{}",
+            "{lw}x{lh}:{depth_key:?}:{}",
             serde_json::to_string(&layers).expect("shapes serialise")
         );
 
         if key == self.key {
             return Ok(());
         }
-        let rows = lh * MAX_MASKS as u32;
+        let rows = lh * LAYERS as u32;
         if (self.target.width, self.target.height) != (lw, rows) {
             let old = std::mem::replace(
                 &mut self.target,
@@ -89,7 +101,17 @@ impl BrushTexture {
             old.texture.destroy();
         }
         let layer = (lw * lh) as usize;
-        let mut data = vec![0u8; layer * MAX_MASKS];
+        let mut data = vec![0u8; layer * LAYERS];
+        if let Some((b, values)) = blur.as_ref().and_then(|b| b.values().map(|v| (b, v))) {
+            resample(
+                b.width,
+                b.height,
+                &values,
+                lw,
+                lh,
+                &mut data[MAX_MASKS * layer..],
+            );
+        }
         for (i, shape) in layers.iter().enumerate().take(MAX_MASKS) {
             let out = &mut data[i * layer..(i + 1) * layer];
             match shape {

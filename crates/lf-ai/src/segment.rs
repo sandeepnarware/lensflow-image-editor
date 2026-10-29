@@ -41,6 +41,8 @@ pub enum Target {
     /// The lips, the mouth's opening left out.
     Lips,
     Teeth,
+    /// The depth itself (0 far .. 1 near), for Develop's lens blur; not a mask.
+    Depth,
 }
 
 impl Target {
@@ -80,7 +82,7 @@ impl Target {
             Target::Eyes | Target::Irises | Target::Lips | Target::Teeth => {
                 &crate::features::FEATURE_MODELS
             }
-            Target::Foreground | Target::Background => &crate::depth::DEPTH_MODELS,
+            Target::Foreground | Target::Background | Target::Depth => &crate::depth::DEPTH_MODELS,
             _ => &PEOPLE_MODELS,
         }
     }
@@ -101,6 +103,7 @@ impl Target {
             Target::Irises => "irises",
             Target::Lips => "lips",
             Target::Teeth => "teeth",
+            Target::Depth => "depth",
         }
     }
 
@@ -120,6 +123,7 @@ impl Target {
             Target::Irises => "Irises",
             Target::Lips => "Lips",
             Target::Teeth => "Teeth",
+            Target::Depth => "Depth",
         }
     }
 
@@ -139,6 +143,7 @@ impl Target {
             Target::Irises => "iris",
             Target::Lips => "mouth",
             Target::Teeth => "teeth",
+            Target::Depth => "depth",
         }
     }
 
@@ -215,6 +220,9 @@ pub fn mask(
 ) -> Result<Gray, AiError> {
     if let Some(part) = target.face_part() {
         return crate::features::mask(engine, part, img, w, h);
+    }
+    if target == Target::Depth {
+        return crate::depth::depth(engine, img, w, h);
     }
     if matches!(target, Target::Foreground | Target::Background) {
         return crate::depth::mask(engine, img, target == Target::Foreground, w, h);
