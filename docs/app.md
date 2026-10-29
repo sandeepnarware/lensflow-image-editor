@@ -919,6 +919,12 @@ not an XML parser), the photo's EXIF time read as local and moved to UTC by the 
 else the nearest point within 5 minutes, else no place. Works on the selection (several) or the
 folder, on `Io`, through `Catalog::set_gps`; `Msg::Geotagged` toasts how many were placed.
 
+Hover preview: `looks::show` and `presets::show` report the row under the pointer; `extras_ui`
+(reset each frame) makes `Develop::hover_settings` the photo's settings with it applied (as a
+click would, `apply_look` / `Recipe::Look`), and the preview draws those instead of the edit's,
+redrawing when they change (`hover_drawn`). Nothing is committed; the histogram, tools and
+export keep reading the edit.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

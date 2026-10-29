@@ -145,6 +145,10 @@ pub struct Develop {
     info_overlay: bool,
     /// The History section's rows.
     history: history_panel::HistoryUi,
+    /// A look or preset under the pointer: the preview shows the photo with it (nothing is
+    /// recorded); and what the preview last drew for it.
+    hover_settings: Option<lf_settings::EditSettings>,
+    hover_drawn: Option<lf_settings::EditSettings>,
     /// A preset's adaptive AI masks still to find in the open photo.
     adaptive: extras::AdaptiveQueue,
     /// Soft-proofing through this ICC profile (View → Soft proof), and what the proof LUT was
@@ -215,6 +219,8 @@ impl Develop {
             adaptive: extras::AdaptiveQueue::default(),
             info_overlay: false,
             history: history_panel::HistoryUi::default(),
+            hover_settings: None,
+            hover_drawn: None,
             proof: None,
             proof_key: None,
             before_held: false,
@@ -736,6 +742,11 @@ impl Develop {
         self.commit(toasts);
     }
 
+    /// A hovered look or preset is showing on the photo (nothing recorded).
+    pub fn previewing(&self) -> bool {
+        self.hover_settings.is_some()
+    }
+
     pub fn info_overlay(&self) -> bool {
         self.info_overlay
     }
@@ -878,6 +889,7 @@ impl Develop {
         self.last_drawn = None;
         self.last_before = None;
         self.navigator_drawn = None;
+        self.hover_settings = None;
         self.readout_img = None;
         self.histogram = None;
         if !self.is_lost() {
@@ -923,16 +935,24 @@ impl Develop {
                 self.last_drawn = None;
                 self.last_before = None;
                 self.navigator_drawn = None;
+                self.hover_settings = None;
+                self.hover_settings = None;
                 self.readout_img = None;
                 self.readout_img = None;
                 self.navigator_drawn = None;
+                self.hover_settings = None;
+                self.hover_settings = None;
                 self.readout_img = None;
                 self.readout_img = None;
                 self.last_before = None;
                 self.navigator_drawn = None;
+                self.hover_settings = None;
+                self.hover_settings = None;
                 self.readout_img = None;
                 self.readout_img = None;
                 self.navigator_drawn = None;
+                self.hover_settings = None;
+                self.hover_settings = None;
                 self.readout_img = None;
                 self.readout_img = None;
                 self.last_histogram = None;
@@ -970,6 +990,7 @@ impl Develop {
         self.last_drawn = None;
         self.last_before = None;
         self.navigator_drawn = None;
+        self.hover_settings = None;
         self.readout_img = None;
         self.state = State::Lost;
         true
@@ -1294,6 +1315,11 @@ impl Develop {
             }
         };
         let mut failed = None;
+        // A hovered look or preset (or its end) redraws.
+        if self.hover_settings != self.hover_drawn {
+            self.hover_drawn = self.hover_settings.clone();
+            self.dirty = true;
+        }
         if fresh || self.dirty || self.last_drawn != Some(key) {
             if let State::Ready(photo, _) = &mut self.state {
                 let opts = DrawOptions {
@@ -1307,6 +1333,7 @@ impl Develop {
                     proof: self.proof.is_some() && !before,
                 };
                 let settings = self.session.edit().map_or(&photo.settings, |e| &e.settings);
+                let settings = self.hover_settings.as_ref().unwrap_or(settings);
                 if let Err(e) = photo.renderer.draw(settings, &opts, canvas) {
                     failed = Some(e);
                 }

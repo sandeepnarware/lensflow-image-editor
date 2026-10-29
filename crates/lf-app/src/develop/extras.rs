@@ -222,14 +222,20 @@ impl Develop {
         if !self.is_ready() {
             return;
         }
+        // A look or preset under the pointer shows on the photo until the pointer leaves it.
+        self.hover_settings = None;
         egui::CollapsingHeader::new(looks::TITLE)
             .id_salt("looks-section")
             .show(ui, |ui| {
-                if let Some(i) = looks::show(ui)
+                let mut hovered = None;
+                let clicked = looks::show(ui, &mut hovered);
+                if let Some(i) = clicked
                     && let Some(edit) = self.session.edit()
                 {
                     let next = apply_look(&edit.settings, &LOOKS[i].settings);
                     self.apply_with_amount(LOOKS[i].name.to_owned(), next, toasts);
+                } else if let (Some(i), Some(edit)) = (hovered, self.session.edit()) {
+                    self.hover_settings = Some(apply_look(&edit.settings, &LOOKS[i].settings));
                 }
             });
         egui::CollapsingHeader::new(presets::TITLE)
@@ -331,7 +337,16 @@ impl Develop {
             return;
         }
         let rows = self.preset_rows();
-        match presets::show(ui, &rows) {
+        let mut hovered = None;
+        let action = presets::show(ui, &rows, &mut hovered);
+        if action.is_none()
+            && let (Some(row), Some(edit)) =
+                (hovered.and_then(|i| rows.get(i)), self.session.edit())
+        {
+            self.hover_settings =
+                Some(crate::clipboard::Recipe::Look(row.settings.clone()).apply(&edit.settings));
+        }
+        match action {
             Some(presets::PresetAction::Apply(i)) => {
                 if let (Some(row), Some(edit)) = (rows.get(i), self.session.edit()) {
                     // As the web: a preset is applied as a look (its geometry and spots never).

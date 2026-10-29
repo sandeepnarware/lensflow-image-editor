@@ -3174,3 +3174,30 @@ fn quick_develop_nudges_the_selection() {
         ids.iter().all(|&id| exposure(id) == 1.0)
     });
 }
+
+/// Develop's Looks: the look under the pointer shows on the photo, and nothing is recorded
+/// until it is clicked.
+#[test]
+fn hovering_a_look_previews_it_without_applying() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    let before = settings(&h);
+    h.get_by_label(lf_app::develop::panels::looks::TITLE)
+        .click();
+    h.step();
+    h.step();
+    let name = lf_settings::looks::LOOKS[0].name;
+    let at = h.get_by_label(name).rect().center();
+    h.hover_at(at);
+    h.step();
+    h.step();
+    assert!(h.state().lib.develop().previewing());
+    assert_eq!(settings(&h), before, "nothing applied");
+    h.hover_at(egui::pos2(5.0, 400.0));
+    h.step();
+    h.step();
+    assert!(!h.state().lib.develop().previewing());
+}

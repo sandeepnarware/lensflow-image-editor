@@ -42,7 +42,12 @@ pub fn small_named(ui: &mut egui::Ui, text: &str, name: &str) -> egui::Response 
     response
 }
 
-pub fn show(ui: &mut egui::Ui, rows: &[LocalPresetRow]) -> Option<PresetAction> {
+/// The presets; sets `hovered` to the one under the pointer.
+pub fn show(
+    ui: &mut egui::Ui,
+    rows: &[LocalPresetRow],
+    hovered: &mut Option<usize>,
+) -> Option<PresetAction> {
     let mut action = None;
     if ui.button(SAVE).clicked() {
         action = Some(PresetAction::Save);
@@ -55,7 +60,11 @@ pub fn show(ui: &mut egui::Ui, rows: &[LocalPresetRow]) -> Option<PresetAction> 
         ui.horizontal(|ui| {
             let width = (ui.available_width() - 64.0).max(40.0);
             let apply = egui::Button::new(&row.name).truncate();
-            if ui.add_sized([width, 24.0], apply).clicked() {
+            let r = ui.add_sized([width, 24.0], apply);
+            if r.hovered() {
+                *hovered = Some(i);
+            }
+            if r.clicked() {
                 action = Some(PresetAction::Apply(i));
             }
             if small_named(ui, DELETE, &delete_label(&row.name)).clicked() {

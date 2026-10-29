@@ -78,6 +78,7 @@ close or competitors ship new features.
 - Quick Develop in the Library (Lightroom's): done, View → Quick develop.
 - Auto straighten in the crop tool (Lightroom's Auto): done.
 - Geotagging from a GPX tracklog (Lightroom's Map → Tracklog): done, View → GPX track.
+- Preset preview on hover (Lightroom's): done.
 
 ### Tier 4: large or strategic
 
