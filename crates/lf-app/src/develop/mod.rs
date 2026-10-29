@@ -717,6 +717,16 @@ impl Develop {
         self.side_by_side = !self.side_by_side;
     }
 
+    /// A quarter turn of the open photo, one history step.
+    pub fn turn(&mut self, dir: lf_settings::geometry::TurnDir, toasts: &mut Toasts) {
+        if !self.is_ready() {
+            return;
+        }
+        self.commit(toasts);
+        self.edit(|s| tools::crop::turn(s, dir));
+        self.commit(toasts);
+    }
+
     pub fn info_overlay(&self) -> bool {
         self.info_overlay
     }

@@ -875,6 +875,11 @@ Export with previous (`Action::ExportPrevious`, `Library::export_previous`) read
 with the dialog hidden (its end is a toast, as for a dialog closed while running), else the dialog
 opens to be filled in. `start_export` is the dialog's Start, shared.
 
+Rotate left and right (`Action::{RotateLeft, RotateRight}`, `Library::turn_photos`): in Develop,
+`Develop::turn` (one history step); in the grid, every selected photo through `batch::run` on
+`Long` with `Recipe::Turn` (`crop::turn`: the crop and a locked shape turn with it), answered by
+`Msg::Turned`, which reloads their rows and thumbnails.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

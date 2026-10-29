@@ -232,6 +232,12 @@ pub enum Msg {
         ids: Vec<i64>,
         failed: Vec<(i64, String)>,
     },
+    /// The Library's Rotate left or right was saved for `ids` (but `failed`).
+    Turned {
+        root: PathBuf,
+        ids: Vec<i64>,
+        failed: Vec<(i64, String)>,
+    },
     /// "Edit in external editor" made its copy and opened it: the copy and why the editor did not start (if it did not), or why no copy was made.
     EditInDone(Result<(PathBuf, Option<String>), String>),
     /// Printing moved on.
@@ -855,6 +861,7 @@ pub(crate) mod owners {
             | Msg::SlideRendered { .. }
             | Msg::ReferenceRendered { .. }
             | Msg::SecondWindowRendered { .. }
+            | Msg::Turned { .. }
             | Msg::Renamed { .. }
             | Msg::EditInDone(..)
             | Msg::PrintProgress { .. }
@@ -985,6 +992,11 @@ pub(crate) mod owners {
             Msg::LutImported(Err("no".into())),
             Msg::DcpImported(Err("no".into())),
             Msg::Synced {
+                root: dir.to_path_buf(),
+                ids: Vec::new(),
+                failed: Vec::new(),
+            },
+            Msg::Turned {
                 root: dir.to_path_buf(),
                 ids: Vec::new(),
                 failed: Vec::new(),

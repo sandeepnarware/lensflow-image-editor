@@ -209,6 +209,9 @@ written, is moved into a catalogued folder you choose and imported. Stays on unt
 Export with previous (`Ctrl+Alt+Shift+E`, Home → Export again): the selection exported at
 once with the settings used last, no dialog; a toast says how it went.
 
+Rotate left and right (`Ctrl+[`, `Ctrl+]`, Home → Selection): every selected photo in the grid
+turns a quarter (or, in Develop, the open one), its crop turning with it.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

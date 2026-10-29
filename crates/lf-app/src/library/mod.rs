@@ -987,6 +987,7 @@ impl Library {
             } => self.person_photos_loaded(root, group, result, env),
             Msg::PeopleChanged { root, result } => self.people_changed(root, result, env),
             Msg::Synced { root, ids, failed } => self.synced(root, ids, failed, env),
+            Msg::Turned { root, ids, failed } => self.turned(root, ids, failed, env),
             Msg::PeopleSelected { id, result } => self.people_selected(id, result),
             Msg::WiresSelected { id, result } => self.wires_selected(id, result),
             Msg::Renamed { root, result } => self.renamed(root, result, env),
@@ -1570,6 +1571,9 @@ impl Library {
             Action::ImportFromCard => self.can_add() || self.ingest.is_some(),
             Action::AutoImport => self.root.is_some() && !self.folders.is_empty(),
             Action::Export => selected || self.export.is_some(),
+            Action::RotateLeft | Action::RotateRight => {
+                (develop && self.develop.is_ready()) || (!develop && selected && self.can_add())
+            }
             Action::ExportPrevious => selected || self.export.is_some(),
             Action::ExportToGallery => {
                 (selected && self.gallery_allowed()) || self.gallery.is_some()
@@ -1687,6 +1691,10 @@ impl Library {
             Action::ImportFromCard => self.open_ingest(env),
             Action::AutoImport => self.open_auto_import(env),
             Action::Export => self.open_export(env),
+            Action::RotateLeft => {
+                self.turn_photos(lf_settings::geometry::TurnDir::Anticlockwise, env)
+            }
+            Action::RotateRight => self.turn_photos(lf_settings::geometry::TurnDir::Clockwise, env),
             Action::ExportPrevious => self.export_previous(env),
             Action::ExportToGallery => self.open_gallery(env),
             Action::Undo => self.develop.undo(env.toasts),
@@ -2251,6 +2259,62 @@ impl Library {
                 failed: p.failed,
             }
         });
+    }
+
+    /// `Ctrl+[` / `Ctrl+]`: a quarter turn of the open photo (one history step), or of every
+    /// selected photo in the grid (their edits on the `Long` lane, as a paste is).
+    fn turn_photos(&mut self, dir: lf_settings::geometry::TurnDir, env: &mut Env) {
+        if let Mode::Develop(_) = self.mode {
+            self.develop.turn(dir, env.toasts);
+            return;
+        }
+        let ids = self.selected_in_order();
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        if ids.is_empty() {
+            return;
+        }
+        let saver = self.develop.saver();
+        env.jobs.spawn(Lane::Long, "turn", move || {
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            let p = match lf_catalog::Catalog::open(&root) {
+                Ok(c) => batch::run(
+                    &c,
+                    &ids,
+                    &clipboard::Recipe::Turn(dir),
+                    &saver,
+                    &stop,
+                    |_| {},
+                ),
+                Err(e) => batch::BatchProgress {
+                    failed: ids.iter().map(|&id| (id, e.to_string())).collect(),
+                    ..batch::BatchProgress::default()
+                },
+            };
+            Msg::Turned {
+                root,
+                ids,
+                failed: p.failed,
+            }
+        });
+    }
+
+    fn turned(&mut self, root: PathBuf, ids: Vec<i64>, failed: Vec<(i64, String)>, env: &mut Env) {
+        if self.root.as_deref() != Some(root.as_path()) {
+            return;
+        }
+        let done: Vec<i64> = ids
+            .into_iter()
+            .filter(|id| !failed.iter().any(|(f, _)| f == id))
+            .collect();
+        self.edited(&done, env);
+        if let Some((_, why)) = failed.first() {
+            env.toasts.push(
+                Level::Warning,
+                format!("{} could not be turned. {why}", count(failed.len())),
+            );
+        }
     }
 
     fn synced(&mut self, root: PathBuf, ids: Vec<i64>, failed: Vec<(i64, String)>, env: &mut Env) {

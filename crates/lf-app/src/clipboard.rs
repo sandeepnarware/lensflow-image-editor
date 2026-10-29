@@ -34,6 +34,8 @@ pub enum Recipe {
     Look(Value),
     /// Auto-sync: the keys one gesture changed on another photo ([`crate::sync`]).
     Sync(Value),
+    /// A quarter turn (the Library's Rotate left or right): the crop turns with the photo.
+    Turn(lf_settings::geometry::TurnDir),
 }
 
 impl Recipe {
@@ -43,6 +45,11 @@ impl Recipe {
             Recipe::Paste(partial) => apply(onto, partial),
             Recipe::Look(look) => apply_look(onto, &clipboard_settings(look)),
             Recipe::Sync(patch) => crate::sync::apply(onto, patch),
+            Recipe::Turn(dir) => {
+                let mut s = onto.clone();
+                crate::develop::tools::crop::turn(&mut s, *dir);
+                s
+            }
         }
     }
 

@@ -3046,3 +3046,28 @@ fn export_with_previous_exports_at_once() {
     let written: Vec<_> = std::fs::read_dir(&out).unwrap().collect();
     assert_eq!(written.len(), 1, "one photo exported");
 }
+
+/// `Ctrl+]` in the grid: every selected photo turns a quarter clockwise (its edits saved).
+#[test]
+fn rotate_right_turns_the_selected_photos_in_the_grid() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 2);
+    import_folder(&mut h, &shoot, 2);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    h.state_mut().lib.selection.select(&ids);
+    assert!(run_action(&mut h, Action::RotateRight));
+    let root = dir.path().join("catalogue");
+    let turned = |id: i64| {
+        let c = lf_catalog::Catalog::open(&root).unwrap();
+        lf_catalog::edits::get_settings(&c, id)
+            .unwrap()
+            .is_some_and(|s| s.rotate != lf_settings::EditSettings::default_settings().rotate)
+    };
+    step_until(&mut h, "both photos to be turned", |_| {
+        ids.iter().all(|&id| turned(id))
+    });
+}

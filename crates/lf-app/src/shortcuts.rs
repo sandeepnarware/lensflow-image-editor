@@ -18,6 +18,9 @@ pub enum Action {
     ImportFromCard,
     /// The selection exported at once with the settings used last.
     ExportPrevious,
+    /// A quarter turn of the selected photos (or the open one).
+    RotateLeft,
+    RotateRight,
     /// A watched folder's new photos moved into a catalogued folder and imported, as they come.
     AutoImport,
     Export,
@@ -171,6 +174,8 @@ impl Action {
             Action::AddFolder => "Add folder…",
             Action::ImportFromCard => "Import from card…",
             Action::ExportPrevious => "Export with previous",
+            Action::RotateLeft => "Rotate left",
+            Action::RotateRight => "Rotate right",
             Action::AutoImport => "Auto import…",
             Action::Export => "Export…",
             Action::ExportToGallery => "Export to gallery…",
@@ -320,6 +325,8 @@ pub struct Map(pub &'static [(Action, KeyboardShortcut)]);
 
 /// The window's keyboard map.
 pub const MAP: Map = Map(&[
+    (Action::RotateLeft, cmd(Key::OpenBracket)),
+    (Action::RotateRight, cmd(Key::CloseBracket)),
     (Action::ExportPrevious, cmd_alt_shift(Key::E)),
     (Action::SideBySide, key(Key::Y)),
     (Action::CropOverlay, key(Key::O)),
@@ -495,6 +502,8 @@ mod tests {
     /// The plan's keyboard map (Global Constraints), entry by entry.
     fn plan() -> Vec<(Action, KeyboardShortcut)> {
         vec![
+            (Action::RotateLeft, cmd(Key::OpenBracket)),
+            (Action::RotateRight, cmd(Key::CloseBracket)),
             (Action::ExportPrevious, cmd_alt_shift(Key::E)),
             (Action::SideBySide, key(Key::Y)),
             (Action::CropOverlay, key(Key::O)),

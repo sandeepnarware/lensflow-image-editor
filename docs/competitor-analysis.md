@@ -70,6 +70,7 @@ close or competitors ship new features.
 - RAW+JPEG pairs shown as one (Lightroom's pairing): done, Home → Stacks → RAW+JPEG.
 - Auto import from a watched folder (Lightroom's; a stand-in for tethering through the camera maker's own software): done, Home → Auto import.
 - Export with previous (Lightroom's): done, `Ctrl+Alt+Shift+E`.
+- Rotate in the Library grid (Lightroom's `Ctrl+[` / `Ctrl+]`): done.
 
 ### Tier 4: large or strategic
 
