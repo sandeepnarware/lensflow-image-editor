@@ -7,6 +7,7 @@
 
 pub mod crop;
 pub mod masks;
+pub mod overlay;
 pub mod spots;
 
 use super::panels;
@@ -98,6 +99,8 @@ pub struct Tools {
     pub active: Option<Active>,
     /// The mode new spots get, kept between visits to the spot tool.
     spot_mode: SpotMode,
+    /// The crop tool's composition overlay (`O`), kept between visits.
+    pub crop_overlay: overlay::Overlay,
 }
 
 impl Default for Tools {
@@ -105,6 +108,7 @@ impl Default for Tools {
         Tools {
             active: None,
             spot_mode: SpotMode::Heal,
+            crop_overlay: overlay::Overlay::default(),
         }
     }
 }
@@ -347,7 +351,7 @@ impl Develop {
                 true
             }
             Action::LeaveTool => self.tool().is_some(),
-            Action::ApplyCrop => self.tool() == Some(ToolKind::Crop),
+            Action::ApplyCrop | Action::CropOverlay => self.tool() == Some(ToolKind::Crop),
             Action::DeleteSpot => {
                 matches!(&self.tools.active, Some(Active::Spots(t)) if t.selected.is_some()
                     || (t.brush && t.heal_selected.is_some()))
@@ -366,6 +370,7 @@ impl Develop {
             Action::MaskTool => self.toggle_tool(ToolKind::Masks, toasts),
             Action::LeaveTool => self.cancel_tool(toasts),
             Action::ApplyCrop => self.leave_tool(toasts),
+            Action::CropOverlay => self.tools.crop_overlay = self.tools.crop_overlay.next(),
             Action::DeleteSpot => {
                 let mut out = ToolOutput::default();
                 match (&mut self.tools.active, self.session.edit_mut()) {
@@ -895,7 +900,13 @@ impl Develop {
         };
         let painter = ui.painter().with_clip_rect(area);
         match active {
-            Active::Crop(tool) => paint_crop(&painter, map, &edit.settings.crop, tool.grid()),
+            Active::Crop(tool) => paint_crop(
+                &painter,
+                map,
+                &edit.settings.crop,
+                tool.grid(),
+                self.tools.crop_overlay,
+            ),
             Active::WhiteBalance => {}
             Active::Guided(tool) => {
                 let m =
@@ -1022,6 +1033,14 @@ impl Develop {
                 }
                 out.changed = p.changed;
                 out.commit = p.commit;
+                let next = self.tools.crop_overlay.next();
+                if ui
+                    .button(format!("Overlay: {}", self.tools.crop_overlay.name()))
+                    .on_hover_text(format!("O: next ({})", next.name()))
+                    .clicked()
+                {
+                    self.tools.crop_overlay = next;
+                }
                 ui.horizontal(|ui| {
                     if ui.button(DONE).on_hover_text("Enter").clicked() {
                         action = Some(CropAction::Done);
@@ -1606,8 +1625,14 @@ fn paint_spot(painter: &egui::Painter, map: &SpotMap, s: &Spot, selected: bool) 
 }
 
 /// The crop frame over the whole turned photo: dimmed outside, the frame, the handles, and
-/// the thirds while dragging.
-fn paint_crop(painter: &egui::Painter, map: ScreenMap, c: &Crop, grid: bool) {
+/// the composition overlay (faint, stronger while dragging).
+fn paint_crop(
+    painter: &egui::Painter,
+    map: ScreenMap,
+    c: &Crop,
+    grid: bool,
+    overlay: overlay::Overlay,
+) {
     let frame = Rect::from_min_max(
         map.to_screen((c.x, c.y)),
         map.to_screen((c.x + c.w, c.y + c.h)),
@@ -1630,20 +1655,19 @@ fn paint_crop(painter: &egui::Painter, map: ScreenMap, c: &Crop, grid: bool) {
             painter.rect_filled(r, 0.0, dim);
         }
     }
-    if grid {
-        let line = Stroke::new(1.0, Color32::from_white_alpha(110));
-        for k in [1.0 / 3.0, 2.0 / 3.0] {
-            let x = frame.left() + frame.width() * k;
-            let y = frame.top() + frame.height() * k;
-            painter.line_segment(
-                [egui::pos2(x, frame.top()), egui::pos2(x, frame.bottom())],
-                line,
-            );
-            painter.line_segment(
-                [egui::pos2(frame.left(), y), egui::pos2(frame.right(), y)],
-                line,
-            );
-        }
+    let line = Stroke::new(1.0, Color32::from_white_alpha(if grid { 130 } else { 70 }));
+    let aspect = frame.width() / frame.height().max(1.0);
+    for points in overlay.lines(aspect) {
+        let points: Vec<egui::Pos2> = points
+            .iter()
+            .map(|[x, y]| {
+                egui::pos2(
+                    frame.left() + frame.width() * x,
+                    frame.top() + frame.height() * y,
+                )
+            })
+            .collect();
+        painter.add(egui::Shape::line(points, line));
     }
     painter.rect_stroke(
         frame,

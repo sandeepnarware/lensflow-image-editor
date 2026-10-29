@@ -175,6 +175,10 @@ spot at 100 % (click again to fit); `←`/`→` step through the photos keeping 
 Info overlay (`I`, View → Info): in Develop, the file's name, size and kind and what the
 camera recorded (camera, lens, exposure, date), over the bottom left of the photo.
 
+Crop overlays (`O` while cropping, or the crop panel's Overlay button): thirds, a grid, the
+golden ratio, diagonals, triangles or the golden spiral over the crop frame, faint, and stronger
+while the frame is dragged; the choice is kept for the next crop.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

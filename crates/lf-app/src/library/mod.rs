@@ -1644,6 +1644,7 @@ impl Library {
             | Action::MaskTool
             | Action::LeaveTool
             | Action::ApplyCrop
+            | Action::CropOverlay
             | Action::DeleteSpot => develop && self.develop.tool_enabled(action),
             Action::Flag(_) | Action::Rate(_) | Action::Label(_) => develop || selected,
             Action::Quit
@@ -1778,6 +1779,7 @@ impl Library {
             | Action::MaskTool
             | Action::LeaveTool
             | Action::ApplyCrop
+            | Action::CropOverlay
             | Action::DeleteSpot => self.develop.tool_command(action, env.toasts),
             Action::Flag(flag) => self.mark(Mark::Flag(flag), env),
             Action::Rate(stars) => self.mark(Mark::Rating(stars), env),

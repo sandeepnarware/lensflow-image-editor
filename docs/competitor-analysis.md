@@ -60,6 +60,7 @@ close or competitors ship new features.
 ### More conveniences (added 2026-10-29)
 
 - Info overlay over the photo (Lightroom's `I`): done, View → Info.
+- Crop overlays (thirds, grid, golden ratio, diagonals, triangles, spiral) cycled with `O`: done.
 
 ### Tier 4: large or strategic
 

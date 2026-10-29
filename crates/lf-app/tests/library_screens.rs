@@ -2957,3 +2957,32 @@ fn the_info_overlay_shows_the_files_facts() {
     h.step();
     assert!(!has(&h), "hidden");
 }
+
+/// The crop tool's overlay: thirds first, `O` (or the button) steps to the next, and it is
+/// kept for the next visit.
+#[test]
+fn o_cycles_the_crop_overlay_and_it_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    h.key_press(Key::R);
+    h.step();
+    h.step();
+    assert!(h.query_by_label("Overlay: Thirds").is_some());
+    h.key_press(Key::O);
+    h.step();
+    h.step();
+    assert!(h.query_by_label("Overlay: Grid").is_some());
+    h.get_by_label("Overlay: Grid").click();
+    h.step();
+    h.step();
+    assert!(h.query_by_label("Overlay: Golden ratio").is_some());
+    h.key_press(Key::Escape);
+    h.step();
+    h.key_press(Key::R);
+    h.step();
+    h.step();
+    assert!(h.query_by_label("Overlay: Golden ratio").is_some(), "kept");
+}

@@ -150,6 +150,8 @@ pub enum Action {
     Down,
     LeaveTool,
     ApplyCrop,
+    /// The crop tool's next composition overlay (thirds, grid, golden ratio, …).
+    CropOverlay,
     DeleteSpot,
 }
 
@@ -251,6 +253,7 @@ impl Action {
             Action::Down => "Down a row in the grid",
             Action::LeaveTool => "Leave the tool",
             Action::ApplyCrop => "Apply the crop",
+            Action::CropOverlay => "Next crop overlay",
             Action::DeleteSpot => "Remove the selected spot",
         }
     }
@@ -296,6 +299,7 @@ pub struct Map(pub &'static [(Action, KeyboardShortcut)]);
 
 /// The window's keyboard map.
 pub const MAP: Map = Map(&[
+    (Action::CropOverlay, key(Key::O)),
     (Action::InfoOverlay, key(Key::I)),
     (Action::ReferenceView, shift(Key::R)),
     (Action::Library, key(Key::G)),
@@ -468,6 +472,7 @@ mod tests {
     /// The plan's keyboard map (Global Constraints), entry by entry.
     fn plan() -> Vec<(Action, KeyboardShortcut)> {
         vec![
+            (Action::CropOverlay, key(Key::O)),
             (Action::InfoOverlay, key(Key::I)),
             (Action::ReferenceView, shift(Key::R)),
             (Action::Library, key(Key::G)),

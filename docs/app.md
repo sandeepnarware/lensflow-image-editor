@@ -798,6 +798,14 @@ The info overlay (`I`, `Action::InfoOverlay`, `Develop::info_overlay`) paints
 preview on a translucent panel (`Develop::paint_info`), also when there is no preview canvas,
 and names it as one label for screen readers.
 
+The crop tool's composition overlay (`develop/tools/overlay.rs`, `Tools::crop_overlay`,
+`Action::CropOverlay` on `O` while the crop tool is open) is a list of polylines in the crop
+frame's fractions: thirds, an eighths grid, golden ratio lines at 0.382/0.618, 45° diagonals
+from each corner (square in the photo, so the frame's aspect is taken into account), triangles
+(the diagonal and perpendiculars to it from the other corners), and a golden spiral of ten
+quarter arcs through squares cut in turn. `paint_crop` draws it at alpha 70, 130 while
+dragging.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the
