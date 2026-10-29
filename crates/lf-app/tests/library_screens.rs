@@ -3274,3 +3274,49 @@ fn the_keyword_list_filters_by_a_keyword_and_those_under_it() {
     h.step();
     assert_eq!(h.state().lib.shown().len(), 3, "all again");
 }
+
+/// The Metadata panel's "Sync from active photo": the others take the active photo's fields
+/// and keywords.
+#[test]
+fn sync_metadata_copies_the_active_photos_fields() {
+    use lf_catalog::meta::{Change, Field};
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 3);
+    import_folder(&mut h, &shoot, 3);
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    {
+        let s = h.state_mut();
+        let mut env = Env {
+            jobs: &s.jobs,
+            toasts: &mut s.toasts,
+            prefs: &mut s.prefs,
+            config_dir: &s.config,
+        };
+        s.lib.change_meta(
+            vec![ids[0]],
+            Change::Set(Field::Caption, "First dance".into()),
+            &mut env,
+        );
+        s.lib.change_meta(
+            vec![ids[0]],
+            Change::AddKeywords(vec!["dance".into()]),
+            &mut env,
+        );
+    }
+    h.state_mut().lib.selection.select(&ids);
+    h.state_mut().lib.selection.set_active(ids[0]);
+    assert!(run_action(&mut h, Action::Metadata));
+    h.step();
+    h.step();
+    h.get_by_label(lf_app::library::meta_ui::SYNC).click();
+    h.step();
+    h.step();
+    for p in h.state().lib.photos() {
+        assert_eq!(p.meta.caption.as_deref(), Some("First dance"));
+        assert_eq!(p.meta.keywords, vec!["dance".to_owned()]);
+    }
+}

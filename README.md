@@ -248,6 +248,9 @@ Web gallery (Home → Photos → Web gallery…): the selected photos as a websi
 grid of thumbnails, each photo large on a click (arrow keys step, Esc closes), with their titles;
 works offline, uploads anywhere.
 
+Sync metadata (the Metadata panel, several photos selected): the other selected photos take
+the active photo's title, caption, creator, copyright and keywords.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

@@ -943,6 +943,10 @@ edits) into `<folder>/images`, then `web_gallery::write`: 480 px thumbnails in `
 catalogue titles or file names, every text HTML-escaped and file names URL-encoded. The page is
 opened when it is done (`platform::open_file`).
 
+Sync metadata (`meta_ui::sync_changes`): with several photos selected, "Sync from active photo"
+sets on the others every field the active photo has (empty ones are left alone) and adds its
+keywords, through `change_meta`.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

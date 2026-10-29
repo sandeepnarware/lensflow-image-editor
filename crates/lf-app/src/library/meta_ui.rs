@@ -31,6 +31,21 @@ pub const APPLY_PRESET: &str = "Apply a preset…";
 pub const SAVE_PRESET: &str = "Save as preset";
 pub const PRESET_NAME: &str = "Preset name";
 pub const PRESET_HINT: &str = "The creator, copyright and keywords of the first selected photo";
+pub const SYNC: &str = "Sync from active photo";
+pub const SYNC_HINT: &str = "Give the other selected photos the active photo's title, caption, creator, copyright and keywords";
+
+/// The changes that give other photos `from`'s metadata: every field it has set, and its
+/// keywords added.
+pub fn sync_changes(from: &lf_catalog::meta::Meta) -> Vec<Change> {
+    let mut out: Vec<Change> = Field::ALL
+        .into_iter()
+        .filter_map(|f| f.of(from).map(|v| Change::Set(f, v.to_owned())))
+        .collect();
+    if !from.keywords.is_empty() {
+        out.push(Change::AddKeywords(from.keywords.clone()));
+    }
+    out
+}
 
 /// The changes a metadata preset makes: its creator and copyright (when it has them) set, its
 /// keywords added.
@@ -205,6 +220,17 @@ impl Library {
             );
         }
         self.meta_presets_ui(ui, &ids, metas.first().cloned().unwrap_or_default(), env);
+        if ids.len() > 1
+            && let Some(active) = self.selection.active()
+            && ui.button(SYNC).on_hover_text(SYNC_HINT).clicked()
+            && let Some(from) = self.photo(active).map(|p| p.meta.clone())
+        {
+            let others: Vec<i64> = ids.iter().copied().filter(|&i| i != active).collect();
+            for change in sync_changes(&from) {
+                self.change_meta(others.clone(), change, env);
+            }
+            self.meta.ids.clear();
+        }
         // The value the selection agrees on (None: they differ).
         let common = |field: Field| -> Option<String> {
             let first = metas.first().and_then(|m| field.of(m)).unwrap_or_default();
