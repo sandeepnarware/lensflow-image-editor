@@ -76,6 +76,7 @@ close or competitors ship new features.
 - History panel (Lightroom's): done, Develop → History.
 - Metadata filter by camera and lens (Lightroom's Library filter): done.
 - Quick Develop in the Library (Lightroom's): done, View → Quick develop.
+- Auto straighten in the crop tool (Lightroom's Auto): done.
 
 ### Tier 4: large or strategic
 

@@ -907,6 +907,11 @@ the photo's own value plus the step, kept in range, rounded to thousandths), one
 photo; "Reset all" is a paste of the defaults without geometry. Answers come back as
 `Msg::Turned` (rows and thumbnails read again; failures in one toast).
 
+Auto straighten (`panels::crop::auto_straighten`) is Upright's Level on its own: the photo's
+line segments (`develop::upright::segments`) fitted with `upright::fit(.., Mode::Level)`, and only
+its angle set (`crop::straighten`, so the crop stays inside the turned photo); one history step.
+A turned or flipped photo, or one with too few lines, is left alone with a note.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

@@ -1107,6 +1107,10 @@ impl Develop {
         let Some(full) = self.full_size() else {
             return;
         };
+        let sample = match &self.state {
+            crate::develop::State::Ready(o, _) => Some(&o.sample),
+            _ => None,
+        };
         let (Some(active), Some(edit)) = (self.tools.active.as_mut(), self.session.edit_mut())
         else {
             return;
@@ -1117,7 +1121,7 @@ impl Develop {
         match active {
             Active::Crop(tool) => {
                 let mut p = panels::crop::CropPanelOutput::default();
-                edit.set(|s| p = panels::crop::show(ui, s, full.0, full.1));
+                edit.set(|s| p = panels::crop::show(ui, s, full.0, full.1, sample));
                 if let Some(on) = p.straightening {
                     tool.straightening = on;
                 }

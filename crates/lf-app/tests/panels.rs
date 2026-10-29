@@ -301,7 +301,7 @@ fn crop_panel(settings: EditSettings) -> Harness<'static, EditSettings> {
         .with_step_dt(1.0 / 60.0)
         .build_ui_state(
             |ui, s: &mut EditSettings| {
-                lf_app::develop::panels::crop::show(ui, s, 6000, 4000);
+                lf_app::develop::panels::crop::show(ui, s, 6000, 4000, None);
             },
             settings,
         )
