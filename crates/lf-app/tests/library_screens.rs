@@ -1988,6 +1988,15 @@ fn masks_are_added_moved_adjusted_and_removed_in_develop() {
     }
     h.step();
     assert_eq!(masks(&h).0[0].local.exposure, 1.25);
+    // Its tick switches it off (kept, applying nothing), and on again.
+    h.get_by_label("Show mask 1").click();
+    h.step();
+    h.step();
+    assert!(masks(&h).0[0].hidden);
+    h.get_by_label("Show mask 1").click();
+    h.step();
+    h.step();
+    assert!(!masks(&h).0[0].hidden);
 
     // Delete removes the selected mask; undo brings it back.
     h.key_press(Key::Delete);

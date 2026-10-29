@@ -33,6 +33,8 @@ fn radial(exposure: f64, invert: bool) -> Mask {
             feather: 0.0,
         },
         invert,
+        opacity: 100.0,
+        hidden: false,
         range: lf_settings::masks::Range::All,
         local: Local {
             exposure,
@@ -115,6 +117,8 @@ fn a_warm_linear_mask_warms_the_top_only_and_masks_add_up() {
             y1: 0.4,
         },
         invert: false,
+        opacity: 100.0,
+        hidden: false,
         range: lf_settings::masks::Range::All,
         local: Local {
             temperature: 60.0,
@@ -150,6 +154,8 @@ fn local_contrast_and_saturation_stay_in_range() {
             y1: 2.0,
         },
         invert: false,
+        opacity: 100.0,
+        hidden: false,
         range: lf_settings::masks::Range::All,
         local: Local {
             contrast: 100.0,
@@ -165,6 +171,8 @@ fn brush(strokes: Vec<lf_settings::masks::Stroke>, exposure: f64) -> Mask {
     Mask {
         shape: Shape::Brush { strokes },
         invert: false,
+        opacity: 100.0,
+        hidden: false,
         range: lf_settings::masks::Range::All,
         local: Local {
             exposure,
@@ -243,6 +251,8 @@ fn everywhere(range: lf_settings::masks::Range) -> Mask {
             y1: 2.0,
         },
         invert: false,
+        opacity: 100.0,
+        hidden: false,
         range,
         local: Local {
             exposure: 1.0,
@@ -304,6 +314,8 @@ fn an_ai_mask_picture_lifts_only_what_it_covers() {
             data: encode_coverage(&values),
         },
         invert: false,
+        opacity: 100.0,
+        hidden: false,
         range: Range::All,
         local: Local {
             exposure: 1.0,
@@ -314,4 +326,27 @@ fn an_ai_mask_picture_lifts_only_what_it_covers() {
     let lit = render(&with(vec![mask]));
     assert!(lit.get_pixel(W / 8, H / 2).0[0] > plain.get_pixel(W / 8, H / 2).0[0] + 30);
     assert_eq!(lit.get_pixel(W - 10, H / 2), plain.get_pixel(W - 10, H / 2));
+}
+
+#[test]
+fn opacity_scales_a_mask_and_a_hidden_one_applies_nothing() {
+    let plain = render(&EditSettings::default_settings());
+    let full = render(&with(vec![radial(1.0, false)]));
+    let half = render(&with(vec![Mask {
+        opacity: 50.0,
+        ..radial(1.0, false)
+    }]));
+    let hidden = render(&with(vec![Mask {
+        hidden: true,
+        ..radial(1.0, false)
+    }]));
+    let at = |img: &RgbaImage| img.get_pixel(W / 2, H / 2).0[0];
+    assert!(
+        at(&plain) + 10 < at(&half) && at(&half) + 10 < at(&full),
+        "half way: {} {} {}",
+        at(&plain),
+        at(&half),
+        at(&full)
+    );
+    assert_eq!(hidden, plain, "switched off");
 }

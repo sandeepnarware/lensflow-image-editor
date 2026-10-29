@@ -85,7 +85,8 @@ Upright (Vertical or Full) finds the straight lines in the photo and sets the pe
 and straightening that make verticals upright and the horizon level.
 
 Masks (`M`): linear and radial gradients and a brush, each with its own exposure, tone,
-white balance, saturation and clarity. Gradients are moved by their handles on the photo; a
+white balance, saturation and clarity. Masks work as layers: each has an opacity, a tick to
+switch it off and on, and Duplicate. Gradients are moved by their handles on the photo; a
 brush mask is painted (size, feather, flow; Alt or "Erase" rubs out). A Range narrows any
 mask to a brightness band (only the highlights of the sky) or a colour (only the blues;
 Alt-click the photo to pick it). Select subject and Select sky (AI, on this computer)

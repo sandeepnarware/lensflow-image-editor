@@ -29,6 +29,9 @@ pub const BRUSH_HINT: &str = "Paint on the photo. Hold Alt to erase.";
 pub const ERASE: &str = "Erase";
 pub const REMOVE: &str = "Remove mask";
 pub const INVERT: &str = "Invert";
+pub const OPACITY: &str = "Opacity";
+pub const DUPLICATE: &str = "Duplicate";
+pub const SHOWN: &str = "Show or hide this mask's adjustments";
 /// Before the people buttons (People, Face skin, Body skin, Hair, Clothes).
 pub const PEOPLE: &str = "People:";
 pub const FACE: &str = "Face:";
@@ -184,6 +187,14 @@ impl MaskTool {
         Ok(())
     }
 
+    /// A copy of the selected mask, added after the others and selected; `Err` as [`Self::add`].
+    pub fn duplicate_selected(&mut self, masks: &mut Masks) -> Result<bool, &'static str> {
+        let Some(m) = self.selected.and_then(|i| masks.0.get(i)).cloned() else {
+            return Ok(false);
+        };
+        self.add(masks, m).map(|()| true)
+    }
+
     /// Removes the selected mask; true when one was removed.
     pub fn remove_selected(&mut self, masks: &mut Masks) -> bool {
         let Some(i) = self.selected.filter(|&i| i < masks.0.len()) else {
@@ -249,6 +260,8 @@ impl MaskTool {
             let inside = |m: &Mask| {
                 let solid = Mask {
                     invert: false,
+                    opacity: 100.0,
+                    hidden: false,
                     ..m.clone()
                 };
                 matches!(m.shape, Shape::Radial { .. })

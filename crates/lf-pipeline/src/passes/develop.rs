@@ -90,7 +90,7 @@ pub struct Uniforms {
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MaskUniform {
     /// kind (0 linear, 1 radial, 2 brush), invert (0 or 1), the radial's inner radius (1 − feather),
-    /// unused.
+    /// strength (the opacity, 0 when switched off).
     pub kind: [f32; 4],
     /// Linear: start x, y and end x, y. Radial: centre x, y and radii x, y. All in the square
     /// space (x × aspect). Brush: its layer in the brush texture.
@@ -147,7 +147,12 @@ impl MaskUniform {
             }
         };
         MaskUniform {
-            kind: [kind, f32::from(u8::from(m.invert)), inner, 0.0],
+            kind: [
+                kind,
+                f32::from(u8::from(m.invert)),
+                inner,
+                m.strength() as f32,
+            ],
             shape,
             turn,
             tone: [

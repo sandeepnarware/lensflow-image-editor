@@ -242,7 +242,8 @@ fn develop(photo: vec3<f32>, uv: vec2<f32>, muv: vec2<f32>) -> vec3<f32> {
         let p = vec2<f32>(muv.x * u.aspect, muv.y);
         for (var i = 0u; i < u.mask_count; i++) {
             let m = u.masks[i];
-            let w = mask_weight(m, p, muv) * range_weight(m.range, photo);
+            // `kind.w`: the mask's opacity (0 when switched off).
+            let w = mask_weight(m, p, muv) * range_weight(m.range, photo) * m.kind.w;
             exposure += w * m.tone.x;
             contrast += w * m.tone.y;
             highlights += w * m.tone.z;

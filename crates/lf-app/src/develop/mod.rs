@@ -601,6 +601,8 @@ impl Develop {
         let mask = Mask {
             shape,
             invert: false,
+            opacity: 100.0,
+            hidden: false,
             range: Range::All,
             local: Local::default(),
         };

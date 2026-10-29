@@ -40,7 +40,7 @@ close or competitors ship new features.
 | HDR editing and output for HDR screens, gain-map AVIF/JPEG | Lightroom |
 | Reflection, wire and ~~people removal~~ (done: Remove objects → Select people) (one-click distractions) | Lightroom 15.6 |
 | ~~Lens blur (AI depth of field)~~ (done: AI → Enhance → Lens blur, as a new photo); ~~depth mask~~ (done: Masks → Foreground, Background) | Lightroom |
-| Layers (stacked local edits with opacity) | Capture One, Luminar |
+| ~~Layers (stacked local edits with opacity)~~ (done: masks have opacity, show/hide and Duplicate) | Capture One, Luminar |
 | ~~Upright Guided (draw lines)~~ (done: Develop → Guided), ~~Level, Auto~~ (done: Lens corrections → Upright) | Lightroom |
 | New-camera support: rawler can't open Nikon HE/HE* NEF, DNG 1.7 JPEG XL, some Sony ARW / Phase One IIQ | All, updated monthly |
 

@@ -396,6 +396,13 @@ weight analytically (`mask_weight`, the same formula as `lf_settings::masks::wei
 adds the masks' shares to the sliders it moves, clamped to each slider's range. With no
 masks every value is the uniform itself, so the parity gate is untouched.
 
+Masks work as layers: each has an `opacity` (0–100 %, default 100, left out of the JSON when
+full) and `hidden` (left out when false); `Mask::strength` is the opacity, or 0 when hidden,
+and goes to the shader as `kind.w`, which scales the mask's weight (sliders and white balance
+alike). A hidden mask keeps its place, so brush layers keep their rows. The panel's list has a
+tick per mask ("Show mask n"), the picked mask an Opacity slider and Duplicate (a copy added
+last, within the eight).
+
 A mask's `range` (`lf_settings::masks::Range`: `All`, `Luminance { low, high, smooth }`,
 `Colour { hue, width, smooth }`) narrows it inside its shape. The shader's `range_weight`
 multiplies the shape's weight by how well the photo's own colour at that pixel (before any

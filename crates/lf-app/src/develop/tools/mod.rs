@@ -1160,14 +1160,31 @@ fn masks_panel(
     if tool.picking_object {
         ui.label(egui::RichText::new(masks::PICK_OBJECT).color(crate::theme::WARNING));
     }
-    for (i, m) in list.0.iter().enumerate() {
+    // The list, as layers: a tick shows or hides each one's adjustments.
+    for (i, m) in list.0.iter_mut().enumerate() {
         let name = format!("{}. {}", i + 1, m.kind_name());
-        if ui
-            .selectable_label(tool.selected == Some(i), name)
-            .clicked()
-        {
-            tool.selected = Some(i);
-        }
+        ui.horizontal(|ui| {
+            let mut shown = !m.hidden;
+            let tick = ui.checkbox(&mut shown, "").on_hover_text(masks::SHOWN);
+            tick.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::Role::CheckBox,
+                    true,
+                    shown,
+                    format!("Show mask {}", i + 1),
+                )
+            });
+            if tick.changed() {
+                m.hidden = !shown;
+                out = step;
+            }
+            if ui
+                .selectable_label(tool.selected == Some(i), name)
+                .clicked()
+            {
+                tool.selected = Some(i);
+            }
+        });
     }
     let Some(i) = tool.selected.filter(|&i| i < list.0.len()) else {
         return (out, problem);
@@ -1181,6 +1198,13 @@ fn masks_panel(
         out.changed |= r.changed;
         out.commit |= r.released;
     };
+    absorb(panels::slider::edit(
+        ui,
+        masks::OPACITY,
+        &mut m.opacity,
+        RANGE_PERCENT,
+        None,
+    ));
     if let Shape::Brush { .. } = m.shape {
         ui.label(RichText::new(masks::BRUSH_HINT).color(theme::MUTED));
         let tip = &mut tool.brush;
@@ -1279,9 +1303,19 @@ fn masks_panel(
         };
         absorb(panels::slider::edit(ui, label, value, range, None));
     }
-    if ui.button(masks::REMOVE).on_hover_text("Delete").clicked() && tool.remove_selected(list) {
-        out = step;
-    }
+    ui.horizontal(|ui| {
+        if ui.button(masks::DUPLICATE).clicked() {
+            match tool.duplicate_selected(list) {
+                Ok(true) => out = step,
+                Ok(false) => {}
+                Err(e) => problem = Some(e),
+            }
+        }
+        if ui.button(masks::REMOVE).on_hover_text("Delete").clicked() && tool.remove_selected(list)
+        {
+            out = step;
+        }
+    });
     (out, problem)
 }
 

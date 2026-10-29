@@ -506,9 +506,33 @@ pub struct Mask {
     /// Only part of the shape's tones or colours ([`Range`]).
     #[serde(default)]
     pub range: Range,
+    /// How strongly the mask's sliders apply, 0..=100 % (a layer's opacity).
+    #[serde(default = "full_opacity", skip_serializing_if = "is_full")]
+    pub opacity: f64,
+    /// Switched off: kept, but applying nothing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+}
+
+fn full_opacity() -> f64 {
+    100.0
+}
+
+fn is_full(v: &f64) -> bool {
+    *v == 100.0
 }
 
 impl Mask {
+    /// How much of the mask's sliders apply where it covers fully: its opacity, or none when
+    /// switched off.
+    pub fn strength(&self) -> f64 {
+        if self.hidden {
+            0.0
+        } else {
+            self.opacity / 100.0
+        }
+    }
+
     /// A new graduated filter from the top down to the middle.
     pub fn linear() -> Mask {
         Mask {
@@ -519,6 +543,8 @@ impl Mask {
                 y1: 0.5,
             },
             invert: false,
+            opacity: 100.0,
+            hidden: false,
             range: Range::All,
             local: Local::default(),
         }
@@ -536,6 +562,8 @@ impl Mask {
                 feather: 50.0,
             },
             invert: false,
+            opacity: 100.0,
+            hidden: false,
             range: Range::All,
             local: Local::default(),
         }
@@ -548,6 +576,8 @@ impl Mask {
                 strokes: Vec::new(),
             },
             invert: false,
+            opacity: 100.0,
+            hidden: false,
             range: Range::All,
             local: Local::default(),
         }
@@ -653,7 +683,34 @@ impl Mask {
         };
         self.local = self.local.clamped();
         self.range = self.range.clamped();
+        self.opacity = if self.opacity.is_finite() {
+            self.opacity.clamp(0.0, 100.0)
+        } else {
+            100.0
+        };
         Some(self)
+    }
+}
+
+#[cfg(test)]
+mod layer_tests {
+    use super::*;
+
+    #[test]
+    fn opacity_and_hidden_round_trip_and_are_left_out_when_plain() {
+        let plain = serde_json::to_value(Mask::radial()).unwrap();
+        assert!(plain.get("opacity").is_none() && plain.get("hidden").is_none());
+        let read: Mask = serde_json::from_value(plain).unwrap();
+        assert_eq!(read.strength(), 1.0, "older masks apply fully");
+        let mut m = Mask::radial();
+        m.opacity = 40.0;
+        let v = serde_json::to_value(&m).unwrap();
+        assert_eq!(v["opacity"], 40.0);
+        assert!((serde_json::from_value::<Mask>(v).unwrap().strength() - 0.4).abs() < 1e-12);
+        m.hidden = true;
+        assert_eq!(m.strength(), 0.0);
+        m.opacity = 900.0;
+        assert_eq!(m.clamped().unwrap().opacity, 100.0);
     }
 }
 
@@ -765,6 +822,8 @@ mod tests {
                 data,
             },
             invert: false,
+            opacity: 100.0,
+            hidden: false,
             range: Range::All,
             local: Local::default(),
         };
@@ -899,6 +958,8 @@ mod tests {
                 y1: 0.6,
             },
             invert: false,
+            opacity: 100.0,
+            hidden: false,
             range: Range::All,
             local: Local::default(),
         };
@@ -923,6 +984,8 @@ mod tests {
                 feather: 0.0,
             },
             invert: false,
+            opacity: 100.0,
+            hidden: false,
             range: Range::All,
             local: Local::default(),
         };
@@ -964,6 +1027,8 @@ mod tests {
                 feather: 0.0,
             },
             invert: false,
+            opacity: 100.0,
+            hidden: false,
             range: Range::All,
             local: Local::default(),
         };
