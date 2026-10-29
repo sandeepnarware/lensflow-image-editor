@@ -1058,6 +1058,7 @@ impl Develop {
             .show(ui, |ui| {
                 self.extras_ui(ui, toasts);
                 self.panels_ui(ui, toasts);
+                self.history_ui(ui, toasts);
             });
     }
 

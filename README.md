@@ -218,7 +218,7 @@ judge them; remembered.
 Survey (`N`, Library → Survey): two to twelve selected photos in a grid, zoomed and panned
 together; × on a photo takes it out of the survey and the selection.
 
-History (Develop, under Versions): every edit step of the open photo, newest first, named by
+History (Develop, at the bottom of the side panel): every edit step of the open photo, newest first, named by
 what it changed ("Exposure", "Crop", "Masks +2"); click one to go back (or forward) to it.
 
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show

@@ -889,7 +889,7 @@ out by `compare::grid_of` (side by side up to three, then the squarest grid a li
 tall); each cell has × (`leave_survey`: out of the survey and the selection; one left closes
 it). Compare's hint lost its "⇄", which egui's fonts lack (Compare panicked on opening).
 
-The History section (`develop/history_panel.rs`) lists `lf_catalog::edits::history` (the photo's
+The History section (`develop/history_panel.rs`, at the bottom of Develop's side panel) lists `lf_catalog::edits::history` (the photo's
 steps, oldest first, and the cursor), newest first, each named by `describe` (the first setting
 that differs from the step before, desktop keys by their own name, "+n" for more; the first is
 "Opened"). It is read again only when the photo, its committed settings or its undo position

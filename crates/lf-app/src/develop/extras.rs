@@ -239,7 +239,6 @@ impl Develop {
         egui::CollapsingHeader::new(versions::TITLE)
             .id_salt("versions-section")
             .show(ui, |ui| self.versions_ui(ui, toasts));
-        self.history_ui(ui, toasts);
         self.extras_dialogs(ui.ctx(), toasts);
         ui.separator();
     }

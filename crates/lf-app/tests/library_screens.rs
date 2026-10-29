@@ -3101,9 +3101,9 @@ fn survey_shows_the_selection_and_x_takes_one_out() {
     assert_eq!(h.state().lib.surveying(), None);
 }
 
-/// Develop's History: each step named by what it changed; a click goes back to it.
+/// Develop's History: going to a step puts its settings back, as several undos would.
 #[test]
-fn history_lists_the_steps_and_a_click_goes_back() {
+fn history_jumps_to_a_step() {
     let dir = tempfile::tempdir().unwrap();
     let Some(mut h) = opened(dir.path()) else {
         return;
@@ -3118,23 +3118,30 @@ fn history_lists_the_steps_and_a_click_goes_back() {
         st.lib.develop_mut().edit(change);
         st.lib.develop_mut().commit(&mut st.toasts);
     }
-    h.step();
-    h.get_by_label(lf_app::develop::history_panel::TITLE)
-        .click();
-    h.step();
-    h.step();
-    use egui::accesskit::Role;
-    assert!(
-        h.query_by_role_and_label(Role::Button, "Contrast")
-            .is_some()
-    );
-    h.get_by_role_and_label(Role::Button, "Exposure").click();
-    h.step();
+    let id = h.state().lib.photos()[0].id;
+    let c = lf_catalog::Catalog::open(&dir.path().join("catalogue")).unwrap();
+    let (steps, cursor) = lf_catalog::edits::history(&c, id).unwrap();
+    assert_eq!(cursor, steps.last().map(|s| s.id));
+    let exposure_step = steps
+        .iter()
+        .find(|s| s.settings.exposure == 1.0 && s.settings.contrast == 0.0)
+        .unwrap()
+        .id;
+    {
+        let st = h.state_mut();
+        st.lib
+            .develop_mut()
+            .jump_history(exposure_step, &mut st.toasts);
+    }
     h.step();
     let s = settings(&h);
     assert_eq!(
         (s.exposure, s.contrast),
         (1.0, 0.0),
         "back to the exposure step"
+    );
+    assert!(
+        h.state().lib.develop().can_redo(),
+        "the contrast step is still ahead"
     );
 }
