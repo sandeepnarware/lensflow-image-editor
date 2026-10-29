@@ -157,6 +157,8 @@ pub struct Develop {
     extras: extras::Extras,
     /// "Import .cube…" was clicked; the library opens the file picker.
     lut_import_asked: bool,
+    /// "Import .dcp…" was clicked (the library takes the request).
+    dcp_import_asked: bool,
     /// "Apply lens profile" was clicked (the library takes the request).
     lens_profile_asked: bool,
 }
@@ -190,6 +192,7 @@ impl Develop {
             tools: tools::Tools::default(),
             extras: extras::Extras::default(),
             lut_import_asked: false,
+            dcp_import_asked: false,
             lens_profile_asked: false,
         }
     }
@@ -331,6 +334,22 @@ impl Develop {
     /// "Import .cube…" was clicked since the last call.
     pub fn take_lut_import(&mut self) -> bool {
         std::mem::take(&mut self.lut_import_asked)
+    }
+
+    /// "Import .dcp…" was clicked since the last call.
+    pub fn take_dcp_import(&mut self) -> bool {
+        std::mem::take(&mut self.dcp_import_asked)
+    }
+
+    /// Puts the camera profile `name` on the open photo, one history step (the photo is
+    /// developed again with it).
+    pub fn choose_dcp(&mut self, name: String, toasts: &mut Toasts) {
+        if self.session.edit().is_none() {
+            return;
+        }
+        self.commit(toasts);
+        self.edit(|s| lf_settings::DevelopSettings::set_dcp(s, Some(&name)));
+        self.commit(toasts);
     }
 
     /// Puts the LUT `name` on the open photo (keeping the amount it had), one history step.
@@ -857,7 +876,9 @@ impl Develop {
             return;
         };
         let luts = lf_pipeline::lut::names();
+        let profiles = lf_raw::dcp::names();
         let ctx = PanelContext {
+            profiles: &profiles,
             as_shot_kelvin: match &self.state {
                 State::Ready(photo, _) => photo.as_shot_kelvin,
                 _ => None,
@@ -883,6 +904,7 @@ impl Develop {
             self.toggle_tool(ToolKind::WhiteBalance, toasts);
         }
         self.lut_import_asked |= out.import_lut;
+        self.dcp_import_asked |= out.import_dcp;
         self.lens_profile_asked |= out.lens_profile;
     }
 

@@ -36,7 +36,7 @@ close or competitors ship new features.
 | Gap | Who has it |
 |---|---|
 | Denoise on raw sensor data, before demosaicing (ours runs after) | DxO DeepPRIME XD3, Lightroom Denoise, Capture One Enhanced Denoise |
-| Camera-matching profiles (camera looks, DCP profiles, colour calibration) | All |
+| Camera-matching profiles (camera looks, ~~DCP profiles~~ (done: RAW → Camera profile, user-imported), colour calibration) | All |
 | HDR editing and output for HDR screens, gain-map AVIF/JPEG | Lightroom |
 | Reflection, wire and people removal (one-click distractions) | Lightroom 15.6 |
 | Lens blur (AI depth of field, depth mask) | Lightroom |

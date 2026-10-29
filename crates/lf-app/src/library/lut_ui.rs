@@ -23,6 +23,31 @@ impl Library {
         });
     }
 
+    /// Develop's "Import .dcp…": the file picker, on its own thread.
+    pub(super) fn pick_dcp(&mut self, env: &mut Env) {
+        on_own_thread(env.jobs.reporter(), Purpose::DcpFile, 0, move || {
+            let picked = rfd::FileDialog::new()
+                .set_title("Choose a .dcp camera profile")
+                .add_filter("DNG camera profiles", &["dcp"])
+                .pick_file();
+            log::info!("camera profile picker answered: {picked:?}");
+            Ok(picked.map(|path| Chosen {
+                path,
+                network: false,
+            }))
+        });
+    }
+
+    /// Copies a chosen `.dcp` into the catalogue's profile folder and loads it (`Io` lane).
+    pub fn import_dcp(&mut self, file: PathBuf, env: &mut Env) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        env.jobs.spawn(Lane::Io, "import camera profile", move || {
+            Msg::DcpImported(crate::profiles::import(&root, &file))
+        });
+    }
+
     /// View → Proof profile… (or Soft proof with none chosen yet): the ICC file picker.
     pub(super) fn pick_proof_profile(&mut self, env: &mut Env) {
         on_own_thread(env.jobs.reporter(), Purpose::ProofProfile, 0, move || {

@@ -17,7 +17,7 @@ and 2d tasks 1–2 are built; packaging tasks 3–5 are in flight.
 | --- | --- | --- |
 | `lf-settings` | `EditSettings`, `normalise` (only safe JSON entry point), curves, geometry, looks, shader values, groups. `SETTINGS_VERSION` 2, `MAX_SPOTS` 48. | `src/lib.rs`, `src/settings.rs` |
 | `lf-pipeline` | Headless wgpu renderer: `Gpu`, `Renderer`, mip-chained textures, copy/gaussian/spots/develop passes, curve texture, histogram, preview draw. | `src/renderer.rs`, `src/passes/develop.rs` |
-| `lf-raw` | Magic-byte kind sniffing, rawler decode, demosaic (bilinear/AHD/X-Trans/preview bin), WB + colour + highlight handling, f16 headroom, EXIF, frame cache, `lf-render` example. | `src/open.rs`, `src/develop.rs` |
+| `lf-raw` | Magic-byte kind sniffing, rawler decode, demosaic (bilinear/AHD/X-Trans/preview bin), WB + colour (or a DNG camera profile, `dcp.rs`) + highlight handling, f16 headroom, EXIF, frame cache, `lf-render` example. | `src/open.rs`, `src/develop.rs` |
 | `lf-grade` | CPU maths for "Match a reference": measure, correct, calibrate (injected renderer), strength/exposure, contact sheet. | `src/lib.rs` |
 | `lf-merge` | CPU merging: exposure fusion (Mertens, with ghost removal), focus stacking through Laplacian pyramids, median-threshold-bitmap alignment; panoramas (`panorama.rs`: cylinder fit, NCC registration, gain and feather blending). No GPU, no catalogue. | `src/lib.rs` |
 | `lf-ai` | Local AI through ONNX Runtime (loaded at run time, never linked): pinned downloads (`assets.rs`), tiles, denoise and upscale (`restore.rs`), subject and sky masks (`segment.rs`), removal (`inpaint.rs`), faces and skin retouch (`faces.rs`), telling people apart (`identity.rs`), keywords (`keywords.rs`, CLIP + `data/keywords.{txt,f16}`), click-to-mask (`objects.rs`, MobileSAM), eyes/irises/lips/teeth (`features.rs`, Face Mesh V2). | `src/lib.rs`, `src/assets.rs` |
@@ -169,6 +169,10 @@ cargo test --workspace                   # includes the 228-render parity suite
   Merge to HDR: `lf-merge` (align + fuse), `merge_job.rs` (16-bit TIFF beside the first frame),
   `dialogs/merge.rs`, `library/merge_ui.rs`, `Action::MergeHdr` (`Ctrl+H`). Panorama: `lf_merge::panorama`,
   `MergeKind::Panorama`, `Action::MergePanorama` (`Ctrl+M`).
+  Camera profiles: `lf_raw::dcp` (DCP parser, registry by `lf_settings::dcp_id`, forward matrix → ProPhoto →
+  HueSatMap → LookTable → tone curve → sRGB), `DevelopSettings::{dcp, dcp_name, set_dcp}` (`desktop.develop.dcp`),
+  `profiles.rs` (`.lensflow/profiles/`), the RAW section's "Camera profile" and "Import .dcp…" (`Msg::DcpImported`);
+  the frame cache key hashes the profile's bytes. None ship; `LF_DCP_DIR` runs real ones in `lf-raw/tests/develop.rs`.
   Preset Amount: `lf_settings::amount::blend` (0–200 %), `develop::extras::Applied` (the look or preset
   applied last; one history step per drag).
   Edit in external editor: `edit_in.rs`, `library/edit_in_ui.rs`, `prefs.external_editor`.

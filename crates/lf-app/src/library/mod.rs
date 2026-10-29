@@ -930,6 +930,19 @@ impl Library {
                 result,
             } => self.person_photos_loaded(root, group, result, env),
             Msg::PeopleChanged { root, result } => self.people_changed(root, result, env),
+            Msg::DcpImported(result) => match result {
+                Ok(name) => {
+                    env.toasts.push(
+                        Level::Success,
+                        format!("The camera profile '{name}' was added."),
+                    );
+                    self.develop.choose_dcp(name, env.toasts);
+                }
+                Err(e) => env.toasts.push(
+                    Level::Error,
+                    format!("The camera profile could not be added. {e}"),
+                ),
+            },
             Msg::LutImported(result) => match result {
                 Ok(name) => {
                     env.toasts
@@ -1396,6 +1409,9 @@ impl Library {
         }
         if self.develop.take_lut_import() {
             self.pick_lut(env);
+        }
+        if self.develop.take_dcp_import() {
+            self.pick_dcp(env);
         }
         match self.mode {
             Mode::Library if self.map.is_some() => {

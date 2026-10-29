@@ -21,6 +21,7 @@ const SRGB_CAMERA: [[f32; 3]; 3] = XYZ_D65_TO_LINEAR_SRGB;
 const LINEAR_CLIP: DevelopSettings = DevelopSettings {
     profile: Profile::Linear,
     highlights: Highlights::Clip,
+    dcp: None,
 };
 
 fn dng(name: &str, img: &Rgb32FImage) -> RawFrame {
@@ -134,6 +135,7 @@ fn an_overexposed_patch_stays_above_one() {
         let s = DevelopSettings {
             profile,
             highlights: Highlights::Reconstruct,
+            dcp: None,
         };
         let d = develop(&raw, Quality::Best, &s, 8192).unwrap();
         let [r, g, b] = px(&d, 24, 24);
@@ -150,6 +152,7 @@ fn clip_mode_clamps_each_channel() {
         let s = DevelopSettings {
             profile,
             highlights: Highlights::Clip,
+            dcp: None,
         };
         let d = develop(&raw, Quality::Best, &s, 8192).unwrap();
         let max = d
@@ -326,6 +329,7 @@ fn flat_d40(cam: [f32; 3], wb: [f32; 3], highlights: Highlights) -> [f32; 3] {
     let s = DevelopSettings {
         profile: Profile::Linear,
         highlights,
+        dcp: None,
     };
     px(&develop(&raw, Quality::Best, &s, 8192).unwrap(), 16, 16)
 }
@@ -463,4 +467,124 @@ fn preview_bins_x_trans_by_three_and_rgb_by_two() {
     assert_eq!((d.frame.width, d.frame.height), (2, 1));
     assert_eq!(px(&d, 0, 0), [0.0; 3]);
     assert_eq!(px(&d, 1, 0), [1.0; 3]);
+}
+
+/// A DCP for the tests: sRGB (D50-adapted) primaries as its forward matrix, and a HueSatMap
+/// that takes every colour's saturation away.
+fn grey_profile() -> Vec<u8> {
+    use lf_raw::dcp::testing::{Tag, ascii, floats, longs, srational, write};
+    let fm = [
+        0.436_074_7,
+        0.385_064_9,
+        0.143_080_4,
+        0.222_504_5,
+        0.716_878_6,
+        0.060_616_9,
+        0.013_932_2,
+        0.097_104_5,
+        0.714_173_3,
+    ];
+    let table: Vec<f32> = (0..4).flat_map(|_| [0.0, 0.0, 1.0]).collect();
+    write(vec![
+        Tag(50708, 2, 9, ascii("Test D40")),
+        Tag(50936, 2, 5, ascii("Grey")),
+        Tag(50778, 3, 1, 21u16.to_le_bytes().to_vec()),
+        Tag(50964, 10, 9, srational(&fm)),
+        Tag(50937, 4, 3, longs(&[2, 2, 1])),
+        Tag(50938, 11, 12, floats(&table)),
+    ])
+}
+
+#[test]
+fn a_camera_profile_develops_the_colour_and_keeps_greys_grey() {
+    let dcp = lf_raw::dcp::Dcp::parse(&grey_profile()).unwrap();
+    lf_raw::dcp::register("Develop Test Grey", dcp);
+    let with = DevelopSettings {
+        dcp: Some(lf_settings::dcp_id("Develop Test Grey")),
+        ..LINEAR_CLIP
+    };
+    let wb = [2.0, 1.0, 1.5];
+    // A strong red without the profile; grey with it (the map takes saturation away).
+    let red = [0.4, 0.15, 0.08];
+    let plain = flat_d40_with(red, wb, &LINEAR_CLIP);
+    assert!(plain[0] > plain[1] * 1.3, "red without it: {plain:?}");
+    let profiled = flat_d40_with(red, wb, &with);
+    assert!(
+        (profiled[0] - profiled[1]).abs() < 0.01 && (profiled[1] - profiled[2]).abs() < 0.01,
+        "grey with it: {profiled:?}"
+    );
+    // A neutral (camera values balanced by the white balance) stays neutral.
+    let neutral = flat_d40_with([0.25, 0.5, 1.0 / 3.0], wb, &with);
+    assert!((neutral[0] - neutral[2]).abs() < 0.01, "{neutral:?}");
+    // A profile that is not loaded is left out.
+    let missing = DevelopSettings {
+        dcp: Some(lf_settings::dcp_id("Not Loaded")),
+        ..LINEAR_CLIP
+    };
+    assert_eq!(flat_d40_with(red, wb, &missing), plain);
+}
+
+/// [`flat_d40`] with any develop settings.
+fn flat_d40_with(cam: [f32; 3], wb: [f32; 3], s: &DevelopSettings) -> [f32; 3] {
+    let (w, h) = (32u32, 32u32);
+    let mut data = vec![0u16; (w * h) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let c = match (y & 1, x & 1) {
+                (0, 0) => 0,
+                (1, 1) => 2,
+                _ => 1,
+            };
+            data[(y * w + x) as usize] = (cam[c] * 4095.0).round() as u16;
+        }
+    }
+    let mut raw = plain_frame(
+        w,
+        h,
+        Cfa::Bayer {
+            pattern: [[Color::Red, Color::Green], [Color::Green, Color::Blue]],
+        },
+        data,
+        4095.0,
+    );
+    raw.wb = [wb[0], wb[1], wb[2], wb[1]];
+    raw.xyz_to_cam = Some(D40_MATRIX);
+    px(&develop(&raw, Quality::Best, s, 8192).unwrap(), 16, 16)
+}
+
+/// Real camera profiles, when `LF_DCP_DIR` names a folder of them (none ship with the repo):
+/// each parses, and its colour keeps a mid grey nearly grey and a white bright.
+#[test]
+fn real_camera_profiles_parse_and_keep_grey_near_grey() {
+    let Some(dir) = std::env::var_os("LF_DCP_DIR") else {
+        return;
+    };
+    let mut seen = 0;
+    for entry in std::fs::read_dir(dir).unwrap().flatten() {
+        let path = entry.path();
+        if !path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("dcp"))
+        {
+            continue;
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        let dcp =
+            lf_raw::dcp::Dcp::parse(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let p = dcp.prepare(Some(5500.0), &color::IDENTITY);
+        let grey = p.apply([0.18, 0.18, 0.18]);
+        let spread = grey.iter().copied().fold(f32::MIN, f32::max)
+            - grey.iter().copied().fold(f32::MAX, f32::min);
+        eprintln!(
+            "{}: {:?} on {:?}, tone curve {}; grey -> {grey:?}",
+            path.display(),
+            dcp.name,
+            dcp.camera,
+            dcp.has_tone_curve()
+        );
+        assert!(spread < 0.03, "grey stays near grey: {grey:?}");
+        assert!(p.apply([1.0, 1.0, 1.0]).iter().all(|v| *v > 0.5));
+        seen += 1;
+    }
+    assert!(seen > 0, "no .dcp in LF_DCP_DIR");
 }

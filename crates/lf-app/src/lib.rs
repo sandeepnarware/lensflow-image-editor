@@ -27,6 +27,7 @@ pub mod platform;
 pub mod prefs;
 pub mod presets_sync;
 pub mod print_job;
+pub mod profiles;
 pub mod screens;
 pub mod session;
 pub mod session_flow;

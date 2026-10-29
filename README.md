@@ -20,7 +20,9 @@ the adjust panels, the crop and straighten tool, and the heal and clone spot
 tool. It keeps one history step per gesture, with undo and redo, and writes
 sidecars after a quiet second. It also has looks, studio presets synced with
 LensFlow (the one applied last has an Amount slider, 0–200 %, until the photo is edited
-another way), copy and paste of edits, "Apply to N photos", named versions,
+another way), DNG camera profiles for RAW photos (`.dcp`, imported from the RAW section:
+Adobe's DNG Converter installs Adobe Standard and Camera Matching profiles; none ship
+with the app), copy and paste of edits, "Apply to N photos", named versions,
 "Match a reference…", and export to disk. The window has a ribbon, as in Microsoft Office
 (File, Home, Library, Develop, View, Account and Help tabs), one status bar, Preferences, an About box
 and a keyboard map. CI builds the app for Windows, macOS and Linux. How it is

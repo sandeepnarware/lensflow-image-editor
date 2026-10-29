@@ -191,6 +191,8 @@ pub enum Msg {
     IngestDone(Result<(PathBuf, lf_catalog::ingest::IngestOutcome), String>),
     /// A `.cube` LUT was copied into the catalogue and loaded (its name), or why not.
     LutImported(Result<String, String>),
+    /// A `.dcp` camera profile was copied into the catalogue and loaded (its name), or why not.
+    DcpImported(Result<String, String>),
     /// "Edit in external editor" made its copy and opened it: the copy and why the editor did not start (if it did not), or why no copy was made.
     EditInDone(Result<(PathBuf, Option<String>), String>),
     /// Printing moved on.
@@ -801,6 +803,7 @@ pub(crate) mod owners {
             | Msg::IngestProgress { .. }
             | Msg::IngestDone(..)
             | Msg::LutImported(..)
+            | Msg::DcpImported(..)
             | Msg::EditInDone(..)
             | Msg::PrintProgress { .. }
             | Msg::PrintDone(..)
@@ -927,6 +930,7 @@ pub(crate) mod owners {
             Msg::IngestProgress { done: 1, total: 2 },
             Msg::IngestDone(Err("no".into())),
             Msg::LutImported(Err("no".into())),
+            Msg::DcpImported(Err("no".into())),
             Msg::EditInDone(Err("no".into())),
             Msg::PrintProgress { done: 1, total: 2 },
             Msg::PrintDone(Err("no".into())),

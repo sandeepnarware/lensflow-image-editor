@@ -728,6 +728,19 @@ correction) becomes `AiTool::ObjectMask { u, v }`, run like the other AI masks
 asks Segment Anything's multi-mask decoder with the point and SAM's padding point, keeps the
 mask it rates best and softens its logits with a sigmoid.
 
+Camera profiles (Develop → RAW → Camera profile) are DNG `.dcp` files the user imports
+(`profiles::import` copies them into `<root>/.lensflow/profiles/`; `profiles::load_all` reads
+them into `lf_raw::dcp`'s registry when the catalogue opens, before thumbnails start). A photo
+stores the name (`desktop.develop.dcp`); `DevelopSettings::dcp` is its `lf_settings::dcp_id`,
+so the settings stay `Copy` and the RAW reopens when it changes. `develop` fixes the profile
+for the shot (`Dcp::prepare`: forward matrices and HueSatMaps blended by the as-shot
+temperature in inverse kelvin) and replaces the colour matrix with it: forward matrix → linear
+ProPhoto → HueSatMap → LookTable (trilinear, hue wrapping, value axis clamped so headroom
+survives) → tone curve (Adobe's hue-keeping way; a straight curve counts as none and the
+base curve stays) → linear sRGB. A profile with no forward matrix uses the file's own
+matrix. The frame cache key adds the profile's SHA-256 (or "missing"), so a replaced file
+develops again; a profile that is not loaded is left out and the RAW panel says so.
+
 Face-part masks (Masks → Face: Eyes, Irises, Lips, Teeth) are `Target`s whose
 `face_part()` sends `segment::mask` to `lf_ai::features`: YuNet's faces are cut out as
 MediaPipe does (a square 1.5 × the box, turned so the eyes are level, 256 px), the face

@@ -106,6 +106,8 @@ pub struct PanelOutput {
     pub pick_wb: bool,
     /// "Import .cube…" was clicked.
     pub import_lut: bool,
+    /// "Import .dcp…" was clicked.
+    pub import_dcp: bool,
     /// "Apply lens profile" was clicked.
     pub lens_profile: bool,
 }
@@ -129,6 +131,8 @@ pub struct PanelContext<'a> {
     pub picking_wb: bool,
     /// The LUT looks loaded (`lf_pipeline::lut::names`).
     pub luts: &'a [String],
+    /// The camera profiles loaded (`lf_raw::dcp::names`: name, camera).
+    pub profiles: &'a [(String, String)],
     /// The RAW's as-shot colour temperature (kelvin), when its headers say.
     pub as_shot_kelvin: Option<f64>,
 }
@@ -185,7 +189,11 @@ pub fn show(
     let mut out = PanelOutput::default();
     if ctx.raw {
         let mut r = SliderResponse::default();
-        if section(ui, "raw", RAW, true, |ui| r = raw::show(ui, s)) {
+        if section(ui, "raw", RAW, true, |ui| {
+            let (rr, import) = raw::show(ui, s, ctx.profiles);
+            r = rr;
+            out.import_dcp |= import;
+        }) {
             let before = s.clone();
             raw::reset(s);
             if *s != before {

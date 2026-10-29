@@ -13,12 +13,14 @@ fn develop_settings_round_trip_and_default_to_no_desktop_key() {
         DevelopSettings {
             profile: Profile::Camera,
             highlights: Highlights::Reconstruct,
+            dcp: None,
         }
     );
 
     let custom = DevelopSettings {
         profile: Profile::Linear,
         highlights: Highlights::Clip,
+        dcp: None,
     };
     custom.write_into(&mut s);
     assert_eq!(
@@ -44,6 +46,7 @@ fn defaults_leave_other_desktop_keys_alone() {
     DevelopSettings {
         profile: Profile::Linear,
         highlights: Highlights::Reconstruct,
+        dcp: None,
     }
     .write_into(&mut s);
     assert_eq!(
@@ -65,6 +68,7 @@ fn unknown_or_partial_values_fall_back_to_defaults() {
         DevelopSettings {
             profile: Profile::Camera,
             highlights: Highlights::Clip,
+            dcp: None,
         }
     );
     let s = EditSettings::from_json_str(&json!({ "desktop": { "develop": 7 } }).to_string());
@@ -72,4 +76,31 @@ fn unknown_or_partial_values_fall_back_to_defaults() {
         DevelopSettings::from_settings(&s),
         DevelopSettings::default()
     );
+}
+
+#[test]
+fn a_camera_profile_is_kept_by_name_and_survives_other_changes() {
+    let mut s = EditSettings::default_settings();
+    DevelopSettings::set_dcp(&mut s, Some("Adobe Standard"));
+    let d = DevelopSettings::from_settings(&s);
+    assert_eq!(d.dcp, Some(lf_settings::dcp_id("adobe standard")));
+    assert_eq!(
+        DevelopSettings::dcp_name(&s).as_deref(),
+        Some("Adobe Standard")
+    );
+    // Changing the profile curve keeps the camera profile.
+    DevelopSettings {
+        profile: Profile::Linear,
+        ..d
+    }
+    .write_into(&mut s);
+    assert_eq!(
+        DevelopSettings::dcp_name(&s).as_deref(),
+        Some("Adobe Standard")
+    );
+    assert_eq!(DevelopSettings::from_settings(&s).profile, Profile::Linear);
+    // Back to the built-in colour and defaults: nothing stored.
+    DevelopSettings::set_dcp(&mut s, None);
+    DevelopSettings::default().write_into(&mut s);
+    assert_eq!(s.desktop, None);
 }

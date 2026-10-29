@@ -5,7 +5,8 @@
 //! 1. demosaic ([`crate::demosaic::run`]): camera RGB, 0..1 = the sensor's range
 //!    (`Quality::Preview` bins instead: half size for Bayer, a third for X-Trans);
 //! 2. white balance: multiply by the as-shot `wb` (green = 1);
-//! 3. colour: [`color::cam_to_srgb`] (identity when the file has no matrix), with the
+//! 3. colour: [`color::cam_to_srgb`] (identity when the file has no matrix), or the chosen
+//!    camera profile ([`crate::dcp`], fixed for the shot's white balance), with the
 //!    highlight handling around it:
 //!    - `Clip` (dcraw style): the white-balanced camera RGB is clamped at 1.0 *before*
 //!      the matrix, so a clipped sensor area (camera white after WB is (1, 1, 1),
@@ -17,7 +18,7 @@
 //!      `t = clamp((m - 0.98) / 0.02, 0, 1)`, keeping `Y`, which may stay above 1.0.
 //!      Unclipped colours (`m <= 0.98`) are untouched, even when the matrix takes
 //!      them above 1.0;
-//! 4. base curve ([`curve::apply`]);
+//! 4. base curve ([`curve::apply`]), unless the camera profile brought its own tone curve;
 //! 5. downscale, when the long edge exceeds `max_edge`: an integer box filter of
 //!    factor `ceil(long_edge / max_edge)`, averaged in linear light (this step runs
 //!    before gamma, which the brief allows and which is cheaper and exact);
@@ -75,21 +76,33 @@ pub fn develop(
     let wb = [raw.wb[0], raw.wb[1], raw.wb[2]];
     let m = color::cam_to_srgb(raw.xyz_to_cam, raw.matrix_white);
     let (profile, highlights) = (settings.profile, settings.highlights);
+    // A camera profile that is not loaded (another machine, a deleted file) is left out.
+    let dcp = settings
+        .dcp
+        .and_then(crate::dcp::get)
+        .map(|d| d.prepare(as_shot_kelvin(raw), &m));
+    let base_curve = dcp.as_ref().is_none_or(|p| !p.has_tone_curve());
+    let to_srgb = |c: [f32; 3]| match &dcp {
+        Some(p) => p.apply(c),
+        None => color::apply(&m, c),
+    };
     data.par_chunks_mut(3 * w as usize).for_each(|row| {
         for p in row.as_chunks_mut::<3>().0 {
             let balanced = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
             let c = match highlights {
-                Highlights::Clip => {
-                    color::apply(&m, balanced.map(|v| v.min(1.0))).map(|v| v.min(1.0))
-                }
+                Highlights::Clip => to_srgb(balanced.map(|v| v.min(1.0))).map(|v| v.min(1.0)),
                 Highlights::Reconstruct => {
-                    let mut c = color::apply(&m, balanced);
+                    let mut c = to_srgb(balanced);
                     reconstruct(&mut c, clip_weight(p[0].max(p[1]).max(p[2])));
                     c
                 }
             };
             for (out, v) in p.iter_mut().zip(c) {
-                *out = curve::apply(profile, v);
+                *out = if base_curve {
+                    curve::apply(profile, v)
+                } else {
+                    v
+                };
             }
         }
     });
@@ -126,6 +139,23 @@ pub fn develop(
         reduced,
         orientation_applied: o.exif() != 1,
     })
+}
+
+/// The temperature of `raw`'s as-shot white balance, from its colour matrix (`None` without
+/// one): what a camera profile's two illuminants are blended by.
+pub fn as_shot_kelvin(raw: &RawFrame) -> Option<f64> {
+    let m = raw.xyz_to_cam?;
+    if raw.wb[..3].iter().any(|v| !v.is_finite() || *v <= 0.0) {
+        return None;
+    }
+    let neutral = [
+        f64::from(raw.wb[1] / raw.wb[0]),
+        1.0,
+        f64::from(raw.wb[1] / raw.wb[2]),
+    ];
+    let xyz = color::solve3(m.map(|r| r.map(f64::from)), neutral)?;
+    let sum = xyz[0] + xyz[1] + xyz[2];
+    (sum.abs() > 1e-9).then(|| lf_settings::shader_values::kelvin_of_xy(xyz[0] / sum, xyz[1] / sum))
 }
 
 /// An 8-bit picture (JPEG, PNG, TIFF, WebP) as a developed frame: oriented, each byte

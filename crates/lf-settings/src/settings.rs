@@ -352,12 +352,26 @@ pub enum Highlights {
     Reconstruct,
 }
 
+/// The id a DNG camera profile is known by in `lf_raw::dcp`'s registry: FNV-1a (64 bit) of
+/// its name, case ignored.
+pub fn dcp_id(name: &str) -> u64 {
+    name.to_lowercase()
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+        })
+}
+
 /// The RAW develop choices, kept in `desktop.develop` as lowercase strings:
-/// `{"profile": "camera" | "linear", "highlights": "clip" | "reconstruct"}`.
+/// `{"profile": "camera" | "linear", "highlights": "clip" | "reconstruct", "dcp": "<name>"}`
+/// (`dcp`, a camera profile imported into the catalogue, only when one is chosen).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DevelopSettings {
     pub profile: Profile,
     pub highlights: Highlights,
+    /// The camera profile, by [`dcp_id`] of its name ([`DevelopSettings::dcp_name`] reads
+    /// the name itself).
+    pub dcp: Option<u64>,
 }
 
 impl DevelopSettings {
@@ -378,13 +392,42 @@ impl DevelopSettings {
                 Some("clip") => Highlights::Clip,
                 _ => Highlights::Reconstruct,
             },
+            dcp: field("dcp").filter(|n| !n.trim().is_empty()).map(dcp_id),
         }
+    }
+
+    /// The camera profile's name in `desktop.develop`, when one is chosen.
+    pub fn dcp_name(s: &EditSettings) -> Option<String> {
+        s.desktop
+            .as_ref()
+            .and_then(|d| d.get("develop"))
+            .and_then(|d| d.get("dcp"))
+            .and_then(|v| v.as_str())
+            .filter(|n| !n.trim().is_empty())
+            .map(str::to_owned)
+    }
+
+    /// Chooses the camera profile `name` (`None`: the built-in colour), keeping the rest.
+    pub fn set_dcp(s: &mut EditSettings, name: Option<&str>) {
+        let mut d = DevelopSettings::from_settings(s);
+        d.dcp = name.map(dcp_id);
+        d.write_with(s, name.map(str::to_owned));
     }
 
     /// Store into `desktop.develop`. Defaults are stored as no `develop` key, and an
     /// emptied `desktop` is dropped, so a default export carries no `desktop` key.
     pub fn write_into(&self, s: &mut EditSettings) {
-        if *self == DevelopSettings::default() {
+        // The profile's name is kept from `s` (the id alone cannot give it back).
+        let name = DevelopSettings::dcp_name(s).filter(|n| Some(dcp_id(n)) == self.dcp);
+        self.write_with(s, name);
+    }
+
+    fn write_with(&self, s: &mut EditSettings, dcp: Option<String>) {
+        let mut this = *self;
+        if dcp.is_none() {
+            this.dcp = None;
+        }
+        if this == DevelopSettings::default() {
             if let Some(desktop) = s.desktop.as_mut() {
                 desktop.remove("develop");
                 if desktop.is_empty() {
@@ -401,9 +444,12 @@ impl DevelopSettings {
             Highlights::Clip => "clip",
             Highlights::Reconstruct => "reconstruct",
         };
-        s.desktop.get_or_insert_with(Default::default).insert(
-            "develop".to_string(),
-            serde_json::json!({ "profile": profile, "highlights": highlights }),
-        );
+        let mut develop = serde_json::json!({ "profile": profile, "highlights": highlights });
+        if let Some(name) = dcp {
+            develop["dcp"] = serde_json::Value::String(name);
+        }
+        s.desktop
+            .get_or_insert_with(Default::default)
+            .insert("develop".to_string(), develop);
     }
 }

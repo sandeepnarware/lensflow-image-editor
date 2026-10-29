@@ -41,6 +41,8 @@ pub enum Purpose {
     ExportProfile,
     /// A `.cube` file for Develop's LUT look.
     LutFile,
+    /// A `.dcp` camera profile for Develop's RAW section.
+    DcpFile,
     /// The printer and paper profile for soft-proofing.
     ProofProfile,
     /// The application "Edit in external editor" uses.
@@ -211,6 +213,7 @@ impl Library {
             Purpose::ExportProfile => "Choose an ICC profile",
             Purpose::Ingest(_) => "Choose a folder",
             Purpose::LutFile => "Choose a .cube LUT",
+            Purpose::DcpFile => "Choose a .dcp camera profile",
             Purpose::ProofProfile => "Choose a printer and paper profile",
             Purpose::Editor => "Choose an application",
             Purpose::PrintPdf => "Save the PDF",
@@ -289,6 +292,14 @@ impl Library {
             }
             return;
         }
+        if purpose == Purpose::DcpFile {
+            match result {
+                Ok(Some(chosen)) => self.import_dcp(chosen.path, env),
+                Ok(None) => {}
+                Err(e) => env.toasts.push(Level::Warning, e),
+            }
+            return;
+        }
         if let Purpose::Ingest(pick) = purpose {
             match result {
                 Ok(chosen) => self.ingest_picked(pick, ticket, chosen.map(|c| c.path), env),
@@ -332,6 +343,7 @@ impl Library {
             | Purpose::ExportProfile
             | Purpose::Ingest(_)
             | Purpose::LutFile
+            | Purpose::DcpFile
             | Purpose::ProofProfile
             | Purpose::Editor
             | Purpose::PrintPdf => {}

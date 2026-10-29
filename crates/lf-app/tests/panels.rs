@@ -12,6 +12,7 @@ struct State {
     raw: bool,
     last: PanelOutput,
     commits: usize,
+    profiles: Vec<(String, String)>,
 }
 
 fn harness(raw: bool) -> Harness<'static, State> {
@@ -28,6 +29,7 @@ fn harness(raw: bool) -> Harness<'static, State> {
                     sample: None,
                     picking_wb: false,
                     luts: &[],
+                    profiles: &s.profiles,
                 };
                 s.last = panels::show(ui, &mut s.panels, &mut s.settings, &ctx);
                 if s.last.commit {
@@ -40,6 +42,7 @@ fn harness(raw: bool) -> Harness<'static, State> {
                 raw,
                 last: PanelOutput::default(),
                 commits: 0,
+                profiles: Vec::new(),
             },
         )
 }
@@ -100,6 +103,35 @@ fn a_raw_photo_shows_its_profile_and_highlights() {
     let develop = lf_settings::DevelopSettings::from_settings(&h.state().settings);
     assert_eq!(develop.profile, lf_settings::Profile::Linear);
     assert_eq!(h.state().commits, 1);
+}
+
+#[test]
+fn a_raw_photo_picks_a_camera_profile_and_asks_to_import_one() {
+    use lf_app::develop::panels::raw;
+    use lf_settings::DevelopSettings;
+    let mut h = harness(true);
+    h.state_mut().profiles = vec![("Test Standard".into(), "Test Cam".into())];
+    h.run();
+    h.get_by_role_and_label(Role::ComboBox, raw::CAMERA_PROFILE)
+        .click();
+    h.run();
+    h.get_by_label("Test Standard (Test Cam)").click();
+    h.run();
+    assert_eq!(
+        DevelopSettings::dcp_name(&h.state().settings).as_deref(),
+        Some("Test Standard")
+    );
+    assert_eq!(h.state().commits, 1);
+    assert!(h.query_by_label(raw::NOT_LOADED).is_none());
+
+    // A profile this catalogue does not have: said, and the photo shows without it.
+    h.state_mut().profiles.clear();
+    h.run();
+    assert!(h.query_by_label(raw::NOT_LOADED).is_some());
+
+    h.get_by_label(raw::IMPORT).click();
+    h.step();
+    assert!(h.state().last.import_dcp, "Import .dcp… asks the library");
 }
 
 #[test]
@@ -179,6 +211,7 @@ fn recorded() -> Harness<'static, Recorded> {
                     sample: None,
                     picking_wb: false,
                     luts: &[],
+                    profiles: &[],
                 };
                 let mut out = PanelOutput::default();
                 let panels = &mut s.panels;
@@ -323,6 +356,7 @@ fn auto_tone_auto_white_balance_and_the_eyedropper_button() {
                     sample: Some(&s.sample),
                     picking_wb: false,
                     luts: &[],
+                    profiles: &[],
                 };
                 s.last = panels::show(ui, &mut s.panels, &mut s.settings, &ctx);
                 s.picked |= s.last.pick_wb;

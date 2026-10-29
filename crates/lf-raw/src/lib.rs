@@ -14,6 +14,7 @@ pub mod cache;
 pub mod color;
 mod container;
 pub mod curve;
+pub mod dcp;
 pub mod decode;
 pub mod demosaic;
 pub mod develop;

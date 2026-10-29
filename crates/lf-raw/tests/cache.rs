@@ -224,3 +224,35 @@ fn stale_tmp_files_are_swept_on_open() {
     assert!(!old.exists());
     assert!(fresh.exists());
 }
+
+#[test]
+fn the_key_follows_the_camera_profile_by_its_content() {
+    use lf_raw::dcp::testing::{Tag, ascii, srational, write};
+    let t = tempfile::tempdir().unwrap();
+    let f = raw_file(t.path(), "a.raw", b"hello raw");
+    let profile = |name: &str| {
+        let fm = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        write(vec![
+            Tag(50936, 2, name.len() as u32 + 1, ascii(name)),
+            Tag(50964, 10, 9, srational(&fm)),
+        ])
+    };
+    let s = DevelopSettings {
+        dcp: Some(lf_settings::dcp_id("Cache Test")),
+        ..DevelopSettings::default()
+    };
+    let missing = CacheKey::for_file(&f, &s, Quality::Best, 2048).unwrap();
+    assert_ne!(missing, key(&f));
+    lf_raw::dcp::register(
+        "Cache Test",
+        lf_raw::dcp::Dcp::parse(&profile("one")).unwrap(),
+    );
+    let one = CacheKey::for_file(&f, &s, Quality::Best, 2048).unwrap();
+    lf_raw::dcp::register(
+        "Cache Test",
+        lf_raw::dcp::Dcp::parse(&profile("two")).unwrap(),
+    );
+    let two = CacheKey::for_file(&f, &s, Quality::Best, 2048).unwrap();
+    assert_ne!(one, missing);
+    assert_ne!(one, two, "another file under the same name");
+}

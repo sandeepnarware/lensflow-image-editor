@@ -87,6 +87,13 @@ impl CacheKey {
         hasher.update(meta.len().to_le_bytes());
         hasher.update(mtime.to_le_bytes());
         hasher.update(settings_json(settings).as_bytes());
+        // The camera profile by its content: a changed file is a different develop.
+        if let Some(id) = settings.dcp {
+            match crate::dcp::get(id) {
+                Some(d) => hasher.update(d.digest),
+                None => hasher.update(b"dcp-missing"),
+            }
+        }
         hasher.update(
             match quality {
                 Quality::Fast => "fast",
