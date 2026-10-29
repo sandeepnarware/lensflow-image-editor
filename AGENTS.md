@@ -231,6 +231,8 @@ cargo test --workspace                   # includes the 228-render parity suite
 
 ## Known gaps / gotchas
 
+- egui panics on a glyph none of its fonts has: `lf-app/tests/glyphs.rs` checks every non-ASCII
+  character in `lf-app/src` string literals (use ASCII or a glyph it accepts).
 - HEIC opens through the system decoder (Windows: the HEIF and HEVC extensions; macOS: sips; Linux: heif-dec); AVIF input unsupported. rawler 0.8 gaps: Nikon HE/HE* NEF, DNG 1.7 JPEG XL, some
   Sony ARW / Phase One IIQ.
 - HDR JPEG exports (`Format::JpegHdr`, `lf_catalog::ultrahdr`) are Ultra HDR: the SDR JPEG, then a one-channel

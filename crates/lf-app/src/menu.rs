@@ -388,7 +388,7 @@ pub fn icon(action: Action) -> &'static str {
         Action::Next => "⏵",
         Action::Up => "⏶",
         Action::Down => "⏷",
-        Action::LeaveTool => "⎋",
+        Action::LeaveTool => "⏴",
         Action::ApplyCrop => "✔",
         Action::CropOverlay => "⛶",
         Action::DeleteSpot => "🗑",

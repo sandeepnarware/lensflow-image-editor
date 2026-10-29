@@ -253,7 +253,7 @@ mod tests {
         let after = v.output_at(cursor, output, panel);
         assert!(
             close(before.0, after.0) && close(before.1, after.1),
-            "{before:?} → {after:?}"
+            "{before:?} -> {after:?}"
         );
 
         // From fit, too (fit is 0.25 here).
@@ -264,7 +264,7 @@ mod tests {
         let after = v.output_at(cursor, output, panel);
         assert!(
             close(before.0, after.0) && close(before.1, after.1),
-            "{before:?} → {after:?}"
+            "{before:?} -> {after:?}"
         );
 
         // Zooming out past fit shows the whole photo.

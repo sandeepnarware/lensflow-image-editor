@@ -659,7 +659,7 @@ mod tests {
             assert!(tool.press(&edit.settings, p, (0.02, 0.02)), "{p:?}");
             assert_eq!(tool.handle(), Some(handle));
             edit.set(|s| {
-                assert!(tool.drag_to(s, to, TW, TH), "{p:?} → {to:?}");
+                assert!(tool.drag_to(s, to, TW, TH), "{p:?} -> {to:?}");
             });
             let out = tool.release();
             absorb(out, edit, c);
