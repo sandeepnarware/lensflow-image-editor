@@ -780,6 +780,13 @@ many other photos are selected and sends a waiting patch to them on the `Long` l
 (`batch::run` with `Recipe::Sync`, sidecars through the saver); `Msg::Synced` refreshes their
 thumbnails and reports failures. Undo and redo stay on the open photo.
 
+Film negative (Develop → Film negative, `desktop.negative`): "Convert negative" measures the
+photo's sample (`Negative::measure`: in linear light, each channel's 99.5th percentile is the film
+base, its 0.5th the densest point) and the develop shader converts first of all (before
+calibration and every slider): the light passed as a share of the base's, to density
+(`−log₁₀`, capped at 4), scaled per channel by the photo's range, so the orange mask cancels and
+a grey scene comes out grey. White balance and the tone sliders then work on the positive.
+
 Calibration (Develop → Calibration, `desktop.calibration`) moves the red, green and blue
 primaries: `Calibration::matrix` turns each about the grey axis (±30° at ±100) and scales its
 distance from grey, then weights the columns so white maps to white, so greys never move. The

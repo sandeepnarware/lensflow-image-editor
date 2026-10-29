@@ -77,6 +77,8 @@ struct Uniforms {
     persp: vec4<f32>,       // vertical and horizontal keystone, corner radius squared
     calib: array<vec4<f32>, 3>, // desktop only: colour calibration's matrix, row by row
     calib_tint: vec4<f32>,  // shadows tint, on (0: the web's pass exactly)
+    neg_base: vec4<f32>,    // desktop only: film base (linear), on (0: none)
+    neg_dmax: vec4<f32>,    // each channel's largest density
 }
 
 @group(0) @binding(0) var u_img: texture_2d<f32>;    // the photo (after spots)
@@ -424,6 +426,14 @@ fn fs_develop(in: VsOut) -> @location(0) vec4<f32> {
             let q = vec2<f32>((uv.x - 0.5) * u.aspect, uv.y - 0.5);
             c = to_gamma(to_linear(c) * (1.0 + u.lens.y * dot(q, q) / u.persp.z));
         }
+    }
+    if (u.neg_base.w != 0.0) {
+        // Desktop only: a film negative to a positive (`lf_settings::negative`): the light
+        // passed as a share of the film base's, to density, scaled by the photo's range.
+        let passed = clamp(pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2)) / u.neg_base.xyz,
+            vec3<f32>(1e-4), vec3<f32>(1.0));
+        let d = -log(passed) / 2.302585 / u.neg_dmax.xyz;
+        c = pow(max(d, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
     }
     if (u.calib_tint.y != 0.0) { c = calibrate(c); }
     if (u.develop != 0u) { c = develop(c, uv, muv); }

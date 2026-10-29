@@ -16,6 +16,7 @@ pub mod lens;
 pub mod light;
 pub mod looks;
 pub mod lut;
+pub mod negative;
 pub mod presets;
 pub mod raw;
 pub mod slider;
@@ -252,6 +253,20 @@ pub fn show(
     }
     out.absorb(r);
     out.lens_profile |= profile;
+    let mut r = SliderResponse::default();
+    if section(ui, "negative", negative::TITLE, false, |ui| {
+        r = negative::show(ui, s, ctx.sample)
+    }) {
+        let before = s.clone();
+        negative::reset(s);
+        if *s != before {
+            r = SliderResponse {
+                changed: true,
+                released: true,
+            };
+        }
+    }
+    out.absorb(r);
     let mut r = SliderResponse::default();
     if section(ui, "calibration", calibration::TITLE, false, |ui| {
         r = calibration::show(ui, s)

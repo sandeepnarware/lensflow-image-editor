@@ -181,6 +181,8 @@ cargo test --workspace                   # includes the 228-render parity suite
   Auto-sync: `sync.rs` (key-level `changes`/`apply`, never crop, turn, spots, heal or masks), captured in
   `Develop::run_edit` (commits and resets, not undo), sent by `Library::auto_sync` on `Long` through
   `batch::run` with `Recipe::Sync` (`Msg::Synced`); `prefs.auto_sync`, `Action::AutoSync`, Develop's checkbox.
+  Film negative: `lf_settings::negative` (`desktop.negative`: base and per-channel dmax, `measure` from the
+  sample), `neg_base`/`neg_dmax` uniforms, first step in `fs_develop`, `panels/negative.rs`.
   Colour calibration: `lf_settings::calibration` (`desktop.calibration`; primaries matrix keeping white, shadows
   tint), `calib`/`calib_tint` uniforms and `calibrate` in `develop.wgsl` (off when neutral), `panels/calibration.rs`.
   Camera profiles: `lf_raw::dcp` (DCP parser, registry by `lf_settings::dcp_id`, forward matrix → ProPhoto →

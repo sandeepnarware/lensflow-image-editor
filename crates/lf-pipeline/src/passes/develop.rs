@@ -79,6 +79,10 @@ pub struct Uniforms {
     pub calib: [[f32; 4]; 3],
     /// The shadows tint, 1 when calibration is on (0: the web's pass exactly), unused, unused.
     pub calib_tint: [f32; 4],
+    /// Desktop only: film negative conversion's base (linear RGB) and 1 when on (0: none).
+    pub neg_base: [f32; 4],
+    /// Each channel's largest density (`w` unused).
+    pub neg_dmax: [f32; 4],
 }
 
 /// One local adjustment as `develop.wgsl`'s `MaskU` takes it (seven 16-byte rows).
@@ -173,7 +177,7 @@ impl MaskUniform {
 const _: () = {
     use std::mem::{offset_of, size_of};
     assert!(size_of::<MaskUniform>() == 112);
-    assert!(size_of::<Uniforms>() == 624 + 16 + MAX_MASKS * 112 + 32 + 64);
+    assert!(size_of::<Uniforms>() == 624 + 16 + MAX_MASKS * 112 + 32 + 64 + 32);
     assert!(offset_of!(Uniforms, wb) == 128);
     assert!(offset_of!(Uniforms, pixel) == 232);
     assert!(offset_of!(Uniforms, hsl) == 240);
@@ -212,6 +216,7 @@ impl Uniforms {
         let lens = lf_settings::lens::Lens::from_settings(s);
         let calibration = lf_settings::calibration::Calibration::from_settings(s);
         let calib = calibration.matrix();
+        let negative = lf_settings::negative::Negative::from_settings(s).filter(|_| f.develop);
         let aspect = f64::from(f.img_size[0]) / f64::from(f.img_size[1].max(1));
         let mut mask_uniforms = [MaskUniform::default(); MAX_MASKS];
         for (layer, (slot, mask)) in mask_uniforms.iter_mut().zip(&masks.0).enumerate() {
@@ -295,6 +300,12 @@ impl Uniforms {
                 0.0,
                 0.0,
             ],
+            neg_base: negative.map_or([0.0; 4], |n| {
+                [n.base[0] as f32, n.base[1] as f32, n.base[2] as f32, 1.0]
+            }),
+            neg_dmax: negative.map_or([1.0; 4], |n| {
+                [n.dmax[0] as f32, n.dmax[1] as f32, n.dmax[2] as f32, 1.0]
+            }),
         }
     }
 }

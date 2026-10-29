@@ -17,6 +17,7 @@ pub mod lens;
 pub mod looks;
 pub mod lut;
 pub mod masks;
+pub mod negative;
 mod normalise;
 mod settings;
 pub mod shader_values;

@@ -52,7 +52,7 @@ close or competitors ship new features.
 - Second-monitor view, reference view, ~~focus peaking~~ (done: View → Peaking, `Shift+J`), 100% loupe.
 - ~~Visualize spots~~ (done: View → Spots view).
 - Contact sheets and slideshows (we have Print to PDF, no contact-sheet layout).
-- Film negative conversion (Capture One 16.7, Negative Lab Pro).
+- ~~Film negative conversion (Capture One 16.7, Negative Lab Pro)~~ (done: Develop → Film negative).
 - Pixel-shift and high-resolution merges.
 - DNG and JPEG XL export.
 
