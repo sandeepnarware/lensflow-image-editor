@@ -11,6 +11,7 @@ pub mod batch;
 pub mod export;
 pub mod export_presets;
 pub mod gallery_export;
+pub mod geotag;
 pub mod group_picker;
 pub mod ingest;
 pub mod keys;

@@ -11,6 +11,7 @@ pub mod edits;
 pub mod exif_embed;
 pub mod export;
 pub mod finish;
+pub mod gpx;
 pub mod import;
 pub mod ingest;
 pub mod meta;

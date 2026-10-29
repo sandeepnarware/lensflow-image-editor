@@ -15,6 +15,7 @@ pub mod edit_in_ui;
 pub mod export_ui;
 pub mod filmstrip;
 pub mod gallery_ui;
+pub mod geotag_ui;
 pub mod grid;
 pub mod import_ui;
 pub mod ingest_ui;
@@ -141,6 +142,8 @@ pub struct Library {
     /// Auto import's polling, and its dialog while open.
     auto_import: auto_import_ui::AutoImport,
     auto_import_dialog: Option<crate::dialogs::auto_import::AutoImportDialog>,
+    /// "Tag from GPX track", while open.
+    geotag: Option<crate::dialogs::geotag::GeotagDialog>,
     local_ai: bool,
     /// Compare, while open (it shows in place of the grid).
     compare: Option<compare::Compare>,
@@ -273,6 +276,7 @@ impl Library {
             auto_stack: None,
             auto_import: auto_import_ui::AutoImport::default(),
             auto_import_dialog: None,
+            geotag: None,
             local_ai: false,
             compare: None,
             slideshow: None,
@@ -943,6 +947,7 @@ impl Library {
                 folder,
                 result,
             } => self.auto_imported(root, folder, result, env),
+            Msg::Geotagged { root, result } => self.geotagged(root, result, env),
             Msg::Stacked { root, auto, result } => {
                 if auto {
                     self.auto_stack_done();
@@ -1541,6 +1546,7 @@ impl Library {
         self.remove_dialog(ui.ctx(), env);
         self.auto_stack_dialog(ui.ctx(), env);
         self.auto_import_dialog(ui.ctx(), env);
+        self.geotag_dialog(ui.ctx(), env);
         if self.mode == Mode::Library {
             self.quick_develop_ui(ui.ctx(), env);
         }
@@ -1564,6 +1570,7 @@ impl Library {
             || self.people_dialog_open()
             || self.rename.is_some()
             || self.auto_import_dialog.is_some()
+            || self.geotag.is_some()
             || self.slideshow.is_some()
             || self.ai.is_some()
             || self.remove.is_some()
@@ -1615,6 +1622,7 @@ impl Library {
             Action::Metadata => !develop,
             Action::QuickDevelop => !develop,
             Action::Map => !develop && (self.map.is_some() || !self.order.is_empty()),
+            Action::GeotagGpx => !develop && !self.photos.is_empty() && self.can_add(),
             Action::Compare => {
                 !develop
                     && (self.compare.is_some()
@@ -1760,6 +1768,7 @@ impl Library {
             }
             Action::Metadata => self.toggle_metadata(),
             Action::QuickDevelop => self.toggle_quick_develop(),
+            Action::GeotagGpx => self.open_geotag(),
             Action::Map if self.map.is_some() => self.map = None,
             Action::Map => self.open_map(env),
             Action::Survey if self.compare.is_some() => self.close_compare(),

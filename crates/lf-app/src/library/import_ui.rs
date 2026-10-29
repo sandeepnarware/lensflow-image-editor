@@ -55,6 +55,8 @@ pub enum Purpose {
     Ingest(crate::dialogs::ingest::Pick),
     /// Auto import's watched folder; the dialog's own tickets.
     AutoImportWatch,
+    /// "Tag from GPX track"'s track file; the dialog's own tickets.
+    GpxFile,
 }
 
 /// A folder that exists and can be read.
@@ -216,6 +218,7 @@ impl Library {
             Purpose::Watermark => "Choose a logo for the watermark",
             Purpose::ExportProfile => "Choose an ICC profile",
             Purpose::Ingest(_) | Purpose::AutoImportWatch => "Choose a folder",
+            Purpose::GpxFile => "Choose a GPX track",
             Purpose::LutFile => "Choose a .cube LUT",
             Purpose::DcpFile => "Choose a .dcp camera profile",
             Purpose::SkyFile => "Choose a photo of a sky",
@@ -317,6 +320,13 @@ impl Library {
             }
             return;
         }
+        if purpose == Purpose::GpxFile {
+            match result {
+                Ok(chosen) => self.gpx_chosen(ticket, chosen.map(|c| c.path)),
+                Err(e) => env.toasts.push(Level::Warning, e),
+            }
+            return;
+        }
         if purpose == Purpose::AutoImportWatch {
             match result {
                 Ok(chosen) => self.auto_import_watch_chosen(ticket, chosen.map(|c| c.path)),
@@ -367,6 +377,7 @@ impl Library {
             | Purpose::ExportProfile
             | Purpose::Ingest(_)
             | Purpose::AutoImportWatch
+            | Purpose::GpxFile
             | Purpose::LutFile
             | Purpose::DcpFile
             | Purpose::SkyFile

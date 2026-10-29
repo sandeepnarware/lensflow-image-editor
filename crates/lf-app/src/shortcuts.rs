@@ -81,6 +81,8 @@ pub enum Action {
     Survey,
     /// Where the photos shown were taken, on a map.
     Map,
+    /// Photos placed from a GPX track by their capture times.
+    GeotagGpx,
     // AI (on this computer)
     /// Remove noise; a new photo beside each.
     AiDenoise,
@@ -214,6 +216,7 @@ impl Action {
             Action::Compare => "Compare",
             Action::Loupe => "Loupe",
             Action::Survey => "Survey",
+            Action::GeotagGpx => "Tag from GPX track…",
             Action::QuickDevelop => "Quick develop",
             Action::Map => "Map",
             Action::AiDenoise => "AI Denoise…",

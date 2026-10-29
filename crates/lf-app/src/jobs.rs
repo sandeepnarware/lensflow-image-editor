@@ -276,6 +276,11 @@ pub enum Msg {
         auto: bool,
         result: Result<Option<String>, String>,
     },
+    /// "Tag from GPX track": how many photos were placed, of how many.
+    Geotagged {
+        root: PathBuf,
+        result: Result<(usize, usize), String>,
+    },
     /// Auto import looked at its watched folder: how many photos it moved into `folder`.
     AutoImported {
         root: PathBuf,
@@ -878,6 +883,7 @@ pub(crate) mod owners {
             | Msg::AiDone(..)
             | Msg::Stacked { .. }
             | Msg::AutoImported { .. }
+            | Msg::Geotagged { .. }
             | Msg::StackProgress { .. }
             | Msg::AlbumPhotos { .. }
             | Msg::AlbumChanged { .. }
@@ -1044,6 +1050,10 @@ pub(crate) mod owners {
                 root: dir.join("elsewhere"),
                 folder: dir.join("f"),
                 result: Ok(0),
+            },
+            Msg::Geotagged {
+                root: dir.join("elsewhere"),
+                result: Ok((0, 0)),
             },
             Msg::StackProgress { done: 1, total: 2 },
             Msg::LensProfile {

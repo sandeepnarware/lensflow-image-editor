@@ -77,6 +77,7 @@ close or competitors ship new features.
 - Metadata filter by camera and lens (Lightroom's Library filter): done.
 - Quick Develop in the Library (Lightroom's): done, View → Quick develop.
 - Auto straighten in the crop tool (Lightroom's Auto): done.
+- Geotagging from a GPX tracklog (Lightroom's Map → Tracklog): done, View → GPX track.
 
 ### Tier 4: large or strategic
 

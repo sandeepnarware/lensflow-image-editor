@@ -912,6 +912,13 @@ line segments (`develop::upright::segments`) fitted with `upright::fit(.., Mode:
 its angle set (`crop::straighten`, so the crop stays inside the turned photo); one history step.
 A turned or flipped photo, or one with too few lines, is left alone with a note.
 
+Geotagging (`lf_catalog::gpx`, `dialogs/geotag.rs`, `library/geotag_ui.rs`,
+`Action::GeotagGpx`): the track's points with times (`trkpt`, `rtept`, `wpt`; a small scanner,
+not an XML parser), the photo's EXIF time read as local and moved to UTC by the zone chosen
+(default this computer's), then `locate`: interpolated between points up to 10 minutes apart,
+else the nearest point within 5 minutes, else no place. Works on the selection (several) or the
+folder, on `Io`, through `Catalog::set_gps`; `Msg::Geotagged` toasts how many were placed.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

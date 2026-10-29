@@ -230,6 +230,10 @@ clarity by a small or large step either way, each from the photo's own value; Re
 
 Auto straighten (the crop tool, under Straighten): levels the photo by its lines.
 
+Tag from GPX track (View → GPX track): photos placed on the map from a phone's or GPS
+logger's track by the time each was taken; choose the camera clock's time zone, and whether
+photos that already have a place keep it.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.
