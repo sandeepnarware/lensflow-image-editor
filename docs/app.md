@@ -621,6 +621,12 @@ pixel per screen pixel). The active photo is outlined; marks go to it alone, `�
 it among the compared photos, and `Esc`, `C` or "Back to grid" closes. Showing another
 folder or album closes it; Develop and back keeps it.
 
+The loupe (`E`, `Action::Loupe`, Library → View) is the same view with the active photo alone
+(`Compare::loupe`), rendered by `compare::render_at` at up to `LOUPE_EDGE` (8192) px so 1:1 shows
+the photo's own pixels. A click zooms to 1:1 centred on the point clicked, and a second click
+fits again; `←`/`→` render the grid's previous or next photo (selecting it) and keep the zoom
+and place, so the same detail can be checked across a burst. `Esc`, `E` or `C` closes.
+
 ### Show clipping
 
 `J` (`Action::Clipping`, View → Preview) toggles `Develop::clipping`, passed to the renderer as

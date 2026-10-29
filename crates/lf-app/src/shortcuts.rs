@@ -58,6 +58,8 @@ pub enum Action {
     Metadata,
     /// Two to four selected photos side by side, zoomed together.
     Compare,
+    /// The active photo alone at full size (click for 1:1).
+    Loupe,
     /// Where the photos shown were taken, on a map.
     Map,
     // AI (on this computer)
@@ -177,6 +179,7 @@ impl Action {
             Action::ToggleZoom => "Fit / 100 %",
             Action::Metadata => "Metadata panel",
             Action::Compare => "Compare",
+            Action::Loupe => "Loupe",
             Action::Map => "Map",
             Action::AiDenoise => "AI Denoise…",
             Action::AiLensBlur => "Lens blur…",
@@ -290,6 +293,7 @@ pub const MAP: Map = Map(&[
     (Action::MergePanorama, cmd(Key::M)),
     (Action::NewAlbum, cmd(Key::N)),
     (Action::Compare, key(Key::C)),
+    (Action::Loupe, key(Key::E)),
     (Action::AddToAlbum, cmd(Key::B)),
     (Action::CropTool, key(Key::R)),
     (Action::SpotTool, key(Key::Q)),
@@ -459,6 +463,7 @@ mod tests {
             (Action::MergePanorama, cmd(Key::M)),
             (Action::NewAlbum, cmd(Key::N)),
             (Action::Compare, key(Key::C)),
+            (Action::Loupe, key(Key::E)),
             (Action::AddToAlbum, cmd(Key::B)),
             (Action::CropTool, key(Key::R)),
             (Action::SpotTool, key(Key::Q)),

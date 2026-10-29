@@ -155,6 +155,9 @@ and with their edits, zoomed and panned together to pick the sharpest of a burst
 Click one to make it active; flags, stars and labels go to it alone; `←`/`→` move
 between them; `Esc` goes back to the grid.
 
+Loupe (`E`, Library → Loupe): the active photo alone at full size. Click to see that
+spot at 100 % (click again to fit); `←`/`→` step through the photos keeping the zoom.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

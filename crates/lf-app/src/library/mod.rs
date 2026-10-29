@@ -1537,6 +1537,9 @@ impl Library {
                     && (self.compare.is_some()
                         || compare::can_compare(self.selection.current.len()))
             }
+            Action::Loupe => {
+                !develop && (self.compare.is_some() || self.selection.active().is_some())
+            }
             Action::AiDenoise
             | Action::AiUpscale
             | Action::AiRetouch
@@ -1658,6 +1661,12 @@ impl Library {
             Action::Metadata => self.toggle_metadata(),
             Action::Map if self.map.is_some() => self.map = None,
             Action::Map => self.open_map(env),
+            Action::Loupe if self.compare.is_some() => self.close_compare(),
+            Action::Loupe => {
+                if let Some(id) = self.selection.active() {
+                    self.open_loupe(id, env);
+                }
+            }
             Action::Compare if self.compare.is_some() => self.close_compare(),
             Action::Compare => self.open_compare(env),
             Action::AiDenoise => self.open_ai(crate::ai_job::AiTool::Denoise { strength: 0.8 }),
@@ -1685,6 +1694,8 @@ impl Library {
             Action::RemoveFromAlbum => self.remove_from_album(env),
             Action::LeaveTool if self.mapping() => self.map = None,
             Action::LeaveTool if self.comparing() => self.close_compare(),
+            Action::Previous if self.in_loupe() => self.loupe_step(false, env),
+            Action::Next if self.in_loupe() => self.loupe_step(true, env),
             Action::Previous if self.comparing() => self.compare_step(false),
             Action::Next if self.comparing() => self.compare_step(true),
             Action::Previous => self.step(Dir::Left, env),

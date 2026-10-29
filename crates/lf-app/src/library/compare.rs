@@ -3,6 +3,10 @@
 //! one; flags, stars and labels then go to it alone, and `←`/`→` move the active photo.
 //! `Esc` or "Back to grid" returns.
 //!
+//! The loupe (`E`) is the same view with the active photo alone, rendered at up to
+//! [`LOUPE_EDGE`] pixels so 1:1 shows real detail: a click zooms to 1:1 at the point clicked
+//! (and back), and `←`/`→` step through the grid's photos.
+//!
 //! Each photo is decoded and developed on the `Open` lane (through the frame cache Develop
 //! uses, so opening one afterwards is quick) and read back at up to [`EDGE`] pixels, then
 //! shown as an egui texture. "1:1" is one of those pixels per screen pixel.
@@ -20,9 +24,12 @@ use std::sync::Arc;
 
 /// The long edge each photo is read back at.
 pub const EDGE: u32 = 3000;
+/// The long edge the loupe's photo is read back at (capped by the device's largest texture).
+pub const LOUPE_EDGE: u32 = 8192;
 /// The most photos compared at once.
 pub const MAX: usize = 4;
 pub const BACK: &str = "Back to grid";
+pub const LOUPE_HINT: &str = "Click for 1:1 at that point (and back), drag to pan, scroll to zoom; arrows step through the photos.";
 pub const HINT: &str = "Scroll to zoom, drag to pan (all together); click a photo to make it active; double-click for fit ⇄ 1:1.";
 
 /// Rendered pixels on their way to the window.
@@ -48,6 +55,19 @@ pub fn render(
     cache: Option<&lf_raw::cache::FrameCache>,
     quality: lf_raw::demosaic::Quality,
 ) -> Result<RgbaImage, String> {
+    render_at(gpu, root, id, path, cache, quality, EDGE)
+}
+
+/// [`render`] at up to `edge` pixels on the long side.
+pub fn render_at(
+    gpu: &Arc<lf_pipeline::Gpu>,
+    root: &Path,
+    id: i64,
+    path: &Path,
+    cache: Option<&lf_raw::cache::FrameCache>,
+    quality: lf_raw::demosaic::Quality,
+    edge: u32,
+) -> Result<RgbaImage, String> {
     let catalog = lf_catalog::Catalog::open(root).map_err(|e| e.to_string())?;
     let settings = edits::get_settings(&catalog, id)
         .map_err(|e| e.to_string())?
@@ -62,7 +82,7 @@ pub fn render(
     .map_err(|e| e.to_string())?;
     let mut renderer = lf_raw::render::renderer_for(gpu, &opened).map_err(|e| e.to_string())?;
     let (w, h) = renderer.output_size(&settings);
-    let edge = EDGE.min(w.max(h)).min(gpu.max_edge());
+    let edge = edge.min(w.max(h)).min(gpu.max_edge());
     renderer.pixels(&settings, edge).map_err(|e| e.to_string())
 }
 
@@ -85,6 +105,8 @@ pub struct Compare {
     zoom: f32,
     /// The point of each photo at the middle of its cell, in 0..1 of the photo.
     centre: Vec2,
+    /// The loupe: one photo, full size, stepping through the grid.
+    pub loupe: bool,
 }
 
 impl Compare {
@@ -95,6 +117,7 @@ impl Compare {
             generation,
             zoom: 1.0,
             centre: Vec2::splat(0.5),
+            loupe: false,
         }
     }
 }
@@ -160,6 +183,64 @@ impl Library {
         self.compare = Some(Compare::new(ids, generation));
     }
 
+    pub fn in_loupe(&self) -> bool {
+        self.comparing() && self.compare.as_ref().is_some_and(|c| c.loupe)
+    }
+
+    /// `E`: the active photo alone, full size (keeping the zoom when stepping).
+    pub(super) fn open_loupe(&mut self, id: i64, env: &mut Env) {
+        let (Some(root), Some(path)) = (self.root.clone(), self.photo(id).map(|p| p.path.clone()))
+        else {
+            return;
+        };
+        self.compare_generation += 1;
+        let generation = self.compare_generation;
+        let quality = crate::develop::open::quality(env.prefs.develop_quality);
+        let (gpu, cache) = (self.gpu.clone(), self.frames.clone());
+        env.jobs.spawn(Lane::Open, "loupe", move || {
+            let result = render_at(
+                &gpu,
+                &root,
+                id,
+                &path,
+                cache.as_deref(),
+                quality,
+                LOUPE_EDGE,
+            )
+            .map(|p| Box::new(Pixels(p)));
+            Msg::CompareRendered {
+                generation,
+                id,
+                result,
+            }
+        });
+        let (zoom, centre) = self
+            .compare
+            .as_ref()
+            .filter(|c| c.loupe)
+            .map_or((1.0, Vec2::splat(0.5)), |c| (c.zoom, c.centre));
+        self.selection.click(id);
+        let mut loupe = Compare::new(vec![id], generation);
+        loupe.loupe = true;
+        loupe.zoom = zoom;
+        loupe.centre = centre;
+        self.compare = Some(loupe);
+    }
+
+    /// `←`/`→` in the loupe: the grid's previous or next photo.
+    pub(super) fn loupe_step(&mut self, forward: bool, env: &mut Env) {
+        let Some(&id) = self.compare.as_ref().and_then(|c| c.ids.first()) else {
+            return;
+        };
+        let n = self.order.len();
+        let Some(at) = self.order.iter().position(|&o| o == id) else {
+            return;
+        };
+        let next = if forward { at + 1 } else { at + n - 1 } % n;
+        let next = self.order[next];
+        self.open_loupe(next, env);
+    }
+
     pub(super) fn close_compare(&mut self) {
         self.compare = None;
         self.reveal_active = true;
@@ -222,11 +303,13 @@ impl Library {
                 ));
             }
         }
+        let loupe = compare.loupe;
         ui.horizontal(|ui| {
             if ui.button(format!("⏴ {BACK}")).clicked() {
                 back = true;
             }
-            ui.label(RichText::new(HINT).color(theme::MUTED).small());
+            let hint = if loupe { LOUPE_HINT } else { HINT };
+            ui.label(RichText::new(hint).color(theme::MUTED).small());
         });
         ui.add_space(4.0);
         let n = compare.ids.len();
@@ -241,6 +324,8 @@ impl Library {
         let mut zoom_by = 1.0f32;
         let mut pan = Vec2::ZERO;
         let mut toggle = false;
+        // The loupe's click: zoom to 1:1 about this point of the photo (0..1).
+        let mut zoom_at: Option<Vec2> = None;
         for (i, &id) in compare.ids.iter().enumerate() {
             let (c, r) = (i % cols, i / cols);
             let min = Pos2::new(
@@ -261,6 +346,16 @@ impl Library {
                     let size = texture.size_vec2();
                     let (screen, uv, _) = place(picture, size, compare.zoom, compare.centre);
                     painter.image(texture.id(), screen, uv, Color32::WHITE);
+                    if loupe
+                        && response.clicked()
+                        && let Some(p) = response.interact_pointer_pos()
+                    {
+                        let t = (p - screen.min) / screen.size();
+                        zoom_at = Some(Vec2::new(
+                            uv.min.x + t.x * uv.width(),
+                            uv.min.y + t.y * uv.height(),
+                        ));
+                    }
                     if response.dragged() {
                         let fit = (picture.width() / size.x).min(picture.height() / size.y);
                         let scale = fit * compare.zoom;
@@ -325,7 +420,14 @@ impl Library {
             });
         }
         ui.allocate_rect(area, Sense::hover());
-        if toggle {
+        if let Some(at) = zoom_at {
+            if compare.zoom > 1.01 {
+                compare.zoom = 1.0;
+            } else {
+                compare.zoom = one_to_one(compare, area, cols, rows);
+                compare.centre = at;
+            }
+        } else if toggle && !loupe {
             compare.zoom = if compare.zoom > 1.01 {
                 1.0
             } else {
@@ -425,6 +527,34 @@ mod tests {
         .unwrap();
         assert_eq!(shown.dimensions(), (64, 48));
         assert!(shown.get_pixel(10, 10).0[0] > plain.get_pixel(10, 10).0[0]);
+    }
+
+    #[test]
+    fn the_loupe_renders_beyond_the_compare_size() {
+        let Some(gpu) = lf_pipeline::test_support::try_shared_gpu() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.png");
+        image::RgbaImage::from_pixel(3600, 200, image::Rgba([90, 90, 90, 255]))
+            .save(&path)
+            .unwrap();
+        let catalog = lf_catalog::Catalog::open(dir.path()).unwrap();
+        let folder = catalog.add_folder(&dir.path().to_string_lossy()).unwrap();
+        lf_catalog::import::run(
+            &catalog,
+            folder,
+            &lf_catalog::import::scan(dir.path()).candidates,
+            200,
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        let id = catalog.photo_ids().unwrap()[0];
+        let quality = lf_raw::demosaic::Quality::Fast;
+        let small = render(&gpu, dir.path(), id, &path, None, quality).unwrap();
+        assert_eq!(small.width(), EDGE.min(gpu.max_edge()));
+        let full = render_at(&gpu, dir.path(), id, &path, None, quality, LOUPE_EDGE).unwrap();
+        assert_eq!(full.width(), 3600u32.min(gpu.max_edge()));
     }
 
     #[test]

@@ -49,7 +49,7 @@ close or competitors ship new features.
 - ~~Presets with an Amount slider~~ (done: looks and studio presets, 0–200 %); adaptive presets that carry AI masks.
 - ~~Auto-sync (edit one photo, the selection follows)~~ (done: Home → Settings → Auto-sync).
 - ~~Batch rename of existing photos (PhotoLab 9)~~ (done: Home → Selection → Rename…).
-- Second-monitor view, reference view, ~~focus peaking~~ (done: View → Peaking, `Shift+J`), 100% loupe.
+- Second-monitor view, reference view, ~~focus peaking~~ (done: View → Peaking, `Shift+J`), ~~100% loupe~~ (done: Library → Loupe, `E`).
 - ~~Visualize spots~~ (done: View → Spots view).
 - ~~Contact sheets~~ (done: Print's 9, 20 and 48 a page, with a sheet title, page numbers and Details captions) and ~~slideshows~~ (done: View → Slideshow).
 - ~~Film negative conversion (Capture One 16.7, Negative Lab Pro)~~ (done: Develop → Film negative).
