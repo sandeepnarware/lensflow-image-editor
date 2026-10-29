@@ -19,6 +19,7 @@ pub const FILL_EDGES: &str = "Fill edges (AI)";
 pub const FILL_EDGES_HINT: &str = "Keep the whole panorama and fill its empty corners from the picture, instead of cropping them away";
 pub const ABOUT_HDR: &str = "The photos are lined up and blended, each part taken from the frames where it is best exposed. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
 pub const ABOUT_PANORAMA: &str = "The photos are stitched in their order in the grid, left to right or right to left. For several rows, select them row by row, top row first. Neighbours should overlap by a third or so. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
+pub const ABOUT_HIGH_RES: &str = "The photos (a handheld burst of one scene, shot quickly) are lined up to a fraction of a pixel and merged into one photo twice as large each way, with finer detail than any one of them. Something that moved shows as in the middle photo. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
 pub const ABOUT_FOCUS: &str = "The photos (one subject, focused at different depths) are lined up and each part is taken from the photo where it is sharp. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
 
 /// "Merge 3 photos to HDR", "Merge 5 photos to a panorama".
@@ -27,6 +28,7 @@ pub fn title(kind: MergeKind, n: usize) -> String {
         MergeKind::Hdr => format!("Merge {} photos to HDR", count(n)),
         MergeKind::Panorama => format!("Merge {} photos to a panorama", count(n)),
         MergeKind::Focus => format!("Stack {} photos for focus", count(n)),
+        MergeKind::HighRes => format!("Merge {} photos to high resolution", count(n)),
     }
 }
 
@@ -103,6 +105,7 @@ impl MergeDialog {
                         MergeKind::Hdr => ABOUT_HDR,
                         MergeKind::Panorama => ABOUT_PANORAMA,
                         MergeKind::Focus => ABOUT_FOCUS,
+                        MergeKind::HighRes => ABOUT_HIGH_RES,
                     };
                     ui.label(RichText::new(about).color(theme::MUTED));
                     if self.kind == MergeKind::Panorama {

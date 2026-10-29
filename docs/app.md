@@ -1007,6 +1007,21 @@ each frame's weight its local sharpness (|Laplacian| of the grey image, box-aver
 1/150 of the frame, to the fourth power, so the sharpest frame clearly wins). Lining up is
 translation only: a lens whose framing breathes with focus may leave soft edges.
 
+### High resolution
+
+File → Merge → High resolution (`Action::MergeHighRes`, `MergeKind::HighRes`: 2 to 16 frames,
+worked at 3000 px, `-HiRes.tif` at twice the size each way) merges a handheld burst with
+`lf_merge::superres::merge`. Each frame is lined up with the middle one: `lf_merge::align` for
+whole pixels, then a parabola through the mean squared difference at the best shift and one
+pixel either way (on grey pictures softened by two 3 × 3 boxes, so aliasing does not pull it),
+in x and in y. Every output pixel then gathers the 2 × 2 nearest pixels of every frame,
+weighted by a Gaussian (sigma 0.6 output pixels) of where each lands and by how well it agrees
+with the middle frame enlarged there (a Gaussian of 0.08 on the largest channel difference, so
+what moved shows as in the middle frame); the middle frame enlarged carries a weight of 0.05,
+filling in where no sample lands. A light unsharp mask (3 × 3, amount 0.5) undoes the
+gathering's softness. On the test scene the result is about 28 % closer to the true detail
+than one frame enlarged.
+
 ### Merge to panorama
 
 `Ctrl+M` (File → Merge; `Action::MergePanorama`) stitches two to twelve selected photos,

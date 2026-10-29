@@ -11,6 +11,7 @@
 //! (0..1, as the develop pass outputs them).
 
 pub mod panorama;
+pub mod superres;
 
 use rayon::prelude::*;
 

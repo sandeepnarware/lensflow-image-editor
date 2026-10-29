@@ -53,7 +53,7 @@ close or competitors ship new features.
 - ~~Visualize spots~~ (done: View → Spots view).
 - ~~Contact sheets~~ (done: Print's 9, 20 and 48 a page, with a sheet title, page numbers and Details captions) and ~~slideshows~~ (done: View → Slideshow).
 - ~~Film negative conversion (Capture One 16.7, Negative Lab Pro)~~ (done: Develop → Film negative).
-- Pixel-shift and high-resolution merges.
+- Pixel-shift and ~~high-resolution merges~~ (done: File → Merge → High resolution, from a handheld burst; camera pixel-shift raw files are not read).
 - ~~Panorama fill edges (Lightroom)~~ (done: Merge to panorama → Fill edges (AI)).
 - ~~DNG export~~ (done: Export → DNG, linear) and ~~JPEG XL export~~ (done: Export → JPEG XL, lossless).
 

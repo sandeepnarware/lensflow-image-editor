@@ -115,6 +115,8 @@ pub enum Action {
     MergePanorama,
     /// Stack the selected photos (focused at different depths) into one sharp throughout.
     MergeFocus,
+    /// Merge a handheld burst into one photo twice as large each way.
+    MergeHighRes,
     AddVersion,
     ResetAll,
     /// Exposure and the tone sliders from the photo.
@@ -210,6 +212,7 @@ impl Action {
             Action::MergeHdr => "Merge to HDR…",
             Action::MergePanorama => "Merge to panorama…",
             Action::MergeFocus => "Focus stack…",
+            Action::MergeHighRes => "High resolution…",
             Action::AddVersion => "Add version…",
             Action::ResetAll => "Reset all edits",
             Action::AutoTone => "Auto tone",

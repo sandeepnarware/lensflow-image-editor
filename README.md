@@ -123,6 +123,9 @@ Merge to panorama (`Ctrl+M`): up to 24 overlapping photos stitched into one wide
 in one row or up to four (choose Rows, and select them row by row, top row first).
 "Fill edges (AI)" keeps the whole panorama and fills its empty corners from the picture
 instead of cropping them away.
+High resolution (File → Merge): a handheld burst of up to sixteen photos lined up to a
+fraction of a pixel and merged into one photo twice as large each way, with finer detail
+than any one frame.
 Focus stack (File → Merge): up to thirty photos of one subject focused at different depths,
 lined up and blended so each part comes from the photo where it is sharp.
 

@@ -1567,10 +1567,14 @@ impl Library {
             Action::RenamePhotos => !develop && selected && self.rename.is_none() && self.can_add(),
             Action::EditIn => (develop || selected) && self.can_add(),
             Action::Print => develop || selected,
-            Action::MergeHdr | Action::MergePanorama | Action::MergeFocus => {
+            Action::MergeHdr
+            | Action::MergePanorama
+            | Action::MergeFocus
+            | Action::MergeHighRes => {
                 let kind = match action {
                     Action::MergeHdr => crate::merge_job::MergeKind::Hdr,
                     Action::MergePanorama => crate::merge_job::MergeKind::Panorama,
+                    Action::MergeHighRes => crate::merge_job::MergeKind::HighRes,
                     _ => crate::merge_job::MergeKind::Focus,
                 };
                 !develop
@@ -1696,6 +1700,7 @@ impl Library {
             Action::MergeHdr => self.open_merge(crate::merge_job::MergeKind::Hdr),
             Action::MergePanorama => self.open_merge(crate::merge_job::MergeKind::Panorama),
             Action::MergeFocus => self.open_merge(crate::merge_job::MergeKind::Focus),
+            Action::MergeHighRes => self.open_merge(crate::merge_job::MergeKind::HighRes),
             Action::Library => {
                 self.mode = Mode::Library;
                 if self.filter.narrows() {

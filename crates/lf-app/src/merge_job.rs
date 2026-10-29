@@ -27,6 +27,8 @@ pub enum MergeKind {
     Panorama,
     /// Focus stacking: one subject focused at different depths.
     Focus,
+    /// A handheld burst merged at twice the size each way ([`lf_merge::superres`]).
+    HighRes,
 }
 
 impl MergeKind {
@@ -36,6 +38,7 @@ impl MergeKind {
             MergeKind::Hdr => 7,
             MergeKind::Panorama => 24,
             MergeKind::Focus => 30,
+            MergeKind::HighRes => 16,
         }
     }
 
@@ -45,6 +48,8 @@ impl MergeKind {
             MergeKind::Hdr => 5000,
             MergeKind::Panorama => 3000,
             MergeKind::Focus => 4000,
+            // Doubled: 6000 px out.
+            MergeKind::HighRes => 3000,
         }
     }
 
@@ -54,6 +59,7 @@ impl MergeKind {
             MergeKind::Hdr => "HDR",
             MergeKind::Panorama => "Pano",
             MergeKind::Focus => "Focus",
+            MergeKind::HighRes => "HiRes",
         }
     }
 }
@@ -199,6 +205,11 @@ pub fn run(
     let merged = match kind {
         MergeKind::Hdr => fuse_bracket(frames, options.deghost)?,
         MergeKind::Focus => stack(frames)?,
+        MergeKind::HighRes => {
+            let rgb: Vec<Rgb> = frames.iter().map(Held::rgb).collect();
+            drop(frames);
+            lf_merge::superres::merge(&rgb, |_, _| {}).map_err(|e| e.to_string())?
+        }
         MergeKind::Panorama => {
             let rgb: Vec<Rgb> = frames.iter().map(Held::rgb).collect();
             drop(frames);
@@ -383,6 +394,46 @@ mod tests {
         let px = |img: &image::DynamicImage, x, y| img.to_rgb16().get_pixel(x, y).0[0];
         let middle = image::open(dir.path().join("b1.png")).unwrap();
         assert!(px(&merged, 10, 30) > px(&middle, 10, 30));
+    }
+
+    #[test]
+    fn a_burst_is_merged_at_twice_the_size() {
+        let Some(gpu) = lf_pipeline::test_support::try_shared_gpu() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        // Three views of one textured scene, a pixel apart.
+        for i in 0..3u32 {
+            let img = image::RgbaImage::from_fn(80, 60, |x, y| {
+                let v = (((x + i) * 37 + y * 11) % 200 + 30) as u8;
+                image::Rgba([v, v / 2, 255 - v, 255])
+            });
+            img.save(dir.path().join(format!("s{i}.png"))).unwrap();
+        }
+        let catalog = Catalog::open(dir.path()).unwrap();
+        let folder = catalog.add_folder(&dir.path().to_string_lossy()).unwrap();
+        lf_catalog::import::run(
+            &catalog,
+            folder,
+            &lf_catalog::import::scan(dir.path()).candidates,
+            200,
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        let ids = catalog.photo_ids().unwrap();
+        let out = run(
+            gpu,
+            dir.path(),
+            &ids,
+            MergeKind::HighRes,
+            MergeOptions::default(),
+            |_, _| {},
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(out, dir.path().join("s0-HiRes.tif"));
+        let merged = image::open(&out).unwrap();
+        assert_eq!((merged.width(), merged.height()), (160, 120));
     }
 
     #[test]
