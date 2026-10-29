@@ -381,3 +381,21 @@ fn lens_blur_on_24_megapixels_takes_seconds_not_minutes() {
     eprintln!("lens blur, 24 MP, full amount: {took:?}");
     assert_eq!((out.w, out.h), (w, h));
 }
+
+#[test]
+fn the_landscape_fixtures_foreground_mask_is_at_the_bottom() {
+    let Some(engine) = engine(&lf_ai::depth::DEPTH_MODELS) else {
+        return;
+    };
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/sources/landscape.png"
+    );
+    let img = Rgb::from_rgba8(&image::open(path).expect("fixture").to_rgba8());
+    let (w, h) = (img.w / 2, img.h / 2);
+    let fg = lf_ai::segment::mask(&engine, Target::Foreground, &img, w, h).expect("mask");
+    let bg = lf_ai::segment::mask(&engine, Target::Background, &img, w, h).expect("mask");
+    let at = |m: &lf_ai::Gray, y: usize| m.data[y * w + w / 2];
+    assert!(at(&fg, h - 2) > 0.9 && at(&fg, 2) < 0.1, "foreground below");
+    assert!(at(&bg, 2) > 0.9 && at(&bg, h - 2) < 0.1, "background above");
+}

@@ -800,6 +800,11 @@ base curve stays) → linear sRGB. A profile with no forward matrix uses the fil
 matrix. The frame cache key adds the profile's SHA-256 (or "missing"), so a replaced file
 develops again; a profile that is not loaded is left out and the RAW panel says so.
 
+Depth masks (Masks → Foreground, Background) are `Target`s sent to `lf_ai::depth::mask`: the
+depth map at the mask's size, split where Otsu's threshold best separates near from far (the
+middle of the best-scoring run, so an empty gap splits in its centre), with a soft edge 0.08
+wide.
+
 Face-part masks (Masks → Face: Eyes, Irises, Lips, Teeth) are `Target`s whose
 `face_part()` sends `segment::mask` to `lf_ai::features`: YuNet's faces are cut out as
 MediaPipe does (a square 1.5 × the box, turned so the eyes are level, 256 px), the face

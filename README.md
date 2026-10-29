@@ -90,7 +90,8 @@ brush mask is painted (size, feather, flow; Alt or "Erase" rubs out). A Range na
 mask to a brightness band (only the highlights of the sky) or a colour (only the blues;
 Alt-click the photo to pick it). Select subject and Select sky (AI, on this computer)
 add a mask of the main subject or the sky, found in the photo; Select object then a click
-on the photo masks whatever was clicked (MobileSAM); the Face buttons mask every face's
+on the photo masks whatever was clicked (MobileSAM); Foreground and Background mask what is
+near or far (from the photo's depth); the Face buttons mask every face's
 eyes, irises, lips or teeth (MediaPipe's face landmarks); the People buttons add a
 mask of everyone in it, or of their face skin, body skin, hair or clothes (best on people
 who fill a good part of the frame). They are kept for

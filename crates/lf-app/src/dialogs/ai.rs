@@ -28,6 +28,7 @@ pub const ABOUT_SUBJECT: &str =
     "Finds the main subject and adds it as a mask, ready for its own adjustments.";
 pub const ABOUT_PEOPLE: &str = "Finds the people in the photo (or their hair, skin or clothes) and adds them as a mask, ready for their own adjustments. Works best on people who fill a good part of the frame.";
 pub const ABOUT_FACE: &str = "Finds every face's eyes, irises, lips or teeth and adds them as a mask, ready for their own adjustments (brighter eyes, whiter teeth). Works best on faces that fill a good part of the frame.";
+pub const ABOUT_DEPTH: &str = "Finds how far each part of the photo is and adds what is near (or far) as a mask, ready for its own adjustments.";
 pub const ABOUT_OBJECT: &str =
     "Finds the object you clicked and adds it as a mask, ready for its own adjustments.";
 pub const ABOUT_SKY: &str = "Finds the sky and adds it as a mask, ready for its own adjustments.";
@@ -177,6 +178,9 @@ impl AiDialog {
                 target: lf_ai::segment::Target::Sky,
             } => ABOUT_SKY,
             AiTool::Mask { target } if target.face_part().is_some() => ABOUT_FACE,
+            AiTool::Mask {
+                target: lf_ai::segment::Target::Foreground | lf_ai::segment::Target::Background,
+            } => ABOUT_DEPTH,
             AiTool::Mask { .. } => ABOUT_PEOPLE,
             AiTool::ObjectMask { .. } => ABOUT_OBJECT,
             AiTool::Cull => ABOUT_CULL,

@@ -85,6 +85,8 @@ impl AiTool {
                 Target::FaceSkin => "Select face skin",
                 Target::BodySkin => "Select body skin",
                 Target::Clothes => "Select clothes",
+                Target::Foreground => "Select foreground",
+                Target::Background => "Select background",
                 Target::Eyes => "Select eyes",
                 Target::Irises => "Select irises",
                 Target::Lips => "Select lips",

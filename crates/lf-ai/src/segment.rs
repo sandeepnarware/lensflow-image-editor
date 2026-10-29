@@ -32,6 +32,9 @@ pub enum Target {
     FaceSkin,
     BodySkin,
     Clothes,
+    /// What is near, and what is far ([`crate::depth`]).
+    Foreground,
+    Background,
     /// The eyes' openings ([`crate::features`]).
     Eyes,
     Irises,
@@ -42,9 +45,11 @@ pub enum Target {
 
 impl Target {
     /// Every target, in the order the mask tool offers them.
-    pub const ALL: [Target; 11] = [
+    pub const ALL: [Target; 13] = [
         Target::Subject,
         Target::Sky,
+        Target::Foreground,
+        Target::Background,
         Target::People,
         Target::FaceSkin,
         Target::BodySkin,
@@ -75,6 +80,7 @@ impl Target {
             Target::Eyes | Target::Irises | Target::Lips | Target::Teeth => {
                 &crate::features::FEATURE_MODELS
             }
+            Target::Foreground | Target::Background => &crate::depth::DEPTH_MODELS,
             _ => &PEOPLE_MODELS,
         }
     }
@@ -89,6 +95,8 @@ impl Target {
             Target::FaceSkin => "face-skin",
             Target::BodySkin => "body-skin",
             Target::Clothes => "clothes",
+            Target::Foreground => "foreground",
+            Target::Background => "background",
             Target::Eyes => "eyes",
             Target::Irises => "irises",
             Target::Lips => "lips",
@@ -106,6 +114,8 @@ impl Target {
             Target::FaceSkin => "Face skin",
             Target::BodySkin => "Body skin",
             Target::Clothes => "Clothes",
+            Target::Foreground => "Foreground",
+            Target::Background => "Background",
             Target::Eyes => "Eyes",
             Target::Irises => "Irises",
             Target::Lips => "Lips",
@@ -123,6 +133,8 @@ impl Target {
             Target::FaceSkin => "face",
             Target::BodySkin => "skin",
             Target::Clothes => "clothing",
+            Target::Foreground => "foreground",
+            Target::Background => "background",
             Target::Eyes => "eye",
             Target::Irises => "iris",
             Target::Lips => "mouth",
@@ -203,6 +215,9 @@ pub fn mask(
 ) -> Result<Gray, AiError> {
     if let Some(part) = target.face_part() {
         return crate::features::mask(engine, part, img, w, h);
+    }
+    if matches!(target, Target::Foreground | Target::Background) {
+        return crate::depth::mask(engine, img, target == Target::Foreground, w, h);
     }
     let (model, name) = match target {
         Target::Subject => (assets::SUBJECT, "input_image"),
