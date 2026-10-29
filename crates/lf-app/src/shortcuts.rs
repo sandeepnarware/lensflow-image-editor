@@ -16,6 +16,8 @@ pub enum Action {
     AddFolder,
     /// Copy photos from a memory card (or any folder) into the studio's, then catalogue them.
     ImportFromCard,
+    /// The selection exported at once with the settings used last.
+    ExportPrevious,
     /// A watched folder's new photos moved into a catalogued folder and imported, as they come.
     AutoImport,
     Export,
@@ -168,6 +170,7 @@ impl Action {
         match self {
             Action::AddFolder => "Add folder…",
             Action::ImportFromCard => "Import from card…",
+            Action::ExportPrevious => "Export with previous",
             Action::AutoImport => "Auto import…",
             Action::Export => "Export…",
             Action::ExportToGallery => "Export to gallery…",
@@ -303,11 +306,21 @@ const fn cmd_shift(k: Key) -> KeyboardShortcut {
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), k)
 }
 
+const fn cmd_alt_shift(k: Key) -> KeyboardShortcut {
+    KeyboardShortcut::new(
+        Modifiers::COMMAND
+            .plus(Modifiers::ALT)
+            .plus(Modifiers::SHIFT),
+        k,
+    )
+}
+
 /// A keyboard map: each entry binds one key to one action (an action may have two keys).
 pub struct Map(pub &'static [(Action, KeyboardShortcut)]);
 
 /// The window's keyboard map.
 pub const MAP: Map = Map(&[
+    (Action::ExportPrevious, cmd_alt_shift(Key::E)),
     (Action::SideBySide, key(Key::Y)),
     (Action::CropOverlay, key(Key::O)),
     (Action::InfoOverlay, key(Key::I)),
@@ -482,6 +495,7 @@ mod tests {
     /// The plan's keyboard map (Global Constraints), entry by entry.
     fn plan() -> Vec<(Action, KeyboardShortcut)> {
         vec![
+            (Action::ExportPrevious, cmd_alt_shift(Key::E)),
             (Action::SideBySide, key(Key::Y)),
             (Action::CropOverlay, key(Key::O)),
             (Action::InfoOverlay, key(Key::I)),

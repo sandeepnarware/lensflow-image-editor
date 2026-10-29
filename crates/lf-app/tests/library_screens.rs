@@ -3019,3 +3019,30 @@ fn auto_import_moves_a_dropped_photo_in_and_catalogues_it() {
         "under a free name beside the other"
     );
 }
+
+/// Export with previous (`Ctrl+Alt+Shift+E`): the selection exported at once with the
+/// settings used last, no dialog shown.
+#[test]
+fn export_with_previous_exports_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 1);
+    import_folder(&mut h, &shoot, 1);
+    let out = dir.path().join("out");
+    std::fs::create_dir(&out).unwrap();
+    let form = lf_app::dialogs::export::ExportForm {
+        folder: Some(out.clone()),
+        ..Default::default()
+    };
+    h.state_mut().prefs.last_export = Some(serde_json::to_value(form.spec().unwrap()).unwrap());
+    let id = h.state().lib.photos()[0].id;
+    h.state_mut().lib.selection.click(id);
+    assert!(run_action(&mut h, Action::ExportPrevious));
+    assert!(!h.state().lib.export().unwrap().visible, "no dialog");
+    step_until(&mut h, "the export to finish", |s| s.lib.export().is_none());
+    let written: Vec<_> = std::fs::read_dir(&out).unwrap().collect();
+    assert_eq!(written.len(), 1, "one photo exported");
+}

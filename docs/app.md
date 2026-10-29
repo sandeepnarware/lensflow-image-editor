@@ -870,6 +870,11 @@ across drives: copy, check the size, then remove), and the destination is rescan
 (`Msg::AutoImported`; a toast says how many). The watched folder may not be, or be inside, a
 catalogued folder. A failure to read it is said once until it changes.
 
+Export with previous (`Action::ExportPrevious`, `Library::export_previous`) reads
+`prefs.last_export` into a form; when it makes a spec (a folder is set) the export starts at once
+with the dialog hidden (its end is a toast, as for a dialog closed while running), else the dialog
+opens to be filled in. `start_export` is the dialog's Start, shared.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

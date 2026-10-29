@@ -40,6 +40,32 @@ impl Library {
         self.export = Some(dialog);
     }
 
+    /// `Ctrl+Alt+Shift+E`, Export with previous: the selection exported at once with the
+    /// settings used last (the dialog stays hidden; a toast says how it went). With no usable
+    /// previous settings (no folder yet), the dialog opens instead.
+    pub(super) fn export_previous(&mut self, env: &mut Env) {
+        if self.export.is_some() {
+            self.open_export(env);
+            return;
+        }
+        let ids = self.selected_in_order();
+        if ids.is_empty() {
+            return;
+        }
+        let form = ExportForm::from_prefs(env.prefs.last_export.as_ref());
+        let spec = form.spec();
+        let mut dialog = ExportDialog::new(ids, form);
+        dialog.presets = env.prefs.export_presets.clone();
+        match spec {
+            Ok(spec) => {
+                dialog.visible = false;
+                self.export = Some(dialog);
+                self.start_export(spec, env);
+            }
+            Err(_) => self.export = Some(dialog),
+        }
+    }
+
     pub(super) fn export_dialog(&mut self, ctx: &egui::Context, env: &mut Env) {
         let Some(dialog) = &mut self.export else {
             return;
@@ -125,41 +151,44 @@ impl Library {
                         .push(Level::Error, format!("Could not open the folder. {e}"));
                 }
             }
-            ExportAction::Start(spec) => {
-                let Some(root) = self.root.clone() else {
-                    return;
-                };
-                match serde_json::to_value(&spec) {
-                    Ok(value) => {
-                        env.prefs.last_export = Some(value);
-                        env.save_prefs();
-                    }
-                    Err(e) => log::error!("could not remember the export settings: {e}"),
-                }
-                // The open photo's gesture is recorded first, so the export carries it.
-                self.develop.finish_edit(env.toasts);
-                let Some(dialog) = &mut self.export else {
-                    return;
-                };
-                dialog.started();
-                let ids = dialog.ids.clone();
-                let stop = dialog.stop.clone();
-                let gpu = self.gpu.clone();
-                let reporter = env.jobs.reporter();
-                log::info!("exporting {} photos with {spec:?}", ids.len());
-                env.jobs.spawn(Lane::Long, "export", move || {
-                    let result = export_job::run(
-                        gpu,
-                        &root,
-                        &ids,
-                        &spec,
-                        |done, total| reporter.send(Msg::ExportProgress { done, total }),
-                        &stop,
-                    );
-                    Msg::ExportDone(result)
-                });
-            }
+            ExportAction::Start(spec) => self.start_export(spec, env),
         }
+    }
+
+    /// Starts exporting the dialog's photos with `spec`, remembered for next time.
+    fn start_export(&mut self, spec: lf_catalog::export::ExportSpec, env: &mut Env) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        match serde_json::to_value(&spec) {
+            Ok(value) => {
+                env.prefs.last_export = Some(value);
+                env.save_prefs();
+            }
+            Err(e) => log::error!("could not remember the export settings: {e}"),
+        }
+        // The open photo's gesture is recorded first, so the export carries it.
+        self.develop.finish_edit(env.toasts);
+        let Some(dialog) = &mut self.export else {
+            return;
+        };
+        dialog.started();
+        let ids = dialog.ids.clone();
+        let stop = dialog.stop.clone();
+        let gpu = self.gpu.clone();
+        let reporter = env.jobs.reporter();
+        log::info!("exporting {} photos with {spec:?}", ids.len());
+        env.jobs.spawn(Lane::Long, "export", move || {
+            let result = export_job::run(
+                gpu,
+                &root,
+                &ids,
+                &spec,
+                |done, total| reporter.send(Msg::ExportProgress { done, total }),
+                &stop,
+            );
+            Msg::ExportDone(result)
+        });
     }
 
     pub(super) fn export_progress(&mut self, done: usize, total: usize) {

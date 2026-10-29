@@ -1570,6 +1570,7 @@ impl Library {
             Action::ImportFromCard => self.can_add() || self.ingest.is_some(),
             Action::AutoImport => self.root.is_some() && !self.folders.is_empty(),
             Action::Export => selected || self.export.is_some(),
+            Action::ExportPrevious => selected || self.export.is_some(),
             Action::ExportToGallery => {
                 (selected && self.gallery_allowed()) || self.gallery.is_some()
             }
@@ -1686,6 +1687,7 @@ impl Library {
             Action::ImportFromCard => self.open_ingest(env),
             Action::AutoImport => self.open_auto_import(env),
             Action::Export => self.open_export(env),
+            Action::ExportPrevious => self.export_previous(env),
             Action::ExportToGallery => self.open_gallery(env),
             Action::Undo => self.develop.undo(env.toasts),
             Action::Redo => self.develop.redo(env.toasts),
