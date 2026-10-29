@@ -26,6 +26,27 @@ pub const ADD_HINT: &str = "Add keywords, separated by commas";
 pub const IN_FOLDER: &str = "Keywords in this folder";
 pub const SUGGESTED: &str = "Suggested by AI";
 pub const SAVE_FAILED: &str = "Could not save the metadata.";
+pub const PRESET: &str = "Metadata preset";
+pub const APPLY_PRESET: &str = "Apply a preset…";
+pub const SAVE_PRESET: &str = "Save as preset";
+pub const PRESET_NAME: &str = "Preset name";
+pub const PRESET_HINT: &str = "The creator, copyright and keywords of the first selected photo";
+
+/// The changes a metadata preset makes: its creator and copyright (when it has them) set, its
+/// keywords added.
+pub fn preset_changes(p: &crate::prefs::MetaPreset) -> Vec<Change> {
+    let mut out = Vec::new();
+    if let Some(c) = p.creator.as_ref().filter(|c| !c.trim().is_empty()) {
+        out.push(Change::Set(Field::Creator, c.clone()));
+    }
+    if let Some(c) = p.copyright.as_ref().filter(|c| !c.trim().is_empty()) {
+        out.push(Change::Set(Field::Copyright, c.clone()));
+    }
+    if !p.keywords.is_empty() {
+        out.push(Change::AddKeywords(p.keywords.clone()));
+    }
+    out
+}
 
 /// What the panel keeps between frames: the text being typed, for the photos it was
 /// started on.
@@ -37,6 +58,8 @@ pub struct MetaPanel {
     /// Each field's text as typed, and the text it started from.
     drafts: Vec<(Field, String, String)>,
     adding: String,
+    /// A preset's name being typed (Save as preset).
+    preset_name: Option<String>,
 }
 
 impl Library {
@@ -48,6 +71,75 @@ impl Library {
     /// The Metadata panel is shown.
     pub fn metadata_shown(&self) -> bool {
         self.meta.shown && self.mode == Mode::Library
+    }
+
+    /// The presets row: apply one to the selection, or save the first photo's as one.
+    fn meta_presets_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        ids: &[i64],
+        first: lf_catalog::meta::Meta,
+        env: &mut Env,
+    ) {
+        let mut apply = None;
+        ui.horizontal(|ui| {
+            let combo = egui::ComboBox::from_id_salt("meta-preset")
+                .selected_text(APPLY_PRESET)
+                .show_ui(ui, |ui| {
+                    for (i, p) in env.prefs.meta_presets.iter().enumerate() {
+                        if ui.selectable_label(false, &p.name).clicked() {
+                            apply = Some(i);
+                        }
+                    }
+                });
+            combo
+                .response
+                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, PRESET));
+            if ui
+                .small_button(SAVE_PRESET)
+                .on_hover_text(PRESET_HINT)
+                .clicked()
+            {
+                self.meta.preset_name = Some(String::new());
+            }
+        });
+        if let Some(name) = &mut self.meta.preset_name {
+            let mut done = None;
+            ui.horizontal(|ui| {
+                let field = ui.add(egui::TextEdit::singleline(name).hint_text(PRESET_NAME));
+                field.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::TextInput, true, PRESET_NAME)
+                });
+                let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (ui.button("Save").clicked() || enter) && !name.trim().is_empty() {
+                    done = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    done = Some(false);
+                }
+            });
+            if let Some(save) = done {
+                if save {
+                    let preset = crate::prefs::MetaPreset {
+                        name: name.trim().to_owned(),
+                        creator: first.creator.clone(),
+                        copyright: first.copyright.clone(),
+                        keywords: first.keywords.clone(),
+                    };
+                    env.prefs.meta_presets.retain(|p| p.name != preset.name);
+                    env.prefs.meta_presets.push(preset);
+                    env.save_prefs();
+                }
+                self.meta.preset_name = None;
+            }
+        }
+        if let Some(p) = apply.and_then(|i| env.prefs.meta_presets.get(i).cloned()) {
+            for change in preset_changes(&p) {
+                self.change_meta(ids.to_vec(), change, env);
+            }
+            // The fields show the new values.
+            self.meta.ids.clear();
+        }
     }
 
     /// Changes the metadata of `ids` in memory and saves it.
@@ -112,6 +204,7 @@ impl Library {
                 .color(theme::MUTED),
             );
         }
+        self.meta_presets_ui(ui, &ids, metas.first().cloned().unwrap_or_default(), env);
         // The value the selection agrees on (None: they differ).
         let common = |field: Field| -> Option<String> {
             let first = metas.first().and_then(|m| field.of(m)).unwrap_or_default();

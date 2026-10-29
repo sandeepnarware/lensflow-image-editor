@@ -79,6 +79,7 @@ close or competitors ship new features.
 - Auto straighten in the crop tool (Lightroom's Auto): done.
 - Geotagging from a GPX tracklog (Lightroom's Map → Tracklog): done, View → GPX track.
 - Preset preview on hover (Lightroom's): done.
+- Metadata presets (Lightroom's): done, the Metadata panel.
 
 ### Tier 4: large or strategic
 

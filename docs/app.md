@@ -925,6 +925,11 @@ click would, `apply_look` / `Recipe::Look`), and the preview draws those instead
 redrawing when they change (`hover_drawn`). Nothing is committed; the histogram, tools and
 export keep reading the edit.
 
+Metadata presets (`prefs.meta_presets`, `MetaPreset`): the Metadata panel's "Apply a preset…"
+list and "Save as preset" (the first selected photo's creator, copyright and keywords, under a
+name; the same name replaces). Applying is `meta_ui::preset_changes` (creator and copyright set
+when the preset has them, keywords added) through `change_meta`, as typing them would.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

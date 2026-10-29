@@ -3201,3 +3201,37 @@ fn hovering_a_look_previews_it_without_applying() {
     h.step();
     assert!(!h.state().lib.develop().previewing());
 }
+
+/// The Metadata panel's presets: applying one sets its creator and adds its keywords to every
+/// selected photo.
+#[test]
+fn a_metadata_preset_is_applied_to_the_selection() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    let shoot = dir.path().join("shoot");
+    pngs(&shoot, 2);
+    import_folder(&mut h, &shoot, 2);
+    h.state_mut().prefs.meta_presets = vec![lf_app::prefs::MetaPreset {
+        name: "Studio".into(),
+        creator: Some("Asha Studio".into()),
+        copyright: None,
+        keywords: vec!["wedding".into()],
+    }];
+    let ids: Vec<i64> = h.state().lib.photos().iter().map(|p| p.id).collect();
+    h.state_mut().lib.selection.select(&ids);
+    assert!(run_action(&mut h, Action::Metadata));
+    h.step();
+    h.step();
+    h.get_by_label(lf_app::library::meta_ui::PRESET).click();
+    h.step();
+    h.step();
+    h.get_by_label("Studio").click();
+    h.step();
+    h.step();
+    for p in h.state().lib.photos() {
+        assert_eq!(p.meta.creator.as_deref(), Some("Asha Studio"));
+        assert_eq!(p.meta.keywords, vec!["wedding".to_owned()]);
+    }
+}

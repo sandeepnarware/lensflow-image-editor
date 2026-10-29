@@ -101,6 +101,18 @@ pub struct Prefs {
     pub auto_import: Option<AutoImportPrefs>,
     /// The grid's thumbnail size (a cell's edge, in points).
     pub grid_cell: f32,
+    /// The Metadata panel's presets: a creator, a copyright and keywords applied in one go.
+    pub meta_presets: Vec<MetaPreset>,
+}
+
+/// A metadata preset (an empty field is left alone when applied).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MetaPreset {
+    pub name: String,
+    pub creator: Option<String>,
+    pub copyright: Option<String>,
+    pub keywords: Vec<String>,
 }
 
 /// Auto import's folders.
@@ -125,6 +137,7 @@ impl Default for Prefs {
             auto_sync: false,
             auto_import: None,
             grid_cell: crate::library::grid::CELL,
+            meta_presets: Vec::new(),
             develop_quality: DevelopQuality::default(),
             proof_profile: None,
         }
@@ -199,6 +212,12 @@ mod tests {
             external_editor: Some(PathBuf::from("C:/Apps/Editor.exe")),
             auto_sync: true,
             develop_quality: DevelopQuality::Fast,
+            meta_presets: vec![MetaPreset {
+                name: "Studio".into(),
+                creator: Some("Asha".into()),
+                copyright: None,
+                keywords: vec!["wedding".into()],
+            }],
             grid_cell: 260.0,
             auto_import: Some(AutoImportPrefs {
                 watch: PathBuf::from("T:/tether"),

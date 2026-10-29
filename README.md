@@ -237,6 +237,9 @@ photos that already have a place keep it.
 Look and preset preview: in Develop, the look or studio preset under the pointer shows on the
 photo; nothing changes until it is clicked.
 
+Metadata presets (the Metadata panel): save the first selected photo's creator, copyright and
+keywords as a named preset, and apply one to the whole selection in one click.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.
