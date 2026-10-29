@@ -212,6 +212,9 @@ once with the settings used last, no dialog; a toast says how it went.
 Rotate left and right (`Ctrl+[`, `Ctrl+]`, Home → Selection): every selected photo in the grid
 turns a quarter (or, in Develop, the open one), its crop turning with it.
 
+Thumbnail size (the slider over the grid): smaller thumbnails to see more at once, larger to
+judge them; remembered.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

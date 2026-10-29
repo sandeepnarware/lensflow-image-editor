@@ -215,6 +215,8 @@ pub struct Library {
     reveal_active: bool,
     /// The grid's columns last frame (for the arrow keys).
     columns: usize,
+    /// The grid's thumbnail size (`prefs.grid_cell`), a cell's edge in points.
+    pub cell: f32,
     last_scroll: f32,
     /// Copied edits (`Ctrl+Shift+C`).
     clipboard: Clipboard,
@@ -304,6 +306,7 @@ impl Library {
             loading: None,
             reveal_active: false,
             columns: 1,
+            cell: prefs.grid_cell.clamp(grid::MIN_CELL, grid::MAX_CELL),
             last_scroll: 0.0,
             clipboard: Clipboard::default(),
             copy: CopyDialog::default(),
@@ -2060,6 +2063,20 @@ impl Library {
         if let Some(filter) = cull_ui::filter_bar(ui, &self.filter) {
             self.set_filter(filter);
         }
+        // The thumbnail size, remembered once a drag ends.
+        ui.horizontal(|ui| {
+            let label = ui.label(RichText::new(grid::SIZE).color(theme::MUTED));
+            let size = ui
+                .add(
+                    egui::Slider::new(&mut self.cell, grid::MIN_CELL..=grid::MAX_CELL)
+                        .show_value(false),
+                )
+                .labelled_by(label.id);
+            if size.drag_stopped() || (size.changed() && !size.dragged()) {
+                env.prefs.grid_cell = self.cell;
+                env.save_prefs();
+            }
+        });
         if self.order.is_empty() {
             ui.vertical_centered(|ui| {
                 ui.add_space(ui.available_height() / 3.0);

@@ -99,6 +99,8 @@ pub struct Prefs {
     pub auto_sync: bool,
     /// Home → Auto import, while on: the watched folder and where its photos go.
     pub auto_import: Option<AutoImportPrefs>,
+    /// The grid's thumbnail size (a cell's edge, in points).
+    pub grid_cell: f32,
 }
 
 /// Auto import's folders.
@@ -122,6 +124,7 @@ impl Default for Prefs {
             external_editor: None,
             auto_sync: false,
             auto_import: None,
+            grid_cell: crate::library::grid::CELL,
             develop_quality: DevelopQuality::default(),
             proof_profile: None,
         }
@@ -196,6 +199,7 @@ mod tests {
             external_editor: Some(PathBuf::from("C:/Apps/Editor.exe")),
             auto_sync: true,
             develop_quality: DevelopQuality::Fast,
+            grid_cell: 260.0,
             auto_import: Some(AutoImportPrefs {
                 watch: PathBuf::from("T:/tether"),
                 folder: PathBuf::from("D:/Photos/shoot"),

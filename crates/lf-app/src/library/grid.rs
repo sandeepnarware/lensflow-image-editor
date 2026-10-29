@@ -10,6 +10,10 @@ use std::collections::HashSet;
 
 /// A grid cell's edge, in points.
 pub const CELL: f32 = 200.0;
+/// The thumbnail size slider's range (a cell's edge, in points).
+pub const MIN_CELL: f32 = 110.0;
+pub const MAX_CELL: f32 = 420.0;
+pub const SIZE: &str = "Thumbnail size";
 /// The space between cells, in points.
 pub const GAP: f32 = 8.0;
 /// The smallest box, in points, that counts as a marquee rather than a nudge of the mouse.
@@ -135,17 +139,18 @@ pub fn show(ui: &mut egui::Ui, lib: &mut Library) -> GridActions {
         .show_viewport(ui, |ui, viewport| {
             let origin = ui.max_rect().min;
             let width = ui.available_width();
+            let cell = lib.cell;
             let v = Layout::compute(
                 width,
                 viewport.min.y,
                 viewport.height(),
                 lib.order.len(),
-                CELL,
+                cell,
                 GAP,
             );
             lib.columns = v.columns;
             ui.set_min_size(egui::vec2(width, v.total_height));
-            let cell_rect = |i: usize| cell_box(i, v.columns, origin);
+            let cell_rect = |i: usize| cell_box(i, v.columns, origin, cell);
             if let Some(i) = reveal {
                 ui.scroll_to_rect(cell_rect(i), None);
             }
@@ -213,9 +218,9 @@ pub fn show(ui: &mut egui::Ui, lib: &mut Library) -> GridActions {
 }
 
 /// A cell's rectangle on screen, given the grid's top-left corner.
-pub fn cell_box(index: usize, columns: usize, origin: egui::Pos2) -> Rect {
-    let (x, y) = Layout::cell_origin(index, columns, CELL, GAP);
-    Rect::from_min_size(origin + egui::vec2(x, y), egui::Vec2::splat(CELL))
+pub fn cell_box(index: usize, columns: usize, origin: egui::Pos2, cell: f32) -> Rect {
+    let (x, y) = Layout::cell_origin(index, columns, cell, GAP);
+    Rect::from_min_size(origin + egui::vec2(x, y), egui::Vec2::splat(cell))
 }
 
 /// The photo ids whose cells `box` touches, in grid order. Only the cells drawn this frame
@@ -228,9 +233,10 @@ pub fn cells_in(
     last: usize,
     origin: egui::Pos2,
     count: usize,
+    cell: f32,
 ) -> Vec<usize> {
     (first..last.min(count))
-        .filter(|&i| cell_box(i, columns, origin).intersects(area))
+        .filter(|&i| cell_box(i, columns, origin, cell).intersects(area))
         .collect()
 }
 
@@ -278,6 +284,7 @@ fn follow_marquee(
             last,
             origin,
             lib.order.len(),
+            lib.cell,
         );
         let ids: Vec<i64> = indexes.into_iter().map(|i| lib.order[i]).collect();
         apply_marquee(&mut lib.selection, &marquee, &ids);
@@ -494,27 +501,39 @@ mod tests {
             egui::pos2(10.0, 10.0),
             egui::pos2(step + CELL - 10.0, CELL - 10.0),
         );
-        assert_eq!(cells_in(top, columns, 0, count, origin, count), [0, 1]);
+        assert_eq!(
+            cells_in(top, columns, 0, count, origin, count, CELL),
+            [0, 1]
+        );
         // A tall, narrow box over one column crosses rows: 1 and 5, not a range of 1..=5.
         let column = Rect::from_min_max(
             egui::pos2(step + 10.0, 10.0),
             egui::pos2(step + CELL - 10.0, 2.0 * step - 10.0),
         );
-        assert_eq!(cells_in(column, columns, 0, count, origin, count), [1, 5]);
+        assert_eq!(
+            cells_in(column, columns, 0, count, origin, count, CELL),
+            [1, 5]
+        );
         // The whole grid, but only the cells drawn this frame are found.
         let all = Rect::from_min_max(origin, egui::pos2(4.0 * step, 3.0 * step));
-        assert_eq!(cells_in(all, columns, 0, count, origin, count).len(), 12);
-        assert_eq!(cells_in(all, columns, 4, 8, origin, count), [4, 5, 6, 7]);
+        assert_eq!(
+            cells_in(all, columns, 0, count, origin, count, CELL).len(),
+            12
+        );
+        assert_eq!(
+            cells_in(all, columns, 4, 8, origin, count, CELL),
+            [4, 5, 6, 7]
+        );
         // A box in a gap touches nothing.
         let gap = Rect::from_min_max(
             egui::pos2(CELL + 1.0, CELL + 1.0),
             egui::pos2(CELL + GAP - 1.0, CELL + GAP - 1.0),
         );
-        assert!(cells_in(gap, columns, 0, count, origin, count).is_empty());
+        assert!(cells_in(gap, columns, 0, count, origin, count, CELL).is_empty());
         // Screen origin moves with the scroll area, not with the scroll position.
         let moved = egui::pos2(500.0, 40.0);
         let boxed = Rect::from_min_max(moved, moved + egui::vec2(CELL, CELL));
-        assert_eq!(cells_in(boxed, columns, 0, count, moved, count), [0]);
+        assert_eq!(cells_in(boxed, columns, 0, count, moved, count, CELL), [0]);
     }
 
     #[test]

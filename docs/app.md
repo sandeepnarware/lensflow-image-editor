@@ -880,6 +880,10 @@ Rotate left and right (`Action::{RotateLeft, RotateRight}`, `Library::turn_photo
 `Long` with `Recipe::Turn` (`crop::turn`: the crop and a locked shape turn with it), answered by
 `Msg::Turned`, which reloads their rows and thumbnails.
 
+The grid's cell size is `Library::cell` (`prefs.grid_cell`, 110..420 points, 200 by default),
+set by the slider under the filter bar and saved when a drag ends; `grid::show`, `cell_box` and
+`cells_in` (the marquee) all take it.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the
