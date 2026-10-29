@@ -3089,6 +3089,7 @@ dependencies = [
  "filetime",
  "half",
  "image",
+ "jxl-oxide",
  "kamadak-exif",
  "lcms2",
  "lf-catalog",
@@ -3105,6 +3106,8 @@ dependencies = [
  "uuid",
  "webp",
  "wgpu",
+ "zune-core",
+ "zune-jpegxl",
 ]
 
 [[package]]
@@ -7168,6 +7171,15 @@ name = "zune-jpeg"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
+dependencies = [
+ "zune-core",
+]
+
+[[package]]
+name = "zune-jpegxl"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cba11ecd07cc23351500e840ae03841b7e4997923ec8e4832ee3ae199ea0b6b4"
 dependencies = [
  "zune-core",
 ]

@@ -586,6 +586,7 @@ zerovec v0.11.9                          Unicode-3.0
 zerovec-derive v0.11.7                   Unicode-3.0
 zmij v1.0.23                             MIT
 zune-core v0.5.3                         MIT OR Apache-2.0 OR Zlib
+zune-jpegxl v0.5.2                       MIT OR Apache-2.0 OR Zlib
 zune-jpeg v0.5.15                        MIT OR Apache-2.0 OR Zlib
 zvariant v5.15.1                         MIT
 zvariant_derive v5.15.1                  MIT

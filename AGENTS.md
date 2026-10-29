@@ -231,6 +231,8 @@ cargo test --workspace                   # includes the 228-render parity suite
 
 - HEIC opens through the system decoder (Windows: the HEIF and HEVC extensions; macOS: sips; Linux: heif-dec); AVIF input unsupported. rawler 0.8 gaps: Nikon HE/HE* NEF, DNG 1.7 JPEG XL, some
   Sony ARW / Phase One IIQ.
+- JPEG XL exports (`Format::Jxl { sixteen }`, `export::jxl`) are lossless modular files from
+  zune-jpegxl (it has no lossy mode), sRGB by the header's default, with no EXIF or XMP.
 - DNG exports (`containers::dng16`) are linear DNG 1.4 (`LinearRaw`, the sRGB matrix as ColorMatrix1, D65, neutral 1,1,1), sRGB only.
 - TIFF exports carry baseline tags and XMP but no EXIF IFD; AVIF carries no EXIF or XMP. WebP is lossless or
   lossy. Exports are sRGB unless Display P3, Adobe RGB or an RGB ICC profile is chosen (AVIF: sRGB only).

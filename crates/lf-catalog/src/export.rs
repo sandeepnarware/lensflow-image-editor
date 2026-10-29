@@ -53,6 +53,8 @@ pub enum Format {
     Tiff16,
     /// A linear DNG (16-bit, linear sRGB light), for raw editors.
     Dng,
+    /// JPEG XL, lossless; 16 bits a channel when `sixteen`, else 8.
+    Jxl { sixteen: bool },
 }
 
 impl Format {
@@ -64,6 +66,7 @@ impl Format {
             Format::Avif { .. } => "avif",
             Format::Tiff16 => "tif",
             Format::Dng => "dng",
+            Format::Jxl { .. } => "jxl",
         }
     }
 }
@@ -463,7 +466,7 @@ fn export_one(
     };
     let mut renderer = lf_raw::render::renderer_for(gpu, &opened).map_err(gpu_fail)?;
     let pixels = match spec.format {
-        Format::Tiff16 | Format::Dng => {
+        Format::Tiff16 | Format::Dng | Format::Jxl { sixteen: true } => {
             let f = renderer.render_f16(&settings).map_err(gpu_fail)?;
             let data: Vec<u16> = f
                 .data
@@ -530,6 +533,12 @@ fn export_one(
     {
         return Err(fail(
             &"AVIF exports are sRGB only; choose sRGB or another format",
+            &row.path,
+        ));
+    }
+    if spec.space != crate::colour::OutputSpace::Srgb && matches!(spec.format, Format::Jxl { .. }) {
+        return Err(fail(
+            &"JPEG XL exports are sRGB only; choose sRGB or another format",
             &row.path,
         ));
     }
@@ -660,6 +669,18 @@ fn export_one(
             };
             bytes =
                 crate::containers::dng16(w, h, &linear, &tags).map_err(|e| encode_failed(&e))?;
+        }
+        (Format::Jxl { .. }, Pixels::Eight(img)) => {
+            let (w, h) = img.dimensions();
+            bytes = jxl(img.as_raw(), w, h, zune_core::bit_depth::BitDepth::Eight)
+                .map_err(|e| encode_failed(&e))?;
+        }
+        (Format::Jxl { .. }, Pixels::Sixteen(img)) => {
+            let (w, h) = img.dimensions();
+            // 16-bit samples go in as native-endian byte pairs.
+            let raw: Vec<u8> = img.as_raw().iter().flat_map(|v| v.to_ne_bytes()).collect();
+            bytes = jxl(&raw, w, h, zune_core::bit_depth::BitDepth::Sixteen)
+                .map_err(|e| encode_failed(&e))?;
         }
         _ => unreachable!("the render matches the format"),
     }
@@ -838,6 +859,30 @@ pub fn run(
     };
     finish(status, done, error)?;
     Ok(report)
+}
+
+/// Lossless JPEG XL of RGB `pixels` (`depth` 8 or 16 bits; 16 as native-endian pairs). The
+/// file says sRGB (its colour encoding's default); there is no room for EXIF or XMP.
+fn jxl(
+    pixels: &[u8],
+    w: u32,
+    h: u32,
+    depth: zune_core::bit_depth::BitDepth,
+) -> std::result::Result<Vec<u8>, String> {
+    if w < 2 || h < 2 {
+        return Err("JPEG XL needs a photo at least 2 pixels each way".to_owned());
+    }
+    let options = zune_core::options::EncoderOptions::new(
+        w as usize,
+        h as usize,
+        zune_core::colorspace::ColorSpace::RGB,
+        depth,
+    );
+    let mut out = Vec::new();
+    zune_jpegxl::JxlSimpleEncoder::new(pixels, options)
+        .encode(&mut out)
+        .map_err(|e| format!("{e:?}"))?;
+    Ok(out)
 }
 
 #[cfg(test)]

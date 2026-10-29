@@ -76,6 +76,7 @@ pub enum FormatKind {
     Avif,
     Tiff16,
     Dng,
+    Jxl,
 }
 
 /// A watermark of text or of a logo picture.
@@ -123,6 +124,8 @@ pub struct ExportForm {
     pub quality: u8,
     /// WebP without loss (larger); off: lossy at `quality`.
     pub webp_lossless: bool,
+    /// JPEG XL at 16 bits a channel (else 8).
+    pub jxl_sixteen: bool,
     pub size: SizeKind,
     /// The long or short edge in pixels.
     pub pixels: u32,
@@ -154,6 +157,7 @@ impl Default for ExportForm {
             format: FormatKind::Jpeg,
             quality: DEFAULT_QUALITY,
             webp_lossless: true,
+            jxl_sixteen: false,
             size: SizeKind::Original,
             pixels: 2048,
             megapixels: 12.0,
@@ -198,6 +202,10 @@ impl ExportForm {
             }
             Format::Tiff16 => f.format = FormatKind::Tiff16,
             Format::Dng => f.format = FormatKind::Dng,
+            Format::Jxl { sixteen } => {
+                f.format = FormatKind::Jxl;
+                f.jxl_sixteen = sixteen;
+            }
         }
         f.sharpen = spec.sharpen;
         if let Some(mark) = &spec.watermark {
@@ -279,6 +287,9 @@ impl ExportForm {
             },
             FormatKind::Tiff16 => Format::Tiff16,
             FormatKind::Dng => Format::Dng,
+            FormatKind::Jxl => Format::Jxl {
+                sixteen: self.jxl_sixteen,
+            },
         };
         let watermark = if self.watermark {
             let stamp = match self.stamp {
@@ -585,8 +596,16 @@ impl ExportDialog {
                     ui.radio_value(&mut f.format, FormatKind::Tiff16, "TIFF 16-bit");
                     ui.radio_value(&mut f.format, FormatKind::Dng, "DNG")
                         .on_hover_text("A linear DNG of the edited photo, for raw editors");
+                    ui.radio_value(&mut f.format, FormatKind::Jxl, "JPEG XL")
+                        .on_hover_text("Lossless and smaller than PNG or TIFF; newer apps only");
                 });
                 ui.end_row();
+                if f.format == FormatKind::Jxl {
+                    ui.label("");
+                    ui.checkbox(&mut f.jxl_sixteen, "16 bits a channel")
+                        .on_hover_text("For further editing; 8 bits makes smaller files");
+                    ui.end_row();
+                }
                 if f.format == FormatKind::WebP {
                     ui.label("");
                     ui.checkbox(&mut f.webp_lossless, "Lossless").on_hover_text(

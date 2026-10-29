@@ -474,13 +474,15 @@ resolution through the GPU pipeline.
   the centre, 3 % of the short side in. A watermark logo that cannot be read, or empty
   text, fails the run before anything is written.
 - Formats: JPEG, PNG, WebP (lossless, or lossy at a quality), AVIF (quality; rav1e at speed
-  7) and 16-bit TIFF. PNG carries XMP in `iTXt`; WebP is written as an extended file with
+  7), 16-bit TIFF, DNG (linear) and JPEG XL (lossless, 8 or 16 bits a channel; pure-Rust
+  zune-jpegxl). PNG carries XMP in `iTXt`; WebP is written as an extended file with
   the profile, EXIF and XMP chunks (`lf_catalog::containers`); TIFF carries the profile,
   XMP and the artist, copyright, description, make and model tags. AVIF carries no EXIF or
   XMP yet (its encoder has no way in).
 - Colour space: sRGB, Display P3, Adobe RGB (1998) or a lab's RGB ICC profile (Little
   CMS, perceptual), with that profile embedded. The render is sRGB, so a wider space holds
-  the same colours. AVIF exports are sRGB only.
+  the same colours. AVIF, DNG and JPEG XL exports are sRGB only; JPEG XL carries no EXIF or
+  XMP.
 - Presets: the export dialog's Preset bar applies a built-in preset (Web 2048 px
   JPEG, Full size JPEG, Print 16-bit TIFF) or one of the studio's own, saved with
   "Save as preset…" (`prefs.export_presets`); a preset saved without a folder

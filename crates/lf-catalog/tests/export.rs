@@ -830,7 +830,11 @@ fn every_format_carries_the_srgb_profile_and_png_and_webp_keep_the_exif() {
                 assert_eq!(bytes.windows(6).filter(|w| *w == b"Exif\0\0").count(), 1);
             }
             // Not in this loop: `lossy_webp_avif_png_and_tiff_carry_what_they_can` covers them.
-            Format::Tiff16 | Format::Dng | Format::WebPLossy { .. } | Format::Avif { .. } => {}
+            Format::Tiff16
+            | Format::Dng
+            | Format::Jxl { .. }
+            | Format::WebPLossy { .. }
+            | Format::Avif { .. } => {}
         }
         // The pixels decode, at the photo's size.
         let img = image::open(path).unwrap();
@@ -1058,4 +1062,41 @@ fn a_dng_export_develops_back_to_the_photo() {
     for (got, want) in px.iter().zip([110.0, 160.0, 200.0]) {
         assert!((got - want).abs() < 3.0, "{px:?}");
     }
+}
+
+#[test]
+fn a_jpeg_xl_export_is_lossless_at_8_and_16_bits() {
+    let Some(gpu) = try_shared_gpu() else { return };
+    let src = tempfile::tempdir().unwrap();
+    RgbaImage::from_pixel(40, 30, image::Rgba([110, 160, 200, 255]))
+        .save(src.path().join("c.png"))
+        .unwrap();
+    let (c, ids) = catalogue(src.path());
+    for sixteen in [false, true] {
+        let out = tempfile::tempdir().unwrap();
+        let sp = spec(Format::Jxl { sixteen }, out.path());
+        let done = export::run(gpu.clone(), &c, &ids, &sp, &mut |_, _| {
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        assert!(done.failed.is_empty(), "{:?}", done.failed);
+        let path = &done.exported[0].path;
+        assert_eq!(path.extension().unwrap(), "jxl");
+        let image = jxl_oxide::JxlImage::builder()
+            .open(path)
+            .expect("a JPEG XL file");
+        assert_eq!((image.width(), image.height()), (40, 30));
+        let render = image.render_frame(0).unwrap();
+        let frame = render.image_all_channels();
+        let px = &frame.buf()[(15 * 40 + 20) * 3..][..3];
+        for (got, want) in px.iter().zip([110.0f32, 160.0, 200.0]) {
+            assert!((got * 255.0 - want).abs() < 0.6, "{sixteen}: {px:?}");
+        }
+    }
+    // Another colour space is refused (the file can only say sRGB).
+    let out = tempfile::tempdir().unwrap();
+    let mut sp = spec(Format::Jxl { sixteen: false }, out.path());
+    sp.space = lf_catalog::colour::OutputSpace::AdobeRgb;
+    let done = export::run(gpu, &c, &ids, &sp, &mut |_, _| ControlFlow::Continue(())).unwrap();
+    assert_eq!(done.failed.len(), 1);
 }
