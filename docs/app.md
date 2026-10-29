@@ -753,6 +753,14 @@ so the sharp subject does not halo into the background. Discs are read through r
 sums; a radius over 12 px is blurred on a picture made smaller by as much. 24 MP takes about
 12 s in release on this machine.
 
+Reference view (`Shift+R`, View → Reference view, `library/reference.rs`) splits Develop's
+preview area in two (`reference::split`): on the left a reference photo, fitted, with its saved
+edits (rendered once by `compare::render` on `Open`, `Msg::ReferenceRendered`); on the right
+the photo being edited, live. The reference is the photo chosen with the filmstrip's
+right-click "Use as reference" (`Library::reference_pick`), else the one open in Develop
+before this one (`previous_developed`); with neither, a toast says how to pick one. It stays
+while other photos are opened, so a set can be matched to it one by one.
+
 Slideshow (View → Slideshow, `library/slideshow.rs`) covers the window on black with the
 selection (or the grid's photos), one at a time, each rendered with its edits on the `Open`
 lane as Compare renders (`Msg::SlideRendered`, by generation); the next one renders while

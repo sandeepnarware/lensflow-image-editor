@@ -155,6 +155,10 @@ and with their edits, zoomed and panned together to pick the sharpest of a burst
 Click one to make it active; flags, stars and labels go to it alone; `←`/`→` move
 between them; `Esc` goes back to the grid.
 
+Reference view (`Shift+R`, View → Reference view): in Develop, a reference photo beside
+the one being edited, to match a set by eye. Right-click a photo in the filmstrip and choose
+"Use as reference"; without a choice it is the photo you had open before.
+
 Loupe (`E`, Library → Loupe): the active photo alone at full size. Click to see that
 spot at 100 % (click again to fit); `←`/`→` step through the photos keeping the zoom.
 

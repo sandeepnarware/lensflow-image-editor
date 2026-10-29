@@ -214,6 +214,7 @@ pub const RIBBON: &[Tab] = &[
                 "Preview",
                 &[
                     Do(Action::BeforeAfter),
+                    Do(Action::ReferenceView),
                     Do(Action::Clipping),
                     Do(Action::FocusPeaking),
                     Do(Action::VisualizeSpots),
@@ -296,6 +297,7 @@ pub fn icon(action: Action) -> &'static str {
         Action::Library => "📚",
         Action::Develop => "🎨",
         Action::BeforeAfter => "◑",
+        Action::ReferenceView => "🗐",
         Action::Clipping => "⚠",
         Action::FocusPeaking => "🎯",
         Action::Slideshow => "▶",
@@ -451,6 +453,7 @@ pub struct MenuState {
     pub peaking: bool,
     pub spots_view: bool,
     pub proofing: bool,
+    pub reference: bool,
     pub context: Option<&'static str>,
 }
 
@@ -580,7 +583,8 @@ fn group_ui(ui: &mut egui::Ui, g: &Group, state: &MenuState, clicked: &mut Optio
                             || (*action == Action::Clipping && state.clipping)
                             || (*action == Action::FocusPeaking && state.peaking)
                             || (*action == Action::VisualizeSpots && state.spots_view)
-                            || (*action == Action::SoftProof && state.proofing);
+                            || (*action == Action::SoftProof && state.proofing)
+                            || (*action == Action::ReferenceView && state.reference);
                         if button(ui, *action, enabled, on).clicked() {
                             *clicked = Some(*action);
                         }
@@ -803,6 +807,7 @@ mod tests {
             Action::Library,
             Action::Develop,
             Action::BeforeAfter,
+            Action::ReferenceView,
             Action::Clipping,
             Action::FocusPeaking,
             Action::Slideshow,

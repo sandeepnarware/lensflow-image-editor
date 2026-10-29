@@ -1,6 +1,6 @@
 //! The filmstrip: one row of small thumbnails for the current folder, shared by Library and
 //! Develop. The active photo is outlined in the brand colour; a click selects; the wheel
-//! scrolls it sideways.
+//! scrolls it sideways. A right-click offers "Use as reference" (the reference view's photo).
 
 use super::Library;
 use super::grid::{Look, paint_cell};
@@ -72,6 +72,12 @@ pub fn show(ui: &mut egui::Ui, lib: &mut Library) -> Option<i64> {
                 if response.clicked() {
                     clicked = Some(id);
                 }
+                response.context_menu(|ui| {
+                    if ui.button(super::reference::USE_AS_REFERENCE).clicked() {
+                        lib.reference_asked = Some(id);
+                        ui.close();
+                    }
+                });
             }
         });
     clicked

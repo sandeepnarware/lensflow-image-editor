@@ -198,6 +198,12 @@ pub enum Msg {
         root: PathBuf,
         result: Result<usize, String>,
     },
+    /// The reference view's photo was rendered (`generation`: the request that asked).
+    ReferenceRendered {
+        generation: u64,
+        id: i64,
+        result: Result<Box<crate::library::compare::Pixels>, String>,
+    },
     /// A slideshow's photo was rendered (`generation`: the show that asked).
     SlideRendered {
         generation: u64,
@@ -829,6 +835,7 @@ pub(crate) mod owners {
             | Msg::Synced { .. }
             | Msg::PeopleSelected { .. }
             | Msg::SlideRendered { .. }
+            | Msg::ReferenceRendered { .. }
             | Msg::Renamed { .. }
             | Msg::EditInDone(..)
             | Msg::PrintProgress { .. }
@@ -971,6 +978,11 @@ pub(crate) mod owners {
                 result: Err("no".into()),
             },
             Msg::SlideRendered {
+                generation: 1,
+                id: 1,
+                result: Err("no".into()),
+            },
+            Msg::ReferenceRendered {
                 generation: 1,
                 id: 1,
                 result: Err("no".into()),

@@ -249,6 +249,9 @@ impl App {
             proofing: self
                 .active_library()
                 .is_some_and(|lib| lib.develop().proofing()),
+            reference: self
+                .active_library()
+                .is_some_and(|lib| lib.reference_shown()),
             // The ribbon brings the view's own tab forward when the view changes.
             context: self
                 .active_library()

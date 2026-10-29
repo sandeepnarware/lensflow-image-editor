@@ -23,6 +23,7 @@ pub mod merge_ui;
 pub mod meta_ui;
 pub mod people_ui;
 pub mod print_ui;
+pub mod reference;
 pub mod selection;
 pub mod slideshow;
 pub mod stacks_ui;
@@ -141,6 +142,16 @@ pub struct Library {
     map: Option<map::MapView>,
     /// View → Slideshow, while running (it covers the window).
     slideshow: Option<slideshow::Slideshow>,
+    /// View → Reference: shown beside the photo in Develop.
+    reference_on: bool,
+    /// The reference's photo and picture (kept while hidden).
+    reference: Option<reference::Reference>,
+    /// The photo chosen with the filmstrip's "Use as reference".
+    reference_pick: Option<i64>,
+    /// The filmstrip's "Use as reference", to act on once the strip is drawn.
+    reference_asked: Option<i64>,
+    /// The photo open in Develop before the current one (the default reference).
+    previous_developed: Option<i64>,
     compare_generation: u64,
     albums: Vec<lf_catalog::albums::Album>,
     /// New album, New smart album or Edit album, while open.
@@ -251,6 +262,11 @@ impl Library {
             local_ai: false,
             compare: None,
             slideshow: None,
+            reference_on: false,
+            reference: None,
+            reference_pick: None,
+            reference_asked: None,
+            previous_developed: None,
             map: None,
             compare_generation: 0,
             albums: Vec::new(),
@@ -932,6 +948,11 @@ impl Library {
                 id,
                 result,
             } => self.slide_rendered(generation, id, result),
+            Msg::ReferenceRendered {
+                generation,
+                id,
+                result,
+            } => self.reference_rendered(generation, id, result),
             Msg::AlbumPhotos {
                 root,
                 album_id,
@@ -1281,6 +1302,11 @@ impl Library {
             );
             return;
         }
+        if let Mode::Develop(prev) = self.mode
+            && prev != id
+        {
+            self.previous_developed = Some(prev);
+        }
         self.mode = Mode::Develop(id);
         if self.filter.narrows() {
             // The photo left behind, kept while open, goes if the filter hides it.
@@ -1450,7 +1476,17 @@ impl Library {
                             .fill(theme::BG)
                             .inner_margin(develop::PREVIEW_GUTTER),
                     )
-                    .show(ui, |ui| self.develop.preview_ui(ui, env.toasts));
+                    .show(ui, |ui| {
+                        if self.reference_shown() {
+                            let (left, right) = reference::split(ui.available_rect_before_wrap());
+                            self.reference_ui(ui, left);
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(right), |ui| {
+                                self.develop.preview_ui(ui, env.toasts)
+                            });
+                        } else {
+                            self.develop.preview_ui(ui, env.toasts)
+                        }
+                    });
             }
         }
         self.confirm_remove_dialog(ui.ctx(), env);
@@ -1568,6 +1604,7 @@ impl Library {
             Action::Library => develop,
             Action::Develop => !develop && self.selection.active().is_some(),
             Action::Up | Action::Down => !develop && !self.order.is_empty(),
+            Action::ReferenceView => develop,
             Action::BeforeAfter
             | Action::Clipping
             | Action::FocusPeaking
@@ -1703,6 +1740,7 @@ impl Library {
             Action::Up => self.step(Dir::Up, env),
             Action::Down => self.step(Dir::Down, env),
             Action::BeforeAfter => self.develop.toggle_before(),
+            Action::ReferenceView => self.toggle_reference(env),
             Action::Clipping => self.develop.toggle_clipping(),
             Action::FocusPeaking => self.develop.toggle_peaking(),
             Action::VisualizeSpots => self.develop.toggle_spots_view(),
@@ -1994,7 +2032,11 @@ impl Library {
     }
 
     fn filmstrip(&mut self, ui: &mut egui::Ui, env: &mut Env) {
-        if let Some(id) = filmstrip::show(ui, self) {
+        let clicked = filmstrip::show(ui, self);
+        if let Some(id) = self.reference_asked.take() {
+            self.use_as_reference(id, env);
+        }
+        if let Some(id) = clicked {
             self.selection.click(id);
             // Develop follows the click, through the same check as any open (a missing
             // photo is never opened).
