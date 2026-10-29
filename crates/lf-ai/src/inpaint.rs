@@ -2,6 +2,10 @@
 //! model's 512 × 512, filled, grown back and blended in through a feathered copy of the
 //! mask, so only what was painted changes and the rest keeps the photo's full resolution.
 //! LaMa takes the picture 0..1 and the mask 0 or 1, and answers 0..255.
+//!
+//! [`fill_edges`] fills a panorama's empty edges instead: long thin wedges a region box would
+//! squash, so it works in squares along them ([`edge_tiles`]), each filled from the picture
+//! and the squares filled before it.
 
 use crate::assets::{self, Asset};
 use crate::{AiError, Engine, Gray, Rgb};
@@ -170,6 +174,103 @@ pub fn remove(
     Ok(out)
 }
 
+/// The squares [`fill_edges`] works in, in order, for holes (`true`) in a `w` × `h` picture:
+/// squares of a side four times the holes' depth (at least 512, at most 1536 px, and no
+/// larger than the picture), on a grid three quarters of a side apart, those with a hole.
+pub fn edge_tiles(holes: &[bool], w: usize, h: usize) -> Vec<Region> {
+    if w == 0 || h == 0 {
+        return Vec::new();
+    }
+    // How deep the holes reach: from the top and bottom, and from the sides; a wedge along
+    // the top also runs far from the side, so the shallower of the two is its depth.
+    let (mut down, mut across) = (0usize, 0usize);
+    for x in 0..w {
+        let top = (0..h).take_while(|&y| holes[y * w + x]).count();
+        let bottom = (0..h).rev().take_while(|&y| holes[y * w + x]).count();
+        down = down.max(top.max(bottom));
+    }
+    for y in 0..h {
+        let row = &holes[y * w..(y + 1) * w];
+        let left = row.iter().take_while(|&&v| v).count();
+        let right = row.iter().rev().take_while(|&&v| v).count();
+        across = across.max(left.max(right));
+    }
+    let side = (down.min(across) * 4).clamp(EDGE, 1536).min(w).min(h);
+    let step = (side * 3 / 4).max(1);
+    let starts = |len: usize| -> Vec<usize> {
+        let mut v: Vec<usize> = (0..len.saturating_sub(side)).step_by(step).collect();
+        v.push(len - side);
+        v.dedup();
+        v
+    };
+    let mut tiles = Vec::new();
+    for &y in &starts(h) {
+        for &x in &starts(w) {
+            let any = (y..y + side).any(|yy| holes[yy * w + x..yy * w + x + side].contains(&true));
+            if any {
+                tiles.push(Region {
+                    x,
+                    y,
+                    w: side,
+                    h: side,
+                });
+            }
+        }
+    }
+    tiles
+}
+
+/// `img` with its `holes` (one per pixel, `true`: nothing there) filled in square by square
+/// ([`edge_tiles`]); what was there is kept as it was. `progress(done, total)` per square;
+/// `stop` ends it between squares.
+pub fn fill_edges(
+    engine: &Engine,
+    img: &Rgb,
+    holes: &[bool],
+    progress: &mut dyn FnMut(usize, usize),
+    stop: &AtomicBool,
+) -> Result<Rgb, AiError> {
+    let (w, h) = (img.w, img.h);
+    let tiles = edge_tiles(holes, w, h);
+    let mut session = engine.session(&assets::INPAINT)?;
+    let mut out = img.clone();
+    let mut left: Vec<bool> = holes.to_vec();
+    progress(0, tiles.len());
+    for (n, r) in tiles.iter().enumerate() {
+        if stop.load(Ordering::SeqCst) {
+            return Err(AiError::Stopped);
+        }
+        let mask = Gray {
+            w: r.w,
+            h: r.h,
+            data: (r.y..r.y + r.h)
+                .flat_map(|y| (r.x..r.x + r.w).map(move |x| (y, x)))
+                .map(|(y, x)| f32::from(u8::from(left[y * w + x])))
+                .collect(),
+        };
+        if mask.data.iter().all(|&v| v == 0.0) {
+            progress(n + 1, tiles.len());
+            continue;
+        }
+        let small = out.crop(r.x, r.y, r.w, r.h).resized(EDGE, EDGE);
+        // A hole a pixel wider at the model's size, so no dark rim is left at the border.
+        let small_mask = feathered(&mask, (r.w / EDGE).max(1)).resized(EDGE, EDGE);
+        let filled = fill(&mut session, &small, &small_mask)?.resized(r.w, r.h);
+        for y in 0..r.h {
+            for x in 0..r.w {
+                let i = (r.y + y) * w + r.x + x;
+                if left[i] {
+                    let (o, f) = (i * 3, (y * r.w + x) * 3);
+                    out.data[o..o + 3].copy_from_slice(&filled.data[f..f + 3]);
+                    left[i] = false;
+                }
+            }
+        }
+        progress(n + 1, tiles.len());
+    }
+    Ok(out)
+}
+
 fn crop_gray(mask: &Gray, r: &Region) -> Gray {
     let mut data = Vec::with_capacity(r.w * r.h);
     for y in r.y..r.y + r.h {
@@ -207,6 +308,33 @@ fn fill(session: &mut ort::session::Session, img: &Rgb, mask: &Gray) -> Result<R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edge_tiles_cover_every_hole_in_squares_sized_by_the_holes() {
+        // A wide picture with a wedge missing along the top (up to 100 px deep).
+        let (w, h) = (3000usize, 900usize);
+        let holes: Vec<bool> = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                y < 100 * x / w
+            })
+            .collect();
+        let tiles = edge_tiles(&holes, w, h);
+        assert!(!tiles.is_empty());
+        assert!(tiles.iter().all(|t| t.w == 512 && t.h == 512), "{tiles:?}");
+        for (i, _) in holes.iter().enumerate().filter(|(_, v)| **v) {
+            let (x, y) = (i % w, i / w);
+            assert!(
+                tiles
+                    .iter()
+                    .any(|t| (t.x..t.x + t.w).contains(&x) && (t.y..t.y + t.h).contains(&y)),
+                "({x}, {y}) is in no square"
+            );
+        }
+        // Squares only where there are holes: none along the bottom.
+        assert!(tiles.iter().all(|t| t.y == 0));
+        assert!(edge_tiles(&vec![false; w * h], w, h).is_empty());
+    }
 
     fn painted(w: usize, h: usize, boxes: &[(usize, usize, usize, usize)]) -> Gray {
         let mut m = Gray {

@@ -15,6 +15,8 @@ pub const CLOSE: &str = "Close";
 pub const STOP: &str = "Stop";
 pub const DEGHOST: &str = "Remove ghosts (people or branches that moved)";
 pub const ROWS: &str = "Rows";
+pub const FILL_EDGES: &str = "Fill edges (AI)";
+pub const FILL_EDGES_HINT: &str = "Keep the whole panorama and fill its empty corners from the picture, instead of cropping them away";
 pub const ABOUT_HDR: &str = "The photos are lined up and blended, each part taken from the frames where it is best exposed. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
 pub const ABOUT_PANORAMA: &str = "The photos are stitched in their order in the grid, left to right or right to left. For several rows, select them row by row, top row first. Neighbours should overlap by a third or so. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
 pub const ABOUT_FOCUS: &str = "The photos (one subject, focused at different depths) are lined up and each part is taken from the photo where it is sharp. The result is a 16-bit TIFF beside the first photo, catalogued with it, ready to edit.";
@@ -51,6 +53,10 @@ pub struct MergeDialog {
     pub deghost: bool,
     /// Panorama: how many rows the photos make.
     pub rows: usize,
+    /// Panorama: fill the empty edges with AI rather than crop them.
+    pub fill_edges: bool,
+    /// The AI tools may run (the studio in good standing).
+    pub ai_allowed: bool,
 }
 
 impl MergeDialog {
@@ -62,6 +68,8 @@ impl MergeDialog {
             stop: Arc::new(AtomicBool::new(false)),
             deghost: true,
             rows: 1,
+            fill_edges: false,
+            ai_allowed: false,
         }
     }
 
@@ -105,6 +113,12 @@ impl MergeDialog {
                                 .labelled_by(label.id)
                                 .on_hover_text("More than one: the photos come row by row, top row first");
                         });
+                        ui.add_enabled(
+                            self.ai_allowed,
+                            egui::Checkbox::new(&mut self.fill_edges, FILL_EDGES),
+                        )
+                        .on_hover_text(FILL_EDGES_HINT)
+                        .on_disabled_hover_text(crate::develop::tools::masks::AI_OFF);
                     }
                     if self.kind == MergeKind::Hdr {
                         ui.add_space(6.0);

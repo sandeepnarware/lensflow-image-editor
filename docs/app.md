@@ -977,6 +977,17 @@ them a quarter clockwise so they lie side by side, stitches those, and turns the
 A panorama takes up to 24 photos; past 12 each is worked at 2000 px rather than 3000, since
 every frame is held at once.
 
+### Fill edges
+
+The panorama dialog's "Fill edges (AI)" (`MergeOptions::fill_edges`, the AI folder; enabled
+when the AI tools are allowed) keeps the whole outline instead of cropping:
+`stitch_rows_uncropped` crops the last stitch to every pixel any frame covers and says which are
+covered (with several rows the rows are still cut to a common size; only the last step keeps its
+edges). `lf_ai::inpaint::fill_edges` then fills the empty ones with LaMa in squares along them
+(`edge_tiles`: a side four times the holes' depth, 512 to 1536 px, three quarters of a side
+apart), each square from the picture and the squares filled before it; covered pixels are never
+changed. The model is downloaded first if need be.
+
 ### Focus stack
 
 File → Merge → Focus stack (`Action::MergeFocus`, `MergeKind::Focus`: 2 to 30 frames, worked at

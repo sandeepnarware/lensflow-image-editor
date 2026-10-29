@@ -12,6 +12,9 @@
 //!
 //! One row only: a panorama of several rows, or one shot turning up and down, is not
 //! stitched. Moving subjects in an overlap may show twice, faintly.
+//!
+//! [`stitch_rows_uncropped`] keeps the whole outline instead (every pixel any frame covers)
+//! and says which pixels no frame covers, for filling them in (Merge → "Fill edges").
 
 use rayon::prelude::*;
 
@@ -207,10 +210,30 @@ fn refine(a: &Grey, b: &Grey, dx: i32, dy: i32) -> (i32, i32) {
 pub fn stitch_rows(
     frames: &[Rgb],
     rows: usize,
-    mut progress: impl FnMut(usize, usize),
+    progress: impl FnMut(usize, usize),
 ) -> Result<Rgb, MergeError> {
+    stitch_rows_as(frames, rows, false, progress).map(|(rgb, _)| rgb)
+}
+
+/// [`stitch_rows`] without the final crop: the rectangle around everything the frames cover,
+/// and, for each of its pixels, whether a frame covers it (`false`: empty, black). With
+/// several rows, the rows are still cut to a common size; only the last step keeps its edges.
+pub fn stitch_rows_uncropped(
+    frames: &[Rgb],
+    rows: usize,
+    progress: impl FnMut(usize, usize),
+) -> Result<(Rgb, Vec<bool>), MergeError> {
+    stitch_rows_as(frames, rows, true, progress)
+}
+
+fn stitch_rows_as(
+    frames: &[Rgb],
+    rows: usize,
+    whole: bool,
+    mut progress: impl FnMut(usize, usize),
+) -> Result<(Rgb, Vec<bool>), MergeError> {
     if rows <= 1 {
-        return stitch(frames, progress);
+        return stitch_as(frames, whole, progress);
     }
     if frames.len() < 2 {
         return Err(MergeError::TooFew);
@@ -229,15 +252,28 @@ pub fn stitch_rows(
         progress(i + 1, total);
     }
     if strips.len() == 1 {
-        return Ok(strips.remove(0));
+        let strip = strips.remove(0);
+        let covered = vec![true; strip.w * strip.h];
+        return Ok((strip, covered));
     }
     // A common size: the smallest width and height, each strip cut about its middle.
     let w = strips.iter().map(|s| s.w).min().unwrap_or(0);
     let h = strips.iter().map(|s| s.h).min().unwrap_or(0);
     let turned: Vec<Rgb> = strips.iter().map(|s| turn_cw(&middle(s, w, h))).collect();
-    let tall = stitch(&turned, |_, _| {})?;
+    let (tall, covered) = stitch_as(&turned, whole, |_, _| {})?;
     progress(total, total);
-    Ok(turn_ccw(&tall))
+    // The coverage turned back as the picture is (through a one-channel stand-in).
+    let mask = Rgb {
+        w: tall.w,
+        h: tall.h,
+        data: covered
+            .iter()
+            .flat_map(|&c| [f32::from(u8::from(c)); 3])
+            .collect(),
+    };
+    let back = turn_ccw(&mask);
+    let covered = back.data.iter().step_by(3).map(|&v| v > 0.5).collect();
+    Ok((turn_ccw(&tall), covered))
 }
 
 /// The `w` × `h` middle of `img`.
@@ -279,7 +315,17 @@ fn turn_ccw(img: &Rgb) -> Rgb {
 
 /// Lines up and blends `frames` (neighbours in order, all one size) into one panorama.
 /// `progress(done, total)` as it goes.
-pub fn stitch(frames: &[Rgb], mut progress: impl FnMut(usize, usize)) -> Result<Rgb, MergeError> {
+pub fn stitch(frames: &[Rgb], progress: impl FnMut(usize, usize)) -> Result<Rgb, MergeError> {
+    stitch_as(frames, false, progress).map(|(rgb, _)| rgb)
+}
+
+/// [`stitch`], cropped to what every column covers, or (`whole`) to everything any frame
+/// covers; with which pixels are covered.
+fn stitch_as(
+    frames: &[Rgb],
+    whole: bool,
+    mut progress: impl FnMut(usize, usize),
+) -> Result<(Rgb, Vec<bool>), MergeError> {
     if frames.len() < 2 {
         return Err(MergeError::TooFew);
     }
@@ -441,8 +487,8 @@ pub fn stitch(frames: &[Rgb], mut progress: impl FnMut(usize, usize)) -> Result<
         progress(3 + i, total);
     }
     // Crop to the rows every covered column has, and the columns any frame covers.
-    let mut top = 0usize;
-    let mut bottom = ch;
+    // Cropped: the rows every column has; whole: the rows any has.
+    let (mut top, mut bottom) = if whole { (ch, 0usize) } else { (0usize, ch) };
     let (mut left, mut right) = (cw, 0usize);
     for x in 0..cw {
         let first = (0..ch).find(|&y| weight[y * cw + x] > 0.0);
@@ -453,8 +499,13 @@ pub fn stitch(frames: &[Rgb], mut progress: impl FnMut(usize, usize)) -> Result<
             .unwrap_or(first);
         left = left.min(x);
         right = right.max(x + 1);
-        top = top.max(first);
-        bottom = bottom.min(last + 1);
+        if whole {
+            top = top.min(first);
+            bottom = bottom.max(last + 1);
+        } else {
+            top = top.max(first);
+            bottom = bottom.min(last + 1);
+        }
     }
     if bottom <= top || right <= left {
         return Err(MergeError::NoOverlap);
@@ -477,8 +528,12 @@ pub fn stitch(frames: &[Rgb], mut progress: impl FnMut(usize, usize)) -> Result<
                 }
             }
         });
+    let covered = (0..oh)
+        .flat_map(|y| (0..ow).map(move |x| (y, x)))
+        .map(|(y, x)| weight[(y + top) * cw + x + left] > 0.0)
+        .collect();
     progress(total, total);
-    Ok(out)
+    Ok((out, covered))
 }
 
 #[cfg(test)]
@@ -546,6 +601,31 @@ mod tests {
                 .fold(f32::MAX, f32::min);
             assert!(near < 0.06, "({x}, {y}): {near}");
         }
+    }
+
+    #[test]
+    fn uncropped_keeps_the_whole_outline_and_marks_the_empty_corners() {
+        let world = scene(900, 300);
+        let frames = vec![
+            crop(&world, 0, 10, 400, 260, 1.0),
+            crop(&world, 250, 30, 400, 260, 1.0),
+            crop(&world, 500, 10, 400, 260, 1.0),
+        ];
+        let cropped = stitch(&frames, |_, _| {}).unwrap();
+        let (whole, covered) = stitch_rows_uncropped(&frames, 1, |_, _| {}).unwrap();
+        assert_eq!(covered.len(), whole.w * whole.h);
+        assert!(
+            whole.h >= cropped.h + 15,
+            "the 20 px step is kept: {} vs {}",
+            whole.h,
+            cropped.h
+        );
+        // The middle frame sits lower: the bottom middle is covered, the bottom left is not;
+        // the top middle is empty, the top left covered.
+        let at = |x: usize, y: usize| covered[y * whole.w + x];
+        assert!(at(whole.w / 2, whole.h - 2) && !at(5, whole.h - 2));
+        assert!(!at(whole.w / 2, 1) && at(5, 1));
+        assert!(!covered.iter().all(|&c| c));
     }
 
     #[test]

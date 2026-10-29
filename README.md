@@ -121,6 +121,8 @@ blended into one natural-looking 16-bit TIFF beside the first, catalogued and re
 the middle photo, instead of as a faint double.
 Merge to panorama (`Ctrl+M`): up to 24 overlapping photos stitched into one wide photo,
 in one row or up to four (choose Rows, and select them row by row, top row first).
+"Fill edges (AI)" keeps the whole panorama and fills its empty corners from the picture
+instead of cropping them away.
 Focus stack (File → Merge): up to thirty photos of one subject focused at different depths,
 lined up and blended so each part comes from the photo where it is sharp.
 

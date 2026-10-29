@@ -19,7 +19,9 @@ impl Library {
     pub(super) fn open_merge(&mut self, kind: MergeKind) {
         let ids = self.selected_in_order();
         if self.merge.is_none() && can_merge(kind, ids.len()) {
-            self.merge = Some(MergeDialog::new(ids, kind));
+            let mut dialog = MergeDialog::new(ids, kind);
+            dialog.ai_allowed = self.local_ai;
+            self.merge = Some(dialog);
         }
     }
 
@@ -49,6 +51,8 @@ impl Library {
         let options = crate::merge_job::MergeOptions {
             deghost: dialog.deghost,
             rows: dialog.rows,
+            fill_edges: (kind == MergeKind::Panorama && dialog.fill_edges && dialog.ai_allowed)
+                .then(|| crate::ai_job::ai_dir(&self.frames_dir)),
         };
         let stop = dialog.stop.clone();
         let gpu = self.gpu.clone();

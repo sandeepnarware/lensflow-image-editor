@@ -136,6 +136,37 @@ fn removal_fills_a_painted_square_from_its_surroundings() {
 }
 
 #[test]
+fn a_panoramas_empty_edges_are_filled_from_the_picture() {
+    let Some(e) = engine(&lf_ai::inpaint::INPAINT_MODELS) else {
+        return;
+    };
+    let (w, h) = (1200usize, 500usize);
+    let clean = scene(w, h);
+    // A wedge along the top and one along the bottom, black, as a stitch leaves them.
+    let holes: Vec<bool> = (0..w * h)
+        .map(|i| {
+            let (x, y) = (i % w, i / w);
+            y < 60 * x / w || y >= h - 60 * (w - x) / w
+        })
+        .collect();
+    let mut img = clean.clone();
+    for (i, _) in holes.iter().enumerate().filter(|(_, v)| **v) {
+        img.data[i * 3..i * 3 + 3].copy_from_slice(&[0.0, 0.0, 0.0]);
+    }
+    let out = lf_ai::inpaint::fill_edges(&e, &img, &holes, &mut |_, _| {}, &AtomicBool::new(false))
+        .unwrap();
+    // The top right (sky) and bottom left (ground) are like the scene there, not black.
+    for (x, y) in [(w - 20, 10), (20, h - 10)] {
+        let (got, want) = (out.at(x, y), clean.at(x, y));
+        assert!(
+            got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.2),
+            "({x}, {y}): {got:?} vs {want:?}"
+        );
+    }
+    assert_eq!(out.at(600, 250), img.at(600, 250), "the picture is kept");
+}
+
+#[test]
 fn no_face_is_found_in_a_landscape() {
     let Some(e) = engine(&lf_ai::faces::FACE_MODELS) else {
         return;

@@ -59,12 +59,15 @@ impl MergeKind {
 }
 
 /// How a merge is made, past its kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeOptions {
     /// HDR: leave out what moved between the frames.
     pub deghost: bool,
     /// Panorama: how many rows the photos make (they come row by row).
     pub rows: usize,
+    /// Panorama: keep the whole outline and fill its empty edges with LaMa (on this
+    /// computer), the AI folder given; `None` crops them away.
+    pub fill_edges: Option<PathBuf>,
 }
 
 impl Default for MergeOptions {
@@ -72,6 +75,7 @@ impl Default for MergeOptions {
         MergeOptions {
             deghost: true,
             rows: 1,
+            fill_edges: None,
         }
     }
 }
@@ -198,14 +202,51 @@ pub fn run(
         MergeKind::Panorama => {
             let rgb: Vec<Rgb> = frames.iter().map(Held::rgb).collect();
             drop(frames);
-            lf_merge::panorama::stitch_rows(&rgb, options.rows.max(1), |_, _| {})
-                .map_err(|e| e.to_string())?
+            match &options.fill_edges {
+                None => lf_merge::panorama::stitch_rows(&rgb, options.rows.max(1), |_, _| {})
+                    .map_err(|e| e.to_string())?,
+                Some(ai) => {
+                    let (whole, covered) = lf_merge::panorama::stitch_rows_uncropped(
+                        &rgb,
+                        options.rows.max(1),
+                        |_, _| {},
+                    )
+                    .map_err(|e| e.to_string())?;
+                    drop(rgb);
+                    fill_edges(ai, whole, &covered, stop)?
+                }
+            }
         }
     };
     progress(ids.len() + 2, total);
     let out = write_merged(&first.expect("two frames at least"), kind, &merged)?;
     progress(total, total);
     Ok(out)
+}
+
+/// A panorama's empty edges (`covered` false) filled by LaMa ([`lf_ai::inpaint::fill_edges`]),
+/// its model downloaded first if need be. Nothing empty: the panorama as it is.
+fn fill_edges(ai: &Path, whole: Rgb, covered: &[bool], stop: &AtomicBool) -> Result<Rgb, String> {
+    if covered.iter().all(|&c| c) {
+        return Ok(whole);
+    }
+    let engine = lf_ai::Engine::new(ai);
+    engine
+        .prepare(&lf_ai::inpaint::INPAINT_MODELS, &mut |_, _| {}, stop)
+        .map_err(|e| e.to_string())?;
+    let holes: Vec<bool> = covered.iter().map(|&c| !c).collect();
+    let img = lf_ai::Rgb {
+        w: whole.w,
+        h: whole.h,
+        data: whole.data,
+    };
+    let filled = lf_ai::inpaint::fill_edges(&engine, &img, &holes, &mut |_, _| {}, stop)
+        .map_err(|e| e.to_string())?;
+    Ok(Rgb {
+        w: filled.w,
+        h: filled.h,
+        data: filled.data,
+    })
 }
 
 /// An HDR bracket: every frame lined up with the middle one (the most likely to be well
