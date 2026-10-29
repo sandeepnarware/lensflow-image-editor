@@ -179,6 +179,9 @@ Crop overlays (`O` while cropping, or the crop panel's Overlay button): thirds, 
 golden ratio, diagonals, triangles or the golden spiral over the crop frame, faint, and stronger
 while the frame is dragged; the choice is kept for the next crop.
 
+Before/After side by side (`Y`, View → Before/After side by side): in Develop, the photo as
+it was on the left and the edit on the right; zoom, pan and the tools work on the right half.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

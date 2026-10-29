@@ -67,3 +67,41 @@ fn peaking_marks_sharp_edges_and_spots_view_shows_only_edges() {
         "the edge is white"
     );
 }
+
+/// Side by side: the photo as it was and the edit drawn into two canvases from one renderer,
+/// one after the other, each as it is when drawn alone.
+#[test]
+fn before_and_after_canvases_do_not_disturb_each_other() {
+    let gpu = shared_gpu();
+    let src = RgbaImage::from_fn(64, 48, |x, y| Rgba([(x * 3) as u8, (y * 4) as u8, 90, 255]));
+    let mut s = EditSettings::default_settings();
+    s.exposure = 1.0;
+    let mut r = Renderer::new(gpu.clone(), &src, 64, 48).unwrap();
+    let whole = View {
+        x: 0.0,
+        y: 0.0,
+        w: 1.0,
+        h: 1.0,
+    };
+    let after_opts = DrawOptions {
+        view: whole,
+        ..DrawOptions::default()
+    };
+    let before_opts = DrawOptions {
+        before: true,
+        view: whole,
+        ..DrawOptions::default()
+    };
+    let (a, b) = (
+        Target::new(&gpu, 64, 48, false).unwrap(),
+        Target::new(&gpu, 64, 48, false).unwrap(),
+    );
+    r.draw(&s, &after_opts, &a).unwrap();
+    let alone = read_back(&gpu, &a).unwrap();
+    r.draw(&s, &before_opts, &b).unwrap();
+    r.draw(&s, &after_opts, &a).unwrap();
+    assert_eq!(read_back(&gpu, &a).unwrap(), alone, "the edit is unchanged");
+    let before = read_back(&gpu, &b).unwrap();
+    assert_eq!(before.get_pixel(10, 10).0[2], 90, "the photo as it was");
+    assert!(alone.get_pixel(10, 10).0[2] > 120, "the edit is brighter");
+}

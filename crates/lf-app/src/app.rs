@@ -258,6 +258,9 @@ impl App {
             info: self
                 .active_library()
                 .is_some_and(|lib| lib.develop().info_overlay()),
+            side_by_side: self
+                .active_library()
+                .is_some_and(|lib| lib.develop().side_by_side()),
             // The ribbon brings the view's own tab forward when the view changes.
             context: self
                 .active_library()

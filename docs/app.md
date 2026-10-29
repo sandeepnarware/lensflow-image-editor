@@ -806,6 +806,13 @@ from each corner (square in the photo, so the frame's aspect is taken into accou
 quarter arcs through squares cut in turn. `paint_crop` draws it at alpha 70, 130 while
 dragging.
 
+Side by side (`Y`, `Action::SideBySide`, `Develop::side_by_side`) splits the preview area
+(`reference::split`): the right half is the ordinary preview (the rect every tool, zoom and pan
+use); the left half is a second canvas (`preview_before`, its own `Preview`) drawn with
+`DrawOptions::before` (no geometry, no development), fitted, and drawn again only when its size
+or view changes (`last_before`, reset with `last_drawn`). Each half carries a Before or After
+label. Holding `\` (before) shows the whole area as before, as without it.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

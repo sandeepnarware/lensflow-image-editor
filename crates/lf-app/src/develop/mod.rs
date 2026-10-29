@@ -75,6 +75,7 @@ pub const CANT_OPEN: &str = "Can't open";
 pub const AUTO_SYNC_HINT: &str = "Each change to this photo is made on the other selected photos too (not their crop, spots or masks).";
 pub const BEFORE: &str = "Before";
 /// Shown where the preview would be when the window has no graphics device to share.
+pub const AFTER: &str = "After";
 pub const NO_PREVIEW: &str = "The preview needs the graphics device.";
 
 pub use editing::{damaged_text, write_failed_text};
@@ -150,6 +151,11 @@ pub struct Develop {
     zoom_asked: Option<Action>,
     preview: Option<Preview>,
     last_drawn: Option<DrawKey>,
+    /// View → Before/After side by side (`Y`): the photo as it was on the left.
+    side_by_side: bool,
+    /// The left half's canvas, and what it was last drawn for (its size and view).
+    preview_before: Option<Preview>,
+    last_before: Option<((u32, u32), View)>,
     /// The settings changed: draw again.
     dirty: bool,
     histogram: Option<Histogram>,
@@ -201,6 +207,9 @@ impl Develop {
             zoom_asked: None,
             preview: None,
             last_drawn: None,
+            side_by_side: false,
+            preview_before: None,
+            last_before: None,
             dirty: false,
             histogram: None,
             last_change: Instant::now(),
@@ -684,6 +693,15 @@ impl Develop {
         self.spots_view
     }
 
+    pub fn side_by_side(&self) -> bool {
+        self.side_by_side
+    }
+
+    /// View → Before/After side by side (`Y`).
+    pub fn toggle_side_by_side(&mut self) {
+        self.side_by_side = !self.side_by_side;
+    }
+
     pub fn info_overlay(&self) -> bool {
         self.info_overlay
     }
@@ -824,6 +842,7 @@ impl Develop {
         self.latest.fetch_add(1, Ordering::SeqCst);
         self.preview = None;
         self.last_drawn = None;
+        self.last_before = None;
         self.histogram = None;
         if !self.is_lost() {
             self.state = State::Empty;
@@ -866,6 +885,8 @@ impl Develop {
                     self.check_develop_change();
                 }
                 self.last_drawn = None;
+                self.last_before = None;
+                self.last_before = None;
                 self.last_histogram = None;
                 self.settings_changed();
                 Outcome::Shown(photo_id)
@@ -899,6 +920,7 @@ impl Develop {
         }
         self.preview = None;
         self.last_drawn = None;
+        self.last_before = None;
         self.state = State::Lost;
         true
     }
@@ -1072,7 +1094,16 @@ impl Develop {
     /// The preview area: draws the photo, handles zoom, pan and before/after.
     pub fn preview_ui(&mut self, ui: &mut egui::Ui, toasts: &mut Toasts) {
         self.check_lost();
-        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        let (whole, response) =
+            ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        // Side by side: the photo as it was on the left, the edit (and everything else) on
+        // the right.
+        let (rect, before_rect) = if self.side_by_side && !self.before() {
+            let (l, r) = crate::library::reference::split(whole);
+            (r, Some(l))
+        } else {
+            (whole, None)
+        };
         match &self.state {
             State::Empty => return,
             State::Opening(_) => {
@@ -1209,6 +1240,11 @@ impl Develop {
         if !before {
             self.tool_paint(ui, rect, map(&self.viewport), output.0);
         }
+        if let Some(left) = before_rect {
+            self.paint_before_half(ui, left, toasts);
+            label(ui, rect, AFTER);
+            label(ui, left, BEFORE);
+        }
         if before {
             let at = rect.left_top() + egui::vec2(12.0, 12.0);
             let galley = ui.painter().layout_no_wrap(
@@ -1222,6 +1258,62 @@ impl Develop {
         }
         self.paint_info(ui, rect);
         self.update_histogram(ui.ctx(), toasts);
+    }
+
+    /// The left half of side by side: the photo as it was, fitted (its canvas drawn again only
+    /// when its size or view changes; edits do not change it).
+    fn paint_before_half(&mut self, ui: &egui::Ui, left: egui::Rect, toasts: &mut Toasts) {
+        let ppp = ui.ctx().pixels_per_point();
+        let panel = (
+            f64::from(left.width() * ppp),
+            f64::from(left.height() * ppp),
+        );
+        let (Some(render_state), State::Ready(photo, _)) =
+            (self.render_state.clone(), &mut self.state)
+        else {
+            return;
+        };
+        if panel.0 < 1.0 || panel.1 < 1.0 {
+            return;
+        }
+        let output = (
+            f64::from(photo.renderer.full_width),
+            f64::from(photo.renderer.full_height),
+        );
+        let placement = Viewport::default().placement(output, panel);
+        let (_, _, rw, rh) = placement.rect;
+        let size = preview::canvas_size(&self.gpu, rw, rh);
+        let preview = self
+            .preview_before
+            .get_or_insert_with(|| Preview::new(render_state));
+        let (canvas, texture, fresh) = match preview.ensure(&self.gpu, size.0, size.1) {
+            Ok(made) => made,
+            Err(e) => {
+                self.preview_before = None;
+                self.renderer_error("The before half could not be made", e, toasts);
+                return;
+            }
+        };
+        let key = (size, placement.view);
+        if fresh || self.last_before != Some(key) {
+            let opts = DrawOptions {
+                before: true,
+                view: placement.view,
+                ..DrawOptions::default()
+            };
+            let settings = self.session.edit().map_or(&photo.settings, |e| &e.settings);
+            if let Err(e) = photo.renderer.draw(settings, &opts, canvas) {
+                self.renderer_error("The before half could not be drawn", e, toasts);
+                return;
+            }
+            self.last_before = Some(key);
+        }
+        ui.painter().image(
+            texture,
+            tools::shown_rect(left, placement.rect, ppp),
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
     }
 
     /// The info overlay (`I`), bottom left over the preview.
@@ -1329,4 +1421,17 @@ fn centred(ui: &mut egui::Ui, rect: egui::Rect, add: impl FnOnce(&mut egui::Ui))
     );
     child.add_space(rect.height() / 3.0);
     add(&mut child);
+}
+
+/// A small label at the top left of `rect` ("Before", "After").
+fn label(ui: &egui::Ui, rect: egui::Rect, text: &str) {
+    let at = rect.left_top() + egui::vec2(12.0, 12.0);
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        egui::FontId::proportional(14.0),
+        theme::INK,
+    );
+    let back = egui::Rect::from_min_size(at, galley.size()).expand(6.0);
+    ui.painter().rect_filled(back, 4.0, theme::SURFACE);
+    ui.painter().galley(at, galley, theme::INK);
 }

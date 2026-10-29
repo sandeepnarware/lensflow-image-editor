@@ -1627,6 +1627,7 @@ impl Library {
             | Action::FocusPeaking
             | Action::VisualizeSpots
             | Action::InfoOverlay
+            | Action::SideBySide
             | Action::SoftProof
             | Action::ProofProfile
             | Action::Fit
@@ -1766,6 +1767,7 @@ impl Library {
             Action::FocusPeaking => self.develop.toggle_peaking(),
             Action::VisualizeSpots => self.develop.toggle_spots_view(),
             Action::InfoOverlay => self.develop.toggle_info_overlay(),
+            Action::SideBySide => self.develop.toggle_side_by_side(),
             Action::SoftProof => self.toggle_proof(env),
             Action::ProofProfile => self.pick_proof_profile(env),
             Action::Fit | Action::ActualSize | Action::ToggleZoom => self.develop.zoom(action),

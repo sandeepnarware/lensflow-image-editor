@@ -180,6 +180,7 @@ fn menus(session: Session, can_switch: bool) -> Harness<'static, (MenuState, Vec
         reference: false,
         second_window: false,
         info: false,
+        side_by_side: false,
         context: None,
     };
     Harness::new_ui_state(

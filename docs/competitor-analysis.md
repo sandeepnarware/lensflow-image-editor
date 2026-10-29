@@ -61,6 +61,7 @@ close or competitors ship new features.
 
 - Info overlay over the photo (Lightroom's `I`): done, View → Info.
 - Crop overlays (thirds, grid, golden ratio, diagonals, triangles, spiral) cycled with `O`: done.
+- Before/after side by side (Lightroom's `Y`): done, View → Before/After side by side.
 
 ### Tier 4: large or strategic
 

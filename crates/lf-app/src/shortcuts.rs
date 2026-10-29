@@ -40,6 +40,8 @@ pub enum Action {
     BeforeAfter,
     /// Another photo shown beside the one being edited, to match it by eye.
     ReferenceView,
+    /// The photo as it was beside the edit.
+    SideBySide,
     /// Show clipped highlights red and blocked shadows blue in the preview.
     Clipping,
     /// Sharp edges shown green over the preview.
@@ -179,6 +181,7 @@ impl Action {
             Action::Develop => "Go to Develop",
             Action::BeforeAfter => "Before/After",
             Action::ReferenceView => "Reference view",
+            Action::SideBySide => "Before/After side by side",
             Action::Clipping => "Show clipping",
             Action::FocusPeaking => "Focus peaking",
             Action::Slideshow => "Slideshow",
@@ -299,6 +302,7 @@ pub struct Map(pub &'static [(Action, KeyboardShortcut)]);
 
 /// The window's keyboard map.
 pub const MAP: Map = Map(&[
+    (Action::SideBySide, key(Key::Y)),
     (Action::CropOverlay, key(Key::O)),
     (Action::InfoOverlay, key(Key::I)),
     (Action::ReferenceView, shift(Key::R)),
@@ -472,6 +476,7 @@ mod tests {
     /// The plan's keyboard map (Global Constraints), entry by entry.
     fn plan() -> Vec<(Action, KeyboardShortcut)> {
         vec![
+            (Action::SideBySide, key(Key::Y)),
             (Action::CropOverlay, key(Key::O)),
             (Action::InfoOverlay, key(Key::I)),
             (Action::ReferenceView, shift(Key::R)),
