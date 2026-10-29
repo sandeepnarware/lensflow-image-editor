@@ -182,6 +182,9 @@ while the frame is dragged; the choice is kept for the next crop.
 Before/After side by side (`Y`, View → Before/After side by side): in Develop, the photo as
 it was on the left and the edit on the right; zoom, pan and the tools work on the right half.
 
+Navigator (Develop's side panel, under the histogram): the whole edited photo, small, with a
+frame round the part shown when zoomed in; click or drag on it to move there.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

@@ -24,6 +24,7 @@ pub mod editing;
 pub mod extras;
 pub mod histogram;
 pub mod info;
+mod navigator;
 pub mod open;
 pub mod panels;
 pub mod preview;
@@ -156,6 +157,10 @@ pub struct Develop {
     /// The left half's canvas, and what it was last drawn for (its size and view).
     preview_before: Option<Preview>,
     last_before: Option<((u32, u32), View)>,
+    /// The Navigator's canvas, what it was drawn for, and the part the preview showed last.
+    navigator: Option<Preview>,
+    navigator_drawn: Option<navigator::NavKey>,
+    last_view: View,
     /// The settings changed: draw again.
     dirty: bool,
     histogram: Option<Histogram>,
@@ -210,6 +215,9 @@ impl Develop {
             side_by_side: false,
             preview_before: None,
             last_before: None,
+            navigator: None,
+            navigator_drawn: None,
+            last_view: View::default(),
             dirty: false,
             histogram: None,
             last_change: Instant::now(),
@@ -843,6 +851,7 @@ impl Develop {
         self.preview = None;
         self.last_drawn = None;
         self.last_before = None;
+        self.navigator_drawn = None;
         self.histogram = None;
         if !self.is_lost() {
             self.state = State::Empty;
@@ -886,7 +895,11 @@ impl Develop {
                 }
                 self.last_drawn = None;
                 self.last_before = None;
+                self.navigator_drawn = None;
+                self.navigator_drawn = None;
                 self.last_before = None;
+                self.navigator_drawn = None;
+                self.navigator_drawn = None;
                 self.last_histogram = None;
                 self.settings_changed();
                 Outcome::Shown(photo_id)
@@ -921,6 +934,7 @@ impl Develop {
         self.preview = None;
         self.last_drawn = None;
         self.last_before = None;
+        self.navigator_drawn = None;
         self.state = State::Lost;
         true
     }
@@ -942,6 +956,9 @@ impl Develop {
         ui.add_space(8.0);
         histogram::show(ui, self.histogram.as_ref());
         ui.add_space(8.0);
+        if self.is_ready() {
+            self.navigator_ui(ui, toasts);
+        }
         if let State::Ready(opened, _) = &self.state {
             ui.horizontal(|ui| {
                 ui.label(
@@ -1174,6 +1191,7 @@ impl Develop {
             return;
         };
         let placement = self.viewport.placement(output, panel);
+        self.last_view = placement.view;
         let (_, _, rw, rh) = placement.rect;
         let size = preview::canvas_size(&self.gpu, rw, rh);
         if let State::Ready(photo, _) = &self.state {

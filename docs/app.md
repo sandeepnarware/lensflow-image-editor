@@ -813,6 +813,14 @@ use); the left half is a second canvas (`preview_before`, its own `Preview`) dra
 or view changes (`last_before`, reset with `last_drawn`). Each half carries a Before or After
 label. Holding `\` (before) shows the whole area as before, as without it.
 
+The Navigator (`develop/navigator.rs`) is a third canvas of its own (`Develop::navigator`)
+drawn with the current settings at the whole view (and the crop tool's whole frame while
+cropping), sized to the side panel's width and at most 180 points tall, and drawn again only
+when its `NavKey` (canvas size, settings, crop drawn) changes or another photo opens. The
+preview stores the part it showed (`last_view`); the navigator frames it (`frame_of`) when it
+is less than the whole photo, and a click or drag sets `viewport.centre` to the point under the
+pointer (`point_at`), which the viewport then clamps.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the
