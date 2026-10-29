@@ -211,6 +211,8 @@ pub const RIBBON: &[Tab] = &[
                 &[
                     Do(Action::BeforeAfter),
                     Do(Action::Clipping),
+                    Do(Action::FocusPeaking),
+                    Do(Action::VisualizeSpots),
                     Do(Action::SoftProof),
                     Do(Action::ProofProfile),
                     Do(Action::Fit),
@@ -291,6 +293,8 @@ pub fn icon(action: Action) -> &'static str {
         Action::Develop => "🎨",
         Action::BeforeAfter => "◑",
         Action::Clipping => "⚠",
+        Action::FocusPeaking => "🎯",
+        Action::VisualizeSpots => "🔍",
         Action::SoftProof => "🖶",
         Action::ProofProfile => "🎨",
         Action::Fit => "⛶",
@@ -391,6 +395,8 @@ pub fn short_label(action: Action) -> &'static str {
         Action::KeyboardShortcuts => "Shortcuts",
         Action::Metadata => "Metadata",
         Action::Clipping => "Clipping",
+        Action::FocusPeaking => "Peaking",
+        Action::VisualizeSpots => "Spots view",
         Action::SoftProof => "Soft proof",
         Action::ProofProfile => "Profile",
         Action::AiDenoise => "Denoise",
@@ -433,6 +439,8 @@ pub struct MenuState {
     pub studio: Option<String>,
     pub before: bool,
     pub clipping: bool,
+    pub peaking: bool,
+    pub spots_view: bool,
     pub proofing: bool,
     pub context: Option<&'static str>,
 }
@@ -561,6 +569,8 @@ fn group_ui(ui: &mut egui::Ui, g: &Group, state: &MenuState, clicked: &mut Optio
                         let enabled = state.enabled.contains(action);
                         let on = (*action == Action::BeforeAfter && state.before)
                             || (*action == Action::Clipping && state.clipping)
+                            || (*action == Action::FocusPeaking && state.peaking)
+                            || (*action == Action::VisualizeSpots && state.spots_view)
                             || (*action == Action::SoftProof && state.proofing);
                         if button(ui, *action, enabled, on).clicked() {
                             *clicked = Some(*action);
@@ -784,6 +794,8 @@ mod tests {
             Action::Develop,
             Action::BeforeAfter,
             Action::Clipping,
+            Action::FocusPeaking,
+            Action::VisualizeSpots,
             Action::SoftProof,
             Action::ProofProfile,
             Action::Fit,

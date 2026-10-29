@@ -31,6 +31,8 @@ fn full_view_draw_equals_render() {
             h: 1.0,
         },
         clipping: false,
+        peaking: false,
+        spots_view: false,
         proof: false,
     };
     r.draw(&s, &opts, &canvas).unwrap();
@@ -69,6 +71,8 @@ fn clipping_shows_white_red_and_black_blue_only_when_asked() {
     let canvas = Target::new(&gpu, 32, 8, false).unwrap();
     let opts = DrawOptions {
         clipping: true,
+        peaking: false,
+        spots_view: false,
         ..DrawOptions::default()
     };
     r.draw(&s, &opts, &canvas).unwrap();

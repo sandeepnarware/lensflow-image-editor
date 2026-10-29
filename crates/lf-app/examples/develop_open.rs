@@ -74,6 +74,8 @@ fn main() -> Result<(), String> {
                         crop: None,
                         view: p.view,
                         clipping: false,
+                        peaking: false,
+                        spots_view: false,
                         proof: false,
                     };
                     renderer

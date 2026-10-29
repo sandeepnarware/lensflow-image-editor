@@ -49,7 +49,9 @@ pub struct Uniforms {
     pub bw: u32,
     pub sharp_on: u32,
     pub tex_on: u32,
-    /// Desktop only: 1 paints clipped highlights red and blocked shadows blue (the preview).
+    /// Desktop only, the preview's overlays: bit 1 paints clipped highlights red and blocked
+    /// shadows blue, bit 2 sharp edges green (focus peaking), bit 4 shows the photo as edges
+    /// (visualize spots).
     pub clip_warn: u32,
     /// One output pixel in canvas UV (`1 / target size`): the derivatives `texture()` would
     /// take implicitly (WGSL only; see `develop.wgsl`).

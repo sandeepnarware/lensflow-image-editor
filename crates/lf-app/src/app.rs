@@ -240,6 +240,12 @@ impl App {
             clipping: self
                 .active_library()
                 .is_some_and(|lib| lib.develop().clipping()),
+            peaking: self
+                .active_library()
+                .is_some_and(|lib| lib.develop().peaking()),
+            spots_view: self
+                .active_library()
+                .is_some_and(|lib| lib.develop().spots_view()),
             proofing: self
                 .active_library()
                 .is_some_and(|lib| lib.develop().proofing()),

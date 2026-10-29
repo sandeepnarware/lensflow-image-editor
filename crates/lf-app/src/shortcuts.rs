@@ -40,6 +40,10 @@ pub enum Action {
     BeforeAfter,
     /// Show clipped highlights red and blocked shadows blue in the preview.
     Clipping,
+    /// Sharp edges shown green over the preview.
+    FocusPeaking,
+    /// The preview as white edges on black, so dust spots show.
+    VisualizeSpots,
     /// Show the photo as a printer and paper profile would print it.
     SoftProof,
     /// Choose the printer and paper profile soft-proofing uses.
@@ -159,6 +163,8 @@ impl Action {
             Action::Develop => "Go to Develop",
             Action::BeforeAfter => "Before/After",
             Action::Clipping => "Show clipping",
+            Action::FocusPeaking => "Focus peaking",
+            Action::VisualizeSpots => "Visualize spots",
             Action::SoftProof => "Soft proof",
             Action::ProofProfile => "Proof profile…",
             Action::Fit => "Fit",
@@ -287,6 +293,7 @@ pub const MAP: Map = Map(&[
     (Action::AutoWhiteBalance, cmd_shift(Key::U)),
     (Action::BeforeAfter, key(Key::Backslash)),
     (Action::Clipping, key(Key::J)),
+    (Action::FocusPeaking, shift(Key::J)),
     (Action::SoftProof, key(Key::S)),
     (Action::Undo, cmd(Key::Z)),
     (Action::Redo, cmd_shift(Key::Z)),
@@ -455,6 +462,7 @@ mod tests {
             (Action::AutoWhiteBalance, cmd_shift(Key::U)),
             (Action::BeforeAfter, key(Key::Backslash)),
             (Action::Clipping, key(Key::J)),
+            (Action::FocusPeaking, shift(Key::J)),
             (Action::SoftProof, key(Key::S)),
             (Action::Undo, cmd(Key::Z)),
             (Action::Redo, cmd_shift(Key::Z)),

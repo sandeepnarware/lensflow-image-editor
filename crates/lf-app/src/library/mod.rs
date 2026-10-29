@@ -1553,6 +1553,8 @@ impl Library {
             Action::Up | Action::Down => !develop && !self.order.is_empty(),
             Action::BeforeAfter
             | Action::Clipping
+            | Action::FocusPeaking
+            | Action::VisualizeSpots
             | Action::SoftProof
             | Action::ProofProfile
             | Action::Fit
@@ -1675,6 +1677,8 @@ impl Library {
             Action::Down => self.step(Dir::Down, env),
             Action::BeforeAfter => self.develop.toggle_before(),
             Action::Clipping => self.develop.toggle_clipping(),
+            Action::FocusPeaking => self.develop.toggle_peaking(),
+            Action::VisualizeSpots => self.develop.toggle_spots_view(),
             Action::SoftProof => self.toggle_proof(env),
             Action::ProofProfile => self.pick_proof_profile(env),
             Action::Fit | Action::ActualSize | Action::ToggleZoom => self.develop.zoom(action),

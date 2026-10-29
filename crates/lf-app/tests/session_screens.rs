@@ -174,6 +174,8 @@ fn menus(session: Session, can_switch: bool) -> Harness<'static, (MenuState, Vec
         studio,
         before: false,
         clipping: false,
+        peaking: false,
+        spots_view: false,
         proofing: false,
         context: None,
     };

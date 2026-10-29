@@ -740,6 +740,13 @@ so the sharp subject does not halo into the background. Discs are read through r
 sums; a radius over 12 px is blurred on a picture made smaller by as much. 24 MP takes about
 12 s in release on this machine.
 
+Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
+overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
+of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the
+photo's brightness after spot removal at one output pixel's spacing (`grad_x`, `grad_y`), so
+they follow the zoom; peaking tints edges above 0.12 green, Spots view shows the edges white on
+black (×10), where dust stands out as rings.
+
 Upright's Level fits the straightening angle alone (`upright::Mode::Level`, from any two
 lines); Auto fits Full (or Vertical when there are no level lines) and takes the perspective
 `AUTO_SHARE` (0.6) of the way, with the angle fitted again for it: a balanced correction,

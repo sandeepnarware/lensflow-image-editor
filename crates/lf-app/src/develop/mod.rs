@@ -104,6 +104,8 @@ struct DrawKey {
     view: View,
     before: bool,
     clipping: bool,
+    peaking: bool,
+    spots_view: bool,
     proof: bool,
 }
 
@@ -129,6 +131,10 @@ pub struct Develop {
     before_toggled: bool,
     /// View → Clipping (`J`): clipped highlights red, blocked shadows blue, in the preview.
     clipping: bool,
+    /// View → Focus peaking (`Shift+J`): sharp edges green, in the preview.
+    peaking: bool,
+    /// View → Visualize spots: the photo as white edges on black, so dust shows.
+    spots_view: bool,
     /// The AI tools may be used (the library passes the gate's answer).
     local_ai: bool,
     /// Soft-proofing through this ICC profile (View → Soft proof), and what the proof LUT was
@@ -180,6 +186,8 @@ impl Develop {
             viewport: Viewport::default(),
             before_toggled: false,
             clipping: false,
+            peaking: false,
+            spots_view: false,
             local_ai: false,
             proof: None,
             proof_key: None,
@@ -627,6 +635,26 @@ impl Develop {
     /// View → Clipping (`J`).
     pub fn toggle_clipping(&mut self) {
         self.clipping = !self.clipping;
+    }
+
+    /// Whether the preview shows focus peaking.
+    pub fn peaking(&self) -> bool {
+        self.peaking
+    }
+
+    /// View → Focus peaking (`Shift+J`).
+    pub fn toggle_peaking(&mut self) {
+        self.peaking = !self.peaking;
+    }
+
+    /// Whether the preview shows the photo as edges (visualize spots).
+    pub fn spots_view(&self) -> bool {
+        self.spots_view
+    }
+
+    /// View → Visualize spots.
+    pub fn toggle_spots_view(&mut self) {
+        self.spots_view = !self.spots_view;
     }
 
     /// View → Before/After (or the side panel's "Before").
@@ -1083,6 +1111,8 @@ impl Develop {
             view: placement.view,
             before,
             clipping: self.clipping,
+            peaking: self.peaking,
+            spots_view: self.spots_view,
             proof: self.proof.is_some(),
         };
         let preview = self
@@ -1105,6 +1135,8 @@ impl Develop {
                     view: placement.view,
                     // Never over the photo as it was.
                     clipping: self.clipping && !before,
+                    peaking: self.peaking && !before,
+                    spots_view: self.spots_view && !before,
                     proof: self.proof.is_some() && !before,
                 };
                 let settings = self.session.edit().map_or(&photo.settings, |e| &e.settings);

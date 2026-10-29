@@ -63,7 +63,7 @@ struct Uniforms {
     bw: u32,
     sharp_on: u32,
     tex_on: u32,
-    clip_warn: u32,         // desktop only: show clipping (the preview)
+    clip_warn: u32,         // desktop only, preview overlays: 1 clipping, 2 peaking, 4 spots view
     pixel: vec2<f32>,       // one output pixel in canvas UV (1 / target size); WGSL only
     hsl: array<vec4<f32>, 8>,        // uHsl (xyz)
     band_hue: array<vec4<f32>, 8>,   // uBandHue (x)
@@ -452,7 +452,24 @@ fn fs_develop(in: VsOut) -> @location(0) vec4<f32> {
         c += n * u.grain * 0.22 * (0.4 + 0.6 * (1.0 - abs(2.0 * y - 1.0)));
     }
 
-    if (u.clip_warn != 0u) {
+    if ((u.clip_warn & 6u) != 0u) {
+        // Desktop only: the edges of the photo (after spot removal) at one output pixel's
+        // spacing, as a Laplacian of its brightness.
+        let s0 = luma(sample_2d(u_img, s_img, uv).rgb);
+        let lap = abs(4.0 * s0
+            - luma(sample_2d(u_img, s_img, uv + grad_x).rgb)
+            - luma(sample_2d(u_img, s_img, uv - grad_x).rgb)
+            - luma(sample_2d(u_img, s_img, uv + grad_y).rgb)
+            - luma(sample_2d(u_img, s_img, uv - grad_y).rgb));
+        if ((u.clip_warn & 4u) != 0u) {
+            // Visualize spots: white edges on black, so dust shows as rings.
+            let v = clamp(lap * 10.0, 0.0, 1.0);
+            return vec4<f32>(v, v, v, 1.0);
+        }
+        // Focus peaking: strong, fine edges are in focus.
+        if (lap > 0.12) { c = mix(c, vec3<f32>(0.15, 1.0, 0.3), 0.85); }
+    }
+    if ((u.clip_warn & 1u) != 0u) {
         // Desktop only: a channel at white is clipped (red); every channel at black, blocked (blue).
         let top = max(max(c.r, c.g), c.b);
         if (top >= 0.998) { return vec4<f32>(1.0, 0.15, 0.15, 1.0); }

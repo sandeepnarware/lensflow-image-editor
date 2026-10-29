@@ -34,10 +34,11 @@ type DetailKey = (SpotsKey, Option<f64>, Option<f64>);
 #[derive(Clone, Copy)]
 enum Mode {
     Before,
-    /// `clipping`: paint clipped highlights red and blocked shadows blue (the preview only).
+    /// `overlay`: the preview's overlays, as `develop.wgsl`'s `clip_warn` bits (1 clipping,
+    /// 2 focus peaking, 4 visualize spots).
     Develop {
         spotted: bool,
-        clipping: bool,
+        overlay: u32,
         /// The soft-proof LUT in place of the look.
         proof: bool,
     },
@@ -73,6 +74,10 @@ pub struct DrawOptions {
     pub view: View,
     /// Desktop only: clipped highlights show red and blocked shadows blue (never in exports).
     pub clipping: bool,
+    /// Desktop only: sharp edges show green (focus peaking; never in exports).
+    pub peaking: bool,
+    /// Desktop only: the photo as white edges on black, so dust shows (never in exports).
+    pub spots_view: bool,
     /// Desktop only: soft-proof through the LUT registered as [`crate::lut::SOFT_PROOF`]
     /// (which holds the look too); never in exports.
     pub proof: bool,
@@ -432,7 +437,7 @@ impl Renderer {
         self.cached("output", w, h, false, FORMAT)?;
         let mode = Mode::Develop {
             spotted,
-            clipping: false,
+            overlay: 0,
             proof: false,
         };
         let dest = Dest::Cached("output");
@@ -457,7 +462,7 @@ impl Renderer {
         self.cached("output_f16", w, h, false, FLOAT_FORMAT)?;
         let mode = Mode::Develop {
             spotted,
-            clipping: false,
+            overlay: 0,
             proof: false,
         };
         let dest = Dest::Cached("output_f16");
@@ -552,7 +557,9 @@ impl Renderer {
         } else {
             Mode::Develop {
                 spotted: self.prepare_caches(s)?,
-                clipping: opts.clipping,
+                overlay: u32::from(opts.clipping)
+                    | (u32::from(opts.peaking) << 1)
+                    | (u32::from(opts.spots_view) << 2),
                 proof: opts.proof,
             }
         };
@@ -581,7 +588,7 @@ impl Renderer {
         self.cached(name, w, h, false, FORMAT)?;
         let mode = Mode::Develop {
             spotted,
-            clipping: false,
+            overlay: 0,
             proof: false,
         };
         let dest = Dest::Cached(name);
@@ -604,13 +611,13 @@ impl Renderer {
             Dest::Cached(name) => &self.targets[name],
             Dest::Canvas(t) => t,
         };
-        let (spotted, develop, clipping, proof) = match mode {
-            Mode::Before => (false, false, false, false),
+        let (spotted, develop, overlay, proof) = match mode {
+            Mode::Before => (false, false, 0, false),
             Mode::Develop {
                 spotted,
-                clipping,
+                overlay,
                 proof,
-            } => (spotted, true, clipping, proof),
+            } => (spotted, true, overlay, proof),
         };
         let (tw, th) = turned_size(self.full_width, self.full_height, geometry.rotate);
         let frame = Frame {
@@ -629,7 +636,7 @@ impl Renderer {
             (None, None)
         };
         let mut uniforms = Uniforms::new(s, &frame, sharp.is_some(), texture.is_some());
-        uniforms.clip_warn = u32::from(clipping);
+        uniforms.clip_warn = overlay;
         // A LUT that is not loaded (or too big for the device) is no LUT.
         let lut_ready = develop
             && if proof {
