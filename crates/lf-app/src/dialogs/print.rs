@@ -24,13 +24,15 @@ pub const CLOSE: &str = "Close";
 pub const STOP: &str = "Stop";
 
 /// The layouts offered: across, down, name.
-pub const LAYOUTS: [(u32, u32, &str); 5] = [
+pub const LAYOUTS: [(u32, u32, &str); 6] = [
     (1, 1, "1 per page"),
     (1, 2, "2 per page"),
     (2, 2, "4 per page"),
     (3, 3, "9 per page (contact sheet)"),
     (4, 5, "20 per page (contact sheet)"),
+    (6, 8, "48 per page (contact sheet)"),
 ];
+pub const SHEET_TITLE: &str = "Sheet title";
 
 /// "Print 3 photos".
 pub fn title(n: usize) -> String {
@@ -72,6 +74,8 @@ pub struct PrintDialog {
     pub orientation: Orientation,
     pub caption: Caption,
     pub margin_mm: f64,
+    /// A contact sheet's title, printed at the top of each page.
+    pub title: String,
     error: Option<String>,
 }
 
@@ -86,6 +90,7 @@ impl PrintDialog {
             orientation: Orientation::Auto,
             caption: Caption::None,
             margin_mm: 10.0,
+            title: String::new(),
             error: None,
         }
     }
@@ -197,6 +202,7 @@ impl PrintDialog {
                         (Caption::None, "None"),
                         (Caption::FileName, "File name"),
                         (Caption::Title, "Title"),
+                        (Caption::Details, "Details"),
                     ] {
                         ui.radio_value(&mut self.caption, c, name);
                     }
@@ -206,6 +212,16 @@ impl PrintDialog {
                 ui.label(MARGIN);
                 ui.add(egui::Slider::new(&mut self.margin_mm, 0.0..=30.0).step_by(1.0));
                 ui.end_row();
+
+                if self.spec().per_page() > 1 {
+                    let label = ui.label(SHEET_TITLE);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.title)
+                            .hint_text("Printed at the top of each page"),
+                    )
+                    .labelled_by(label.id);
+                    ui.end_row();
+                }
             });
         let spec = self.spec();
         let pages = self.ids.len().div_ceil(spec.per_page());
@@ -299,6 +315,7 @@ mod tests {
             spec: d.spec(),
             out: "x.pdf".into(),
             open: true,
+            title: String::new(),
         };
         d.started(&job);
         assert!(d.running());

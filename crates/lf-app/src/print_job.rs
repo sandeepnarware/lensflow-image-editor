@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use lf_catalog::Catalog;
 use lf_catalog::export::{self, Destination, ExportSpec, Format, Metadata, Pattern, Size};
-use lf_catalog::print::{Caption, Placed, PrintSpec, pdf};
+use lf_catalog::print::{Caption, Placed, PrintSpec};
 use lf_pipeline::Gpu;
 
 /// What to print and where the PDF goes.
@@ -19,6 +19,23 @@ pub struct PrintRun {
     pub out: PathBuf,
     /// Open it in the system's viewer to print, once written.
     pub open: bool,
+    /// A contact sheet's title (none when empty).
+    pub title: String,
+}
+
+/// A contact sheet's caption: the file name, its stars (as asterisks: Helvetica has no star)
+/// and the day it was taken.
+pub fn details(row: Option<&lf_catalog::PhotoRow>, file_name: &str) -> String {
+    let mut parts = vec![file_name.to_owned()];
+    if let Some(r) = row {
+        if r.rating > 0 {
+            parts.push("*".repeat(usize::from(r.rating)));
+        }
+        if let Some(day) = r.captured_at.as_deref().and_then(|c| c.get(..10)) {
+            parts.push(day.to_owned());
+        }
+    }
+    parts.join("  ")
 }
 
 /// Renders `ids` and writes the PDF; returns its path. `progress(done, total)` after each
@@ -82,6 +99,7 @@ pub fn run(
                     .and_then(|r| r.meta.title.clone())
                     .unwrap_or(file_name),
             ),
+            Caption::Details => Some(details(row.as_ref(), &file_name)),
         };
         placed.push(Placed {
             jpeg,
@@ -91,7 +109,7 @@ pub fn run(
         });
         progress(i + 1, ids.len());
     }
-    let doc = pdf(&job.spec, &placed);
+    let doc = lf_catalog::print::pdf_titled(&job.spec, &placed, &job.title);
     let tmp = job.out.with_extension("pdf.tmp");
     std::fs::write(&tmp, doc)
         .and_then(|()| std::fs::rename(&tmp, &job.out))
@@ -106,6 +124,17 @@ pub fn run(
 mod tests {
     use super::*;
     use lf_catalog::print::{Orientation, PAPERS};
+
+    #[test]
+    fn details_name_the_file_its_stars_and_its_day() {
+        let row = lf_catalog::PhotoRow {
+            rating: 3,
+            captured_at: Some("2026-10-20T10:00:00".into()),
+            ..Default::default()
+        };
+        assert_eq!(details(Some(&row), "a.jpg"), "a.jpg  ***  2026-10-20");
+        assert_eq!(details(None, "a.jpg"), "a.jpg");
+    }
 
     #[test]
     fn photos_become_a_pdf_with_their_captions() {
@@ -144,6 +173,7 @@ mod tests {
             },
             out: dir.path().join("sheet.pdf"),
             open: false,
+            title: "Ana & Raj".into(),
         };
         let mut steps = Vec::new();
         let out = run(

@@ -96,7 +96,13 @@ impl Library {
         let Some(dialog) = &mut self.print else {
             return;
         };
-        let job = PrintRun { spec, out, open };
+        let title = dialog.title.clone();
+        let job = PrintRun {
+            spec,
+            out,
+            open,
+            title,
+        };
         dialog.started(&job);
         let ids = dialog.ids.clone();
         let stop = dialog.stop.clone();

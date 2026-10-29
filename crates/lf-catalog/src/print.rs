@@ -6,6 +6,9 @@
 //! in their cell) and placed in the PDF as they are (`DCTDecode`), so nothing is compressed
 //! twice. Captions use the built-in Helvetica (no font is embedded); characters it cannot
 //! show are written as `?`. The PDF writer is the small subset a printed page needs.
+//!
+//! A contact sheet (more than one photo a page) also carries a title at the top of each page,
+//! when one is given, and "Page n of N" at the bottom ([`pdf_titled`]).
 
 use std::fmt::Write as _;
 
@@ -77,6 +80,8 @@ pub enum Caption {
     FileName,
     /// The catalogue's title, else the file name.
     Title,
+    /// The file name, the stars and the day taken (a contact sheet's).
+    Details,
 }
 
 /// How the pages are laid out.
@@ -167,6 +172,17 @@ fn text_width(text: &str, size: f64) -> f64 {
 
 /// The PDF for `photos` laid out by `spec`.
 pub fn pdf(spec: &PrintSpec, photos: &[Placed]) -> Vec<u8> {
+    pdf_titled(spec, photos, "")
+}
+
+/// The size of a contact sheet's title and page numbers, in points.
+const HEADER_PT: f64 = 11.0;
+const FOOTER_PT: f64 = 8.0;
+
+/// [`pdf`] with `title` at the top of each contact-sheet page (none when empty) and page
+/// numbers at the bottom (contact sheets only; a margin of under 8 mm leaves them out, as
+/// there is no room).
+pub fn pdf_titled(spec: &PrintSpec, photos: &[Placed], title: &str) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::new();
     let mut offsets: Vec<usize> = Vec::new();
     // Object numbers: 1 catalogue, 2 page tree, 3 font, then per page: page, contents, and
@@ -219,7 +235,9 @@ pub fn pdf(spec: &PrintSpec, photos: &[Placed]) -> Vec<u8> {
     );
     let margin = spec.margin_mm * PT_PER_MM;
     let gap = spec.gap_mm * PT_PER_MM;
-    for (page, (page_id, contents_id, image_ids)) in pages.iter().zip(&plan) {
+    let sheet = spec.per_page() > 1 && spec.margin_mm >= 8.0;
+    let page_count = pages.len();
+    for (n, (page, (page_id, contents_id, image_ids))) in pages.iter().zip(&plan).enumerate() {
         let landscape = page[0].width > page[0].height;
         let size = spec.page_pt(landscape);
         let cell = spec.cell_pt(size);
@@ -230,6 +248,25 @@ pub fn pdf(spec: &PrintSpec, photos: &[Placed]) -> Vec<u8> {
         };
         let mut stream = String::new();
         let mut xobjects = String::new();
+        if sheet {
+            let title = title.trim();
+            if !title.is_empty() {
+                let ty = size.1 - margin / 2.0 - HEADER_PT / 3.0;
+                let _ = writeln!(
+                    stream,
+                    "BT /F1 {HEADER_PT} Tf {margin:.3} {ty:.3} Td {} Tj ET",
+                    pdf_text(title)
+                );
+            }
+            let footer = format!("Page {} of {page_count}", n + 1);
+            let fx = size.0 - margin - text_width(&footer, FOOTER_PT);
+            let fy = margin / 2.0 - FOOTER_PT / 3.0;
+            let _ = writeln!(
+                stream,
+                "BT /F1 {FOOTER_PT} Tf {fx:.3} {fy:.3} Td {} Tj ET",
+                pdf_text(&footer)
+            );
+        }
         for (i, (photo, image_id)) in page.iter().zip(image_ids).enumerate() {
             let (col, row) = (i as u32 % spec.cols.max(1), i as u32 / spec.cols.max(1));
             // PDF's origin is the bottom left: rows count down from the top.
@@ -347,6 +384,19 @@ mod tests {
         let first = text[xref..].lines().nth(3).unwrap();
         let at: usize = first[..10].parse().unwrap();
         assert!(doc[at..].starts_with(b"1 0 obj"));
+    }
+
+    #[test]
+    fn a_contact_sheet_carries_its_title_and_page_numbers() {
+        let photos: Vec<Placed> = (0..5).map(|_| jpeg(30, 20)).collect();
+        let text =
+            String::from_utf8_lossy(&pdf_titled(&spec(2, 2), &photos, "Ana & Raj")).into_owned();
+        assert_eq!(text.matches("(Ana & Raj) Tj").count(), 2, "on both pages");
+        assert!(text.contains("(Page 1 of 2) Tj") && text.contains("(Page 2 of 2) Tj"));
+        // One photo a page is not a contact sheet: nothing added.
+        let one =
+            String::from_utf8_lossy(&pdf_titled(&spec(1, 1), &photos[..1], "Ana")).into_owned();
+        assert!(!one.contains("(Ana) Tj") && !one.contains("Page 1"));
     }
 
     #[test]
