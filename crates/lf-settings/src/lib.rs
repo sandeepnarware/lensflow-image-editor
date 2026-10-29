@@ -21,6 +21,7 @@ pub mod lut;
 pub mod masks;
 pub mod negative;
 mod normalise;
+pub mod point_colour;
 mod settings;
 pub mod shader_values;
 pub mod upright;

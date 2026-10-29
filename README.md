@@ -195,6 +195,10 @@ the bands that colour belongs to.
 Defringe (Develop, after Lens corrections): purple and green fringes along high-contrast
 edges taken out, each with an amount (0–20) and the hue it takes out, as Lightroom's.
 
+Point colour (Develop): pick up to four colours in the photo ("Pick a colour", then click) and
+shift each one's hue, saturation and luminance, with a Range for how wide a family of colours
+it takes, as Lightroom's Point Color.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

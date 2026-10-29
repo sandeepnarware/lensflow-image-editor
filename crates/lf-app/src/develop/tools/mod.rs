@@ -58,6 +58,8 @@ pub enum ToolKind {
     Guided,
     /// Colour mix's targeted adjustment: a drag on a colour moves its bands.
     Targeted,
+    /// Point colour's picker: a click adds the colour there.
+    PointColour,
 }
 
 pub const CROP: &str = "Crop";
@@ -95,6 +97,7 @@ pub enum Active {
     Masks(MaskTool),
     Guided(GuidedTool),
     Targeted(targeted::TargetedTool),
+    PointColour,
 }
 
 /// The tools' state in the Develop view.
@@ -126,6 +129,7 @@ impl Tools {
             Some(Active::Masks(_)) => Some(ToolKind::Masks),
             Some(Active::Guided(_)) => Some(ToolKind::Guided),
             Some(Active::Targeted(_)) => Some(ToolKind::Targeted),
+            Some(Active::PointColour) => Some(ToolKind::PointColour),
             None => None,
         }
     }
@@ -312,6 +316,7 @@ impl Develop {
             ToolKind::Targeted => {
                 Active::Targeted(targeted::TargetedTool::new(self.panels.hsl_mode))
             }
+            ToolKind::PointColour => Active::PointColour,
         });
         self.panels.curve.clear_selection();
         self.settings_changed();
@@ -333,6 +338,7 @@ impl Develop {
             Some(Active::WhiteBalance)
             | Some(Active::Guided(_))
             | Some(Active::Targeted(_))
+            | Some(Active::PointColour)
             | None => {}
         }
     }
@@ -424,13 +430,15 @@ impl Develop {
         let Some(full) = self.full_size() else {
             return ToolInput::default();
         };
-        // The edited colour's hue under the pointer (the targeted adjustment's).
-        let target_hue = self
+        // The edited colour under the pointer (the targeted adjustment's and Point colour's).
+        let under = self
             .readout_img
             .as_ref()
             .zip(self.readout_at)
             .and_then(|(img, at)| crate::develop::readout::value_at(img, at))
-            .and_then(|rgb| lf_settings::masks::hue_of(rgb.map(|v| f64::from(v) / 255.0)));
+            .map(|rgb| rgb.map(|v| f64::from(v) / 255.0));
+        let target_hue = under.and_then(lf_settings::masks::hue_of);
+        let mut point_picked: Option<Option<[f64; 3]>> = None;
         let mut grey = false;
         let (Some(active), Some(edit)) = (self.tools.active.as_mut(), self.session.edit_mut())
         else {
@@ -608,6 +616,16 @@ impl Develop {
                     }
                     guided = true;
                 }
+            }
+            Active::PointColour => {
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+                }
+                if response.clicked() {
+                    point_picked = Some(under.filter(|_| target_hue.is_some()));
+                }
+                // A drag still pans the photo.
+                input.owns_drag = false;
             }
             Active::Targeted(tool) => {
                 if response.hovered() {
@@ -854,7 +872,36 @@ impl Develop {
         if grey {
             toasts.push(Level::Info, targeted::GREY);
         }
+        match point_picked {
+            Some(Some(rgb)) => self.add_point_colour(rgb, toasts),
+            Some(None) => toasts.push(Level::Info, targeted::GREY),
+            None => {}
+        }
         input
+    }
+
+    /// Point colour's picker clicked on `rgb` (the edited colour there): a new point for it,
+    /// chosen in the section, one history step; the picker closes (as the eyedropper does).
+    fn add_point_colour(&mut self, rgb: [f64; 3], toasts: &mut Toasts) {
+        use lf_settings::point_colour::{MAX_POINTS, Point, Points};
+        self.tools.active = None;
+        self.commit(toasts);
+        let mut added = None;
+        self.edit(|s| {
+            let mut points = Points::from_settings(s);
+            if points.0.len() < MAX_POINTS {
+                points.0.push(Point::picked(rgb));
+                added = Some(points.0.len() - 1);
+                points.write_into(s);
+            }
+        });
+        match added {
+            Some(i) => {
+                self.panels.point_selected = Some(i);
+                self.commit(toasts);
+            }
+            None => toasts.push(Level::Info, panels::point_colour::FULL),
+        }
     }
 
     /// Guided Upright: the perspective and straightening that make the guides upright and
@@ -950,7 +997,7 @@ impl Develop {
                 tool.grid(),
                 self.tools.crop_overlay,
             ),
-            Active::WhiteBalance | Active::Targeted(_) => {}
+            Active::WhiteBalance | Active::Targeted(_) | Active::PointColour => {}
             Active::Guided(tool) => {
                 let m =
                     SpotMap::new(map, &edit.settings, full, output_w).through_lens(&edit.settings);
@@ -1105,6 +1152,9 @@ impl Develop {
             }
             Active::WhiteBalance => {
                 ui.label(RichText::new(WB_HINT).color(theme::MUTED));
+            }
+            Active::PointColour => {
+                ui.label(RichText::new(panels::point_colour::PICK_HINT).color(theme::MUTED));
             }
             Active::Targeted(tool) => {
                 ui.label(RichText::new(targeted::HINT).color(theme::MUTED));

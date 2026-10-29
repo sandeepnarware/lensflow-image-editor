@@ -18,6 +18,7 @@ pub mod light;
 pub mod looks;
 pub mod lut;
 pub mod negative;
+pub mod point_colour;
 pub mod presets;
 pub mod raw;
 pub mod slider;
@@ -93,6 +94,8 @@ pub const SECTIONS: [Section; 7] = [
 #[derive(Debug, Clone, Default)]
 pub struct PanelState {
     pub hsl_mode: hsl::Mode,
+    /// The Point colour picked to change.
+    pub point_selected: Option<usize>,
     pub curve: curve::CurveState,
 }
 
@@ -109,6 +112,8 @@ pub struct PanelOutput {
     pub pick_wb: bool,
     /// Colour mix's targeted adjustment was clicked: open (or leave) its tool.
     pub target_hsl: bool,
+    /// Point colour's "Pick a colour" was clicked: open (or leave) its picker.
+    pub pick_point: bool,
     /// "Import .cube…" was clicked.
     pub import_lut: bool,
     /// "Import .dcp…" was clicked.
@@ -136,6 +141,8 @@ pub struct PanelContext<'a> {
     pub picking_wb: bool,
     /// The targeted adjustment is on (its button shows pressed).
     pub targeting_hsl: bool,
+    /// Point colour's picker is on.
+    pub picking_point: bool,
     /// The LUT looks loaded (`lf_pipeline::lut::names`).
     pub luts: &'a [String],
     /// The camera profiles loaded (`lf_raw::dcp::names`: name, camera).
@@ -290,6 +297,24 @@ pub fn show(
         }
     }
     out.absorb(r);
+    let mut r = SliderResponse::default();
+    let mut pick = false;
+    if section(ui, "point-colour", point_colour::TITLE, false, |ui| {
+        let (pr, p) = point_colour::show(ui, s, &mut state.point_selected, ctx.picking_point);
+        r = pr;
+        pick = p;
+    }) {
+        let before = s.clone();
+        point_colour::reset(s);
+        if *s != before {
+            r = SliderResponse {
+                changed: true,
+                released: true,
+            };
+        }
+    }
+    out.absorb(r);
+    out.pick_point |= pick;
     let mut r = SliderResponse::default();
     if section(ui, "calibration", calibration::TITLE, false, |ui| {
         r = calibration::show(ui, s)

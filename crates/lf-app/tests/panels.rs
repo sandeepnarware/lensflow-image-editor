@@ -29,6 +29,7 @@ fn harness(raw: bool) -> Harness<'static, State> {
                     sample: None,
                     picking_wb: false,
                     targeting_hsl: false,
+                    picking_point: false,
                     luts: &[],
                     profiles: &s.profiles,
                 };
@@ -212,6 +213,7 @@ fn recorded() -> Harness<'static, Recorded> {
                     sample: None,
                     picking_wb: false,
                     targeting_hsl: false,
+                    picking_point: false,
                     luts: &[],
                     profiles: &[],
                 };
@@ -358,6 +360,7 @@ fn auto_tone_auto_white_balance_and_the_eyedropper_button() {
                     sample: Some(&s.sample),
                     picking_wb: false,
                     targeting_hsl: false,
+                    picking_point: false,
                     luts: &[],
                     profiles: &[],
                 };
@@ -491,4 +494,26 @@ fn colour_mix_offers_the_targeted_adjustment() {
     h.get_by_label(panels::hsl::TARGET).click();
     h.step();
     assert!(h.state().last.target_hsl);
+}
+
+/// Point colour: "Pick a colour" asks for the picker; a picked colour shows as a swatch whose
+/// sliders change it, and Remove takes it away.
+#[test]
+fn point_colour_picks_shows_and_removes_a_colour() {
+    use lf_settings::point_colour::{Point, Points};
+    let mut h = harness(false);
+    h.run();
+    h.get_by_label(panels::point_colour::TITLE).click();
+    h.run();
+    h.get_by_label(panels::point_colour::PICK).click();
+    h.step();
+    assert!(h.state().last.pick_point);
+    Points(vec![Point::picked([0.2, 0.4, 0.8])]).write_into(&mut h.state_mut().settings);
+    h.run();
+    h.get_by_label_contains("■ 1").click();
+    h.run();
+    assert!(h.query_by_label("Saturation shift").is_some());
+    h.get_by_label(panels::point_colour::REMOVE).click();
+    h.run();
+    assert!(Points::from_settings(&h.state().settings).0.is_empty());
 }

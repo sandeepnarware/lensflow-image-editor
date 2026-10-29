@@ -87,6 +87,12 @@ pub struct Uniforms {
     pub fringe: [f32; 4],
     /// 1 when defringe is on (0: the web's pass exactly), the hues' reach in degrees, unused.
     pub fringe_on: [f32; 4],
+    /// Desktop only: how many Point colour points are in use (`x`; 0: the web's pass exactly).
+    pub point_n: [f32; 4],
+    /// Each point's colour (hue, saturation, brightness, range) and shifts (hue in degrees,
+    /// saturation, luminance, unused).
+    pub point_a: [[f32; 4]; 4],
+    pub point_b: [[f32; 4]; 4],
 }
 
 /// One local adjustment as `develop.wgsl`'s `MaskU` takes it (seven 16-byte rows).
@@ -186,7 +192,7 @@ impl MaskUniform {
 const _: () = {
     use std::mem::{offset_of, size_of};
     assert!(size_of::<MaskUniform>() == 112);
-    assert!(size_of::<Uniforms>() == 624 + 16 + MAX_MASKS * 112 + 32 + 64 + 32 + 32);
+    assert!(size_of::<Uniforms>() == 624 + 16 + MAX_MASKS * 112 + 32 + 64 + 32 + 32 + 144);
     assert!(offset_of!(Uniforms, wb) == 128);
     assert!(offset_of!(Uniforms, pixel) == 232);
     assert!(offset_of!(Uniforms, hsl) == 240);
@@ -228,6 +234,16 @@ impl Uniforms {
         let negative = lf_settings::negative::Negative::from_settings(s).filter(|_| f.develop);
         let defringe = lf_settings::defringe::Defringe::from_settings(s);
         let defringe_on = f.develop && !defringe.is_off();
+        let points = if f.develop {
+            lf_settings::point_colour::Points::from_settings(s).active()
+        } else {
+            Vec::new()
+        };
+        let mut point_a = [[0.0f32; 4]; 4];
+        let mut point_b = [[0.0f32; 4]; 4];
+        for (i, p) in points.iter().take(4).enumerate() {
+            [point_a[i], point_b[i]] = p.uniform();
+        }
         let aspect = f64::from(f.img_size[0]) / f64::from(f.img_size[1].max(1));
         let mut mask_uniforms = [MaskUniform::default(); MAX_MASKS];
         for (layer, (slot, mask)) in mask_uniforms.iter_mut().zip(&masks.0).enumerate() {
@@ -317,6 +333,9 @@ impl Uniforms {
             neg_dmax: negative.map_or([1.0; 4], |n| {
                 [n.dmax[0] as f32, n.dmax[1] as f32, n.dmax[2] as f32, 1.0]
             }),
+            point_n: [points.len().min(4) as f32, 0.0, 0.0, 0.0],
+            point_a,
+            point_b,
             fringe: defringe.uniform(),
             fringe_on: [
                 f32::from(u8::from(defringe_on)),

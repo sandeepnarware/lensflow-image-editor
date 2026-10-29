@@ -845,6 +845,16 @@ times how close its hue is to the purple or green hue chosen (full within 17.5°
 35°), times its saturation (smoothstep 0.05..0.2). `fringe_on.x` is 0 when both amounts are 0,
 so the pass is the web's.
 
+Point colour (`lf_settings::point_colour`, `desktop.pointColour`; `panels/point_colour.rs`)
+holds up to four points: the picked colour (hue, saturation, brightness, from the colour
+readout's picture under the pointer when `ToolKind::PointColour` is clicked; the picker then
+closes and the new point is chosen) and its range and shifts. The develop shader applies it on
+the edited colour after `develop()` and before the LUT (`point_colour`): each point weighs a
+colour by smoothsteps of its hue distance (8..22° times a reach of 0.4..2 from the range),
+saturation (0.15..0.4 times it) and brightness (0.2..0.5 times it), and not on near-greys; the
+weighted hue shift (±30°), saturation scale and luminance (towards white or black) are summed.
+Points with no shift are not sent (`Points::active`), so with none the pass is the web's.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

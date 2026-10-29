@@ -1094,6 +1094,7 @@ impl Develop {
             sample: Some(&opened.sample),
             picking_wb: self.tools.kind() == Some(ToolKind::WhiteBalance),
             targeting_hsl: self.tools.kind() == Some(ToolKind::Targeted),
+            picking_point: self.tools.kind() == Some(ToolKind::PointColour),
         };
         let panels = &mut self.panels;
         let mut out = PanelOutput::default();
@@ -1111,6 +1112,9 @@ impl Develop {
         }
         if out.target_hsl {
             self.toggle_tool(ToolKind::Targeted, toasts);
+        }
+        if out.pick_point {
+            self.toggle_tool(ToolKind::PointColour, toasts);
         }
         // The targeted adjustment follows the property the panel shows.
         if let Some(tools::Active::Targeted(t)) = &mut self.tools.active {

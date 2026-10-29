@@ -81,6 +81,9 @@ struct Uniforms {
     neg_dmax: vec4<f32>,    // each channel's largest density
     fringe: vec4<f32>,      // desktop only: defringe's purple amount, hue, green amount, hue
     fringe_on: vec4<f32>,   // on (0: the web's pass exactly), the hues' reach (degrees)
+    point_n: vec4<f32>,     // desktop only: Point colour points in use (0: the web's pass)
+    point_a: array<vec4<f32>, 4>, // each point's hue, saturation, brightness, range
+    point_b: array<vec4<f32>, 4>, // its hue shift (degrees), saturation and luminance shifts
 }
 
 @group(0) @binding(0) var u_img: texture_2d<f32>;    // the photo (after spots)
@@ -139,6 +142,38 @@ fn defringe(c: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
     let wg = u.fringe.z * (1.0 - smoothstep(reach * 0.5, reach, dg));
     let k = clamp(max(wp, wg) * near * smoothstep(0.05, 0.2, hsv.y), 0.0, 1.0);
     return mix(c, vec3<f32>(y), k);
+}
+
+// Desktop only: Point colour (`lf_settings::point_colour`) on the edited colour: each point's
+// shifts, weighted by how near the colour's hue, saturation and brightness are to the point's
+// (reaches growing with its range), never on near-greys.
+fn point_colour(c_in: vec3<f32>) -> vec3<f32> {
+    let c = clamp(c_in, vec3<f32>(0.0), vec3<f32>(1.0));
+    var hsv = rgb2hsv(c);
+    let y = luma(c);
+    let colourful = smoothstep(0.03, 0.1, hsv.y);
+    var hue = 0.0;
+    var sat = 0.0;
+    var lum = 0.0;
+    for (var i = 0u; i < u32(u.point_n.x); i++) {
+        let a = u.point_a[i];
+        let b = u.point_b[i];
+        let r = mix(0.4, 2.0, a.w);
+        let dh = abs(glsl_mod(hsv.x * 360.0 - a.x + 540.0, 360.0) - 180.0);
+        let w = (1.0 - smoothstep(8.0 * r, 22.0 * r, dh))
+            * (1.0 - smoothstep(0.15 * r, 0.4 * r, abs(hsv.y - a.y)))
+            * (1.0 - smoothstep(0.2 * r, 0.5 * r, abs(y - a.z)))
+            * colourful;
+        hue += w * b.x;
+        sat += w * b.y;
+        lum += w * b.z;
+    }
+    hsv.x = fract(hsv.x + hue / 360.0 + 1.0);
+    hsv.y = clamp(hsv.y * (1.0 + sat), 0.0, 1.0);
+    var out = hsv2rgb(hsv);
+    // Luminance: towards white or black, keeping the hue.
+    out = select(out * (1.0 + lum * 0.6), out + (vec3<f32>(1.0) - out) * lum * 0.6, lum > 0.0);
+    return out;
 }
 
 // Desktop only: colour calibration (`lf_settings::calibration`), in linear light, before every
@@ -467,6 +502,7 @@ fn fs_develop(in: VsOut) -> @location(0) vec4<f32> {
     }
     if (u.calib_tint.y != 0.0) { c = calibrate(c); }
     if (u.develop != 0u) { c = develop(c, uv, muv); }
+    if (u.point_n.x > 0.0) { c = point_colour(c); }
 
     if (u.lut_amount > 0.0) {
         // Desktop only: the LUT on the finished colour, each grid point at a texel centre.

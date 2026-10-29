@@ -66,6 +66,7 @@ close or competitors ship new features.
 - Colour readout under the cursor (Lightroom's RGB under the histogram): done.
 - Targeted adjustment for Colour mix (Lightroom's TAT): done.
 - Defringe (purple and green amount and hue, Lightroom's): done, Develop → Defringe.
+- Point Color (Lightroom 2023): done, Develop → Point colour (four colours).
 
 ### Tier 4: large or strategic
 
