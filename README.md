@@ -171,6 +171,10 @@ first use of a tool downloads the AI engine (ONNX Runtime) and that tool's model
 (the dialog says how much); each file is checked against a pinned SHA-256. They need the
 studio in good standing, and use none of the plan's server AI allowance.
 
+Replace sky (AI → Enhance → Sky): the sky found in the photo is swapped for the sky of a
+photo you choose, and the land takes on a little of its colour. Saved beside the photo as
+`<name>-NewSky.tif`.
+
 Lens blur (AI → Enhance → Lens blur): finds how far each part of the photo is (Depth
 Anything V2 Small, on this computer) and blurs what lies in front of and behind the subject
 as a wide aperture would, bright points blooming into discs; the subject (the nearest part

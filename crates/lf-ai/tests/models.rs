@@ -417,3 +417,33 @@ fn select_people_covers_the_person_on_a_real_portrait() {
     assert!(at(w / 2, h / 2) > 0.5, "the person's middle");
     assert!(at(3, 3) < 0.5 && at(w - 4, 3) < 0.5, "the top corners");
 }
+
+#[test]
+fn the_landscape_fixtures_sky_is_replaced_and_its_land_kept() {
+    let Some(engine) = engine(&lf_ai::sky::SKY_MODELS) else {
+        return;
+    };
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/sources/landscape.png"
+    );
+    let img = Rgb::from_rgba8(&image::open(path).expect("fixture").to_rgba8());
+    let mut sky = Rgb::new(64, 32);
+    for p in sky.data.chunks_mut(3) {
+        p.copy_from_slice(&[0.95, 0.55, 0.15]);
+    }
+    let out = lf_ai::sky::replace(&engine, &img, &sky).expect("replace");
+    let (w, h) = (img.w, img.h);
+    let top = out.at(w / 2, 2);
+    assert!(
+        top[0] > 0.8 && top[2] < 0.3,
+        "the new sky at the top: {top:?}"
+    );
+    let (a, b) = (img.at(w / 2, h - 3), out.at(w / 2, h - 3));
+    for c in 0..3 {
+        assert!(
+            (a[c] - b[c]).abs() < 0.12,
+            "the land stays near itself: {a:?} -> {b:?}"
+        );
+    }
+}

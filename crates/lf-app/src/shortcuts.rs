@@ -63,6 +63,8 @@ pub enum Action {
     AiDenoise,
     /// A shallow depth of field from the photo's depth, as a new photo.
     AiLensBlur,
+    /// The sky replaced by another photo's, as a new photo.
+    AiReplaceSky,
     /// Enlarge 2× or 4×; a new photo beside each.
     AiUpscale,
     /// Smooth the skin of the faces found; a new photo beside each.
@@ -175,6 +177,7 @@ impl Action {
             Action::Map => "Map",
             Action::AiDenoise => "AI Denoise…",
             Action::AiLensBlur => "Lens blur…",
+            Action::AiReplaceSky => "Replace sky…",
             Action::AiUpscale => "AI Upscale…",
             Action::AiRetouch => "Retouch portrait…",
             Action::AiCutout => "Remove background…",

@@ -19,6 +19,7 @@ pub mod lens_blur;
 pub mod objects;
 pub mod restore;
 pub mod segment;
+pub mod sky;
 pub mod tiles;
 
 use std::path::{Path, PathBuf};

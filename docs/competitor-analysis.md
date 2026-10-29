@@ -63,6 +63,7 @@ close or competitors ship new features.
 - Cloud sync and a mobile app (Lightroom, Capture One).
 - Video editing (Lightroom edits clips).
 - Generative fill and expand (Photoshop; needs cloud models).
+- ~~Sky replacement (Luminar)~~ (done: AI → Enhance → Replace sky).
 
 ## Recommended order
 

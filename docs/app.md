@@ -728,6 +728,13 @@ correction) becomes `AiTool::ObjectMask { u, v }`, run like the other AI masks
 asks Segment Anything's multi-mask decoder with the point and SAM's padding point, keeps the
 mask it rates best and softens its logits with a sigmoid.
 
+Replace sky (`AiTool::ReplaceSky`, a new `<name>-NewSky.tif`): the dialog asks for a photo of a
+sky (`AiDialog::sky`, `Purpose::SkyFile`; Start waits for it). `lf_ai::sky::replace` finds the
+sky with SkySeg at about 1024 pixels (refusing when there is none), softens the mask's edge,
+scales the new sky to cover the width and the sky's depth (top kept, centred), blends it in,
+and moves the land's colour `HARMONY` (0.2) of the way towards the ratio of the new sky's
+mean colour to the old one's.
+
 Lens blur (`AiTool::LensBlur`, a new 16-bit TIFF like AI Denoise) renders the photo with its
 edits, asks `lf_ai::depth` (Depth Anything V2 Small: shorter side about 518, sides multiples of
 14, ImageNet mean and std; its relative inverse depth spread to 0 far .. 1 near and resized to

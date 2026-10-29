@@ -30,6 +30,8 @@ pub enum AiTool {
     Retouch { amount: f32 },
     /// The main subject on a transparent background.
     Cutout,
+    /// The sky replaced by another photo's (the sky photo comes with the run).
+    ReplaceSky,
     /// A shallow depth of field from the photo's depth ([`lf_ai::lens_blur`]): how much blur
     /// and how deep the sharp zone is, each 0..1.
     LensBlur { amount: f32, range: f32 },
@@ -58,6 +60,7 @@ impl AiTool {
             AiTool::Upscale { .. } => lf_ai::restore::UPSCALE_MODELS.to_vec(),
             AiTool::Retouch { .. } => lf_ai::faces::FACE_MODELS.to_vec(),
             AiTool::Cutout => lf_ai::segment::SUBJECT_MODELS.to_vec(),
+            AiTool::ReplaceSky => lf_ai::sky::SKY_MODELS.to_vec(),
             AiTool::LensBlur { .. } => lf_ai::depth::DEPTH_MODELS.to_vec(),
             AiTool::Remove => lf_ai::inpaint::INPAINT_MODELS.to_vec(),
             AiTool::Mask { target } => target.models().to_vec(),
@@ -75,6 +78,7 @@ impl AiTool {
             AiTool::Upscale { .. } => "AI Upscale",
             AiTool::Retouch { .. } => "Retouch portrait",
             AiTool::Cutout => "Remove background",
+            AiTool::ReplaceSky => "Replace sky",
             AiTool::LensBlur { .. } => "Lens blur",
             AiTool::Remove => "Remove objects",
             AiTool::Mask { target } => match target {
@@ -106,6 +110,7 @@ impl AiTool {
             AiTool::Upscale { factor } => (format!("Upscaled-{factor}x"), "tif"),
             AiTool::Retouch { .. } => ("Retouched".into(), "tif"),
             AiTool::Cutout => ("Cutout".into(), "png"),
+            AiTool::ReplaceSky => ("NewSky".into(), "tif"),
             AiTool::LensBlur { .. } => ("LensBlur".into(), "tif"),
             AiTool::Remove => ("Removed".into(), "tif"),
             AiTool::Mask { .. }
@@ -211,6 +216,7 @@ pub fn run(
     ids: &[i64],
     tool: AiTool,
     painted: Option<&Gray>,
+    sky: Option<&Path>,
     mut progress: impl FnMut(Step),
     stop: &AtomicBool,
 ) -> Result<Report, String> {
@@ -265,7 +271,7 @@ pub fn run(
             })
         } else {
             one(
-                &gpu, engine, &catalog, id, &row.path, tool, painted, &mut tick, stop,
+                &gpu, engine, &catalog, id, &row.path, tool, painted, sky, &mut tick, stop,
             )
             .map(|path| {
                 log::info!("{} wrote {}", tool.name(), path.display());
@@ -293,6 +299,7 @@ fn one(
     path: &Path,
     tool: AiTool,
     painted: Option<&Gray>,
+    sky: Option<&Path>,
     progress: &mut dyn FnMut(usize, usize),
     stop: &AtomicBool,
 ) -> Result<PathBuf, String> {
@@ -313,6 +320,16 @@ fn one(
         AiTool::Denoise { strength } => {
             let done =
                 lf_ai::restore::denoise(engine, &img, strength, progress, stop).map_err(text)?;
+            write_tiff16(&out, &done)?;
+        }
+        AiTool::ReplaceSky => {
+            let sky = sky.ok_or_else(|| "Choose a photo of a sky first.".to_owned())?;
+            let sky =
+                image::open(sky).map_err(|e| format!("The sky photo could not be read ({e})."))?;
+            let sky = Rgb::from_rgba8(&sky.to_rgba8());
+            progress(0, 2);
+            let done = lf_ai::sky::replace(engine, &img, &sky).map_err(text)?;
+            progress(1, 2);
             write_tiff16(&out, &done)?;
         }
         AiTool::LensBlur { amount, range } => {

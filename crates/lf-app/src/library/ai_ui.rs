@@ -74,6 +74,23 @@ impl Library {
                 }
             }
             AiAction::Start(tool) => self.start_ai(tool, env),
+            AiAction::ChooseSky => {
+                super::import_ui::on_own_thread(
+                    env.jobs.reporter(),
+                    super::import_ui::Purpose::SkyFile,
+                    0,
+                    move || {
+                        let picked = rfd::FileDialog::new()
+                            .set_title("Choose a photo of a sky")
+                            .add_filter("Pictures", &["jpg", "jpeg", "png", "tif", "tiff", "webp"])
+                            .pick_file();
+                        Ok(picked.map(|path| super::import_ui::Chosen {
+                            path,
+                            network: false,
+                        }))
+                    },
+                );
+            }
             AiAction::ShowPeople => {
                 self.ai = None;
                 self.show_people(env);
@@ -120,6 +137,7 @@ impl Library {
         let ids = dialog.ids.clone();
         let stop = dialog.stop.clone();
         let painted = dialog.mask.clone();
+        let sky = dialog.sky.clone();
         let gpu = self.gpu.clone();
         let engine = self.ai_engine();
         let reporter = env.jobs.reporter();
@@ -132,6 +150,7 @@ impl Library {
                 &ids,
                 tool,
                 painted.as_deref(),
+                sky.as_deref(),
                 |step| reporter.send(Msg::AiProgress(step)),
                 &stop,
             );

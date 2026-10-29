@@ -43,6 +43,8 @@ pub enum Purpose {
     LutFile,
     /// A `.dcp` camera profile for Develop's RAW section.
     DcpFile,
+    /// Replace sky's sky photo.
+    SkyFile,
     /// The printer and paper profile for soft-proofing.
     ProofProfile,
     /// The application "Edit in external editor" uses.
@@ -214,6 +216,7 @@ impl Library {
             Purpose::Ingest(_) => "Choose a folder",
             Purpose::LutFile => "Choose a .cube LUT",
             Purpose::DcpFile => "Choose a .dcp camera profile",
+            Purpose::SkyFile => "Choose a photo of a sky",
             Purpose::ProofProfile => "Choose a printer and paper profile",
             Purpose::Editor => "Choose an application",
             Purpose::PrintPdf => "Save the PDF",
@@ -292,6 +295,18 @@ impl Library {
             }
             return;
         }
+        if purpose == Purpose::SkyFile {
+            match result {
+                Ok(Some(chosen)) => {
+                    if let Some(dialog) = &mut self.ai {
+                        dialog.sky = Some(chosen.path);
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => env.toasts.push(Level::Warning, e),
+            }
+            return;
+        }
         if purpose == Purpose::DcpFile {
             match result {
                 Ok(Some(chosen)) => self.import_dcp(chosen.path, env),
@@ -344,6 +359,7 @@ impl Library {
             | Purpose::Ingest(_)
             | Purpose::LutFile
             | Purpose::DcpFile
+            | Purpose::SkyFile
             | Purpose::ProofProfile
             | Purpose::Editor
             | Purpose::PrintPdf => {}

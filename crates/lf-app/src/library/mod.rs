@@ -1529,7 +1529,8 @@ impl Library {
             | Action::AiUpscale
             | Action::AiRetouch
             | Action::AiCutout
-            | Action::AiLensBlur => self.ai_ready(),
+            | Action::AiLensBlur
+            | Action::AiReplaceSky => self.ai_ready(),
             Action::AiRemoveObjects => {
                 self.ai_ready() && self.remove.is_none() && self.ai_targets().len() == 1
             }
@@ -1647,6 +1648,7 @@ impl Library {
             Action::Compare if self.compare.is_some() => self.close_compare(),
             Action::Compare => self.open_compare(env),
             Action::AiDenoise => self.open_ai(crate::ai_job::AiTool::Denoise { strength: 0.8 }),
+            Action::AiReplaceSky => self.open_ai(crate::ai_job::AiTool::ReplaceSky),
             Action::AiLensBlur => self.open_ai(crate::ai_job::AiTool::LensBlur {
                 amount: 0.6,
                 range: 0.2,

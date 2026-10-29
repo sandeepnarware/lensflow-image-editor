@@ -23,6 +23,9 @@ pub const ABOUT_RETOUCH: &str = "Finds the faces and smooths their skin, leaving
 pub const ABOUT_LENS_BLUR: &str = "Finds how far each part of the photo is and blurs what lies in front of and behind the subject, as a wide aperture would. Saved beside each photo as a new 16-bit TIFF.";
 pub const BLUR_AMOUNT: &str = "Blur amount";
 pub const FOCUS_RANGE: &str = "Focus range";
+pub const ABOUT_SKY_REPLACE: &str = "Finds the sky and puts the sky of another photo in its place, the land lit a little by its colour. Saved beside each photo as a new 16-bit TIFF.";
+pub const CHOOSE_SKY: &str = "Choose sky photo…";
+pub const NO_SKY_CHOSEN: &str = "No sky photo chosen yet.";
 pub const ABOUT_CUTOUT: &str = "Keeps the main subject and makes the background transparent, saved beside each photo as a PNG.";
 pub const ABOUT_SUBJECT: &str =
     "Finds the main subject and adds it as a mask, ready for its own adjustments.";
@@ -77,6 +80,8 @@ pub enum AiAction {
     ShowIssues,
     /// Find people: the People list, to name the groups found.
     ShowPeople,
+    /// Replace sky: pick the photo of a sky.
+    ChooseSky,
 }
 
 pub struct AiDialog {
@@ -88,6 +93,8 @@ pub struct AiDialog {
     pub download: u64,
     /// Remove objects: what was painted (the photo's shape).
     pub mask: Option<Arc<lf_ai::Gray>>,
+    /// Replace sky: the photo the new sky comes from.
+    pub sky: Option<std::path::PathBuf>,
 }
 
 impl AiDialog {
@@ -99,6 +106,7 @@ impl AiDialog {
             stop: Arc::new(AtomicBool::new(false)),
             download,
             mask: None,
+            sky: None,
         }
     }
 
@@ -169,6 +177,7 @@ impl AiDialog {
             AiTool::Upscale { .. } => ABOUT_UPSCALE,
             AiTool::Retouch { .. } => ABOUT_RETOUCH,
             AiTool::Cutout => ABOUT_CUTOUT,
+            AiTool::ReplaceSky => ABOUT_SKY_REPLACE,
             AiTool::LensBlur { .. } => ABOUT_LENS_BLUR,
             AiTool::Remove => ABOUT_REMOVE,
             AiTool::Mask {
@@ -223,6 +232,20 @@ impl AiDialog {
                     .on_hover_text("How deep the sharp zone round the subject is");
                 *range = depth / 100.0;
             }
+            AiTool::ReplaceSky => {
+                let mut choose = false;
+                ui.horizontal(|ui| {
+                    let name = self.sky.as_ref().and_then(|p| p.file_name()).map_or_else(
+                        || NO_SKY_CHOSEN.to_owned(),
+                        |n| n.to_string_lossy().into_owned(),
+                    );
+                    ui.label(name);
+                    choose = ui.button(CHOOSE_SKY).clicked();
+                });
+                if choose {
+                    return AiAction::ChooseSky;
+                }
+            }
             AiTool::Cutout
             | AiTool::Mask { .. }
             | AiTool::ObjectMask { .. }
@@ -239,7 +262,8 @@ impl AiDialog {
         ui.add_space(12.0);
         let mut action = AiAction::None;
         ui.horizontal(|ui| {
-            if ui.button(START).clicked() {
+            let ready = self.tool != AiTool::ReplaceSky || self.sky.is_some();
+            if ui.add_enabled(ready, egui::Button::new(START)).clicked() {
                 action = AiAction::Start(self.tool);
             }
             if ui.button(CANCEL).clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
