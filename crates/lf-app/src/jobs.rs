@@ -198,6 +198,11 @@ pub enum Msg {
         root: PathBuf,
         result: Result<usize, String>,
     },
+    /// Remove objects' "Select people": the people found in photo `id` (the mask's size).
+    PeopleSelected {
+        id: i64,
+        result: Result<lf_ai::Gray, String>,
+    },
     /// Auto-sync made a change on other photos (`root`: the catalogue): which, and which failed.
     Synced {
         root: PathBuf,
@@ -816,6 +821,7 @@ pub(crate) mod owners {
             | Msg::LutImported(..)
             | Msg::DcpImported(..)
             | Msg::Synced { .. }
+            | Msg::PeopleSelected { .. }
             | Msg::Renamed { .. }
             | Msg::EditInDone(..)
             | Msg::PrintProgress { .. }
@@ -951,6 +957,10 @@ pub(crate) mod owners {
             },
             Msg::Renamed {
                 root: dir.to_path_buf(),
+                result: Err("no".into()),
+            },
+            Msg::PeopleSelected {
+                id: 1,
                 result: Err("no".into()),
             },
             Msg::EditInDone(Err("no".into())),

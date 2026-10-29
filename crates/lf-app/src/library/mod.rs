@@ -937,6 +937,7 @@ impl Library {
             } => self.person_photos_loaded(root, group, result, env),
             Msg::PeopleChanged { root, result } => self.people_changed(root, result, env),
             Msg::Synced { root, ids, failed } => self.synced(root, ids, failed, env),
+            Msg::PeopleSelected { id, result } => self.people_selected(id, result),
             Msg::Renamed { root, result } => self.renamed(root, result, env),
             Msg::DcpImported(result) => match result {
                 Ok(name) => {
@@ -1459,7 +1460,7 @@ impl Library {
         self.rename_dialog(ui.ctx(), env);
         self.people_dialogs(ui.ctx(), env);
         self.ai_dialog(ui.ctx(), env);
-        self.remove_dialog(ui.ctx());
+        self.remove_dialog(ui.ctx(), env);
         self.auto_stack_dialog(ui.ctx(), env);
         self.reveal_active = false;
     }

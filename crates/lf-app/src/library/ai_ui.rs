@@ -286,6 +286,12 @@ impl Library {
         self.remove = Some(RemoveDialog::new(id));
     }
 
+    pub(super) fn people_selected(&mut self, id: i64, result: Result<lf_ai::Gray, String>) {
+        if let Some(dialog) = self.remove.as_mut().filter(|d| d.id == id) {
+            dialog.people_found(result);
+        }
+    }
+
     pub(super) fn remove_rendered(
         &mut self,
         id: i64,
@@ -296,13 +302,28 @@ impl Library {
         }
     }
 
-    pub(super) fn remove_dialog(&mut self, ctx: &egui::Context) {
+    pub(super) fn remove_dialog(&mut self, ctx: &egui::Context, env: &mut Env) {
         let Some(dialog) = &mut self.remove else {
             return;
         };
         match dialog.show(ctx) {
             RemoveAction::None => {}
             RemoveAction::Close => self.remove = None,
+            RemoveAction::SelectPeople(picture) => {
+                let id = dialog.id;
+                let engine = self.ai_engine();
+                env.jobs.spawn(Lane::Long, "select people", move || {
+                    let target = lf_ai::segment::Target::People;
+                    let stop = std::sync::atomic::AtomicBool::new(false);
+                    let result = engine
+                        .prepare(target.models(), &mut |_, _| {}, &stop)
+                        .and_then(|()| {
+                            lf_ai::segment::mask(&engine, target, &picture, picture.w, picture.h)
+                        })
+                        .map_err(|e| e.to_string());
+                    Msg::PeopleSelected { id, result }
+                });
+            }
             RemoveAction::Remove(mask) => {
                 let id = dialog.id;
                 self.remove = None;

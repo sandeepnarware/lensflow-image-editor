@@ -807,6 +807,12 @@ base curve stays) → linear sRGB. A profile with no forward matrix uses the fil
 matrix. The frame cache key adds the profile's SHA-256 (or "missing"), so a replaced file
 develops again; a profile that is not loaded is left out and the RAW panel says so.
 
+Remove objects' "Select people" sends the dialog's picture (kept at the mask's size) to the
+`Long` lane, which runs the people model (`Target::People`, downloading it once if needed) and
+answers `Msg::PeopleSelected`; everyone found (coverage ≥ 0.5) is widened by 0.8 % of the long
+edge (`remove::widen`, rows then columns) and added to what is painted. The user rubs out
+whoever should stay; Remove then fills the rest with LaMa as for any painted mask.
+
 Depth masks (Masks → Foreground, Background) are `Target`s sent to `lf_ai::depth::mask`: the
 depth map at the mask's size, split where Otsu's threshold best separates near from far (the
 middle of the best-scoring run, so an empty gap splits in its centre), with a soft edge 0.08

@@ -399,3 +399,21 @@ fn the_landscape_fixtures_foreground_mask_is_at_the_bottom() {
     assert!(at(&fg, h - 2) > 0.9 && at(&fg, 2) < 0.1, "foreground below");
     assert!(at(&bg, 2) > 0.9 && at(&bg, h - 2) < 0.1, "background above");
 }
+
+/// Remove objects' "Select people": on a real portrait (`LF_AI_FACE_PHOTO`), the person is
+/// selected and the room behind is not.
+#[test]
+fn select_people_covers_the_person_on_a_real_portrait() {
+    let Some(engine) = engine(&lf_ai::segment::PEOPLE_MODELS) else {
+        return;
+    };
+    let Some(path) = std::env::var_os("LF_AI_FACE_PHOTO") else {
+        return;
+    };
+    let img = Rgb::from_rgba8(&image::open(path).expect("photo").to_rgba8());
+    let (w, h) = (img.w / 2, img.h / 2);
+    let m = lf_ai::segment::mask(&engine, Target::People, &img, w, h).expect("mask");
+    let at = |x: usize, y: usize| m.data[y * w + x];
+    assert!(at(w / 2, h / 2) > 0.5, "the person's middle");
+    assert!(at(3, 3) < 0.5 && at(w - 4, 3) < 0.5, "the top corners");
+}

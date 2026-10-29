@@ -5,6 +5,10 @@
 //!
 //! The mask is kept at most [`MASK_EDGE`] pixels on its long side (removal feathers its edge
 //! anyway), so painting stays quick and the red overlay is cheap to redraw.
+//!
+//! "Select people" paints every person the people model finds (widened a little, so their
+//! edges and shadows' start go too); rubbing out whoever should stay, then Remove, takes the
+//! rest away (Lightroom's distraction removal of people).
 
 use crate::theme;
 use eframe::egui::{self, Color32, Key, Pos2, Rect, RichText, Sense, Vec2};
@@ -17,6 +21,12 @@ pub const CLEAR: &str = "Clear";
 pub const CANCEL: &str = "Cancel";
 pub const SIZE: &str = "Brush size";
 pub const RENDERING: &str = "Rendering the photo…";
+pub const SELECT_PEOPLE: &str = "Select people";
+pub const SELECTING: &str = "Finding the people…";
+pub const NO_PEOPLE: &str = "No people were found.";
+pub const PEOPLE_HINT: &str = "Rub out (Alt-drag) whoever should stay, then Remove.";
+/// How much a found person is widened, as a share of the mask's long edge.
+const WIDEN: f32 = 0.008;
 
 /// The mask's long edge, in pixels.
 pub const MASK_EDGE: usize = 1024;
@@ -26,6 +36,8 @@ pub enum RemoveAction {
     None,
     /// Remove what this mask (the photo's shape) paints.
     Remove(Gray),
+    /// Find the people in this picture (the mask's size) and paint them.
+    SelectPeople(lf_ai::Rgb),
     Close,
 }
 
@@ -44,6 +56,11 @@ pub struct RemoveDialog {
     /// The brush's radius, as a fraction of the mask's long edge.
     pub size: f32,
     last: Option<Pos2>,
+    /// The photo at the mask's size (what "Select people" looks at).
+    picture: Option<lf_ai::Rgb>,
+    /// "Select people" is running; what it last said.
+    pub selecting: bool,
+    note: Option<&'static str>,
 }
 
 impl RemoveDialog {
@@ -60,6 +77,37 @@ impl RemoveDialog {
             dirty: false,
             size: 0.02,
             last: None,
+            picture: None,
+            selecting: false,
+            note: None,
+        }
+    }
+
+    /// "Select people" answered: everyone found is painted (added to what is painted).
+    pub fn people_found(&mut self, result: Result<Gray, String>) {
+        self.selecting = false;
+        match result {
+            Ok(found) if found.w == self.mw && found.h == self.mh => {
+                let people: Vec<bool> = found.data.iter().map(|&v| v >= 0.5).collect();
+                if !people.contains(&true) {
+                    self.note = Some(NO_PEOPLE);
+                    return;
+                }
+                let r = (WIDEN * self.mw.max(self.mh) as f32).ceil() as usize;
+                for (m, on) in self
+                    .mask
+                    .iter_mut()
+                    .zip(widen(&people, self.mw, self.mh, r))
+                {
+                    if on {
+                        *m = 255;
+                    }
+                }
+                self.dirty = true;
+                self.note = Some(PEOPLE_HINT);
+            }
+            Ok(_) => self.note = Some(NO_PEOPLE),
+            Err(e) => log::warn!("selecting people failed: {e}"),
         }
     }
 
@@ -72,6 +120,7 @@ impl RemoveDialog {
                 self.mw = ((f64::from(img.width()) * k).round() as usize).max(1);
                 self.mh = ((f64::from(img.height()) * k).round() as usize).max(1);
                 self.mask = vec![0; self.mw * self.mh];
+                self.picture = Some(lf_ai::Rgb::from_rgba8(&img).resized(self.mw, self.mh));
                 self.pending = Some(img);
             }
             Err(e) => self.failed = Some(e),
@@ -218,8 +267,24 @@ impl RemoveDialog {
                 if ui.button(CLEAR).clicked() {
                     self.mask.fill(0);
                     self.dirty = true;
+                    self.note = None;
+                }
+                let ready = self.picture.is_some() && !self.selecting;
+                if ui
+                    .add_enabled(ready, egui::Button::new(SELECT_PEOPLE))
+                    .clicked()
+                    && let Some(picture) = &self.picture
+                {
+                    self.selecting = true;
+                    self.note = None;
+                    action = RemoveAction::SelectPeople(picture.clone());
                 }
             });
+            if self.selecting {
+                ui.label(RichText::new(SELECTING).color(theme::MUTED));
+            } else if let Some(note) = self.note {
+                ui.label(RichText::new(note).color(theme::MUTED));
+            }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if ui
@@ -237,6 +302,47 @@ impl RemoveDialog {
     }
 }
 
+/// `on` (a `w × h` grid) grown by `r` pixels: every pixel within `r` of one that is on.
+fn widen(on: &[bool], w: usize, h: usize, r: usize) -> Vec<bool> {
+    // Rows then columns, each through the distance to the nearest pixel that is on (a square
+    // grow, quick at any radius).
+    let pass = |src: &[bool], horizontal: bool| -> Vec<bool> {
+        let mut out = vec![false; w * h];
+        let (len, lines) = if horizontal { (w, h) } else { (h, w) };
+        let at = |line: usize, i: usize| {
+            if horizontal {
+                line * w + i
+            } else {
+                i * w + line
+            }
+        };
+        for line in 0..lines {
+            let mut last: Option<usize> = None;
+            let mut near = vec![usize::MAX; len];
+            for i in 0..len {
+                if src[at(line, i)] {
+                    last = Some(i);
+                }
+                if let Some(l) = last {
+                    near[i] = i - l;
+                }
+            }
+            last = None;
+            for i in (0..len).rev() {
+                if src[at(line, i)] {
+                    last = Some(i);
+                }
+                if let Some(l) = last {
+                    near[i] = near[i].min(l - i);
+                }
+                out[at(line, i)] = near[i] <= r;
+            }
+        }
+        out
+    };
+    pass(&pass(on, true), false)
+}
+
 fn unit() -> Rect {
     Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0))
 }
@@ -244,6 +350,42 @@ fn unit() -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn people_found_are_painted_widened_and_added() {
+        let mut d = RemoveDialog::new(1);
+        d.rendered(Ok(image::RgbaImage::new(100, 50)));
+        assert!(d.picture.is_some());
+        d.dab(10.0, 10.0, false);
+        let mut found = Gray {
+            w: 100,
+            h: 50,
+            data: vec![0.0; 5000],
+        };
+        found.data[25 * 100 + 50] = 0.9;
+        d.people_found(Ok(found));
+        assert_eq!(d.mask[10 * 100 + 10], 255, "what was painted stays");
+        assert_eq!(d.mask[25 * 100 + 50], 255);
+        assert_eq!(d.mask[25 * 100 + 51], 255, "widened");
+        assert_eq!(d.mask[25 * 100 + 60], 0);
+        assert_eq!(d.note, Some(PEOPLE_HINT));
+        d.people_found(Ok(Gray {
+            w: 100,
+            h: 50,
+            data: vec![0.1; 5000],
+        }));
+        assert_eq!(d.note, Some(NO_PEOPLE));
+    }
+
+    #[test]
+    fn widening_reaches_r_pixels_each_way() {
+        let (w, h) = (9, 9);
+        let mut on = vec![false; w * h];
+        on[4 * w + 4] = true;
+        let out = widen(&on, w, h, 2);
+        assert!(out[4 * w + 6] && out[2 * w + 4] && out[6 * w + 6]);
+        assert!(!out[4 * w + 7] && !out[w + 4]);
+    }
 
     #[test]
     fn painting_and_rubbing_out_change_the_mask() {
