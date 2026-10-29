@@ -339,10 +339,91 @@ const fn cmd_alt_shift(k: Key) -> KeyboardShortcut {
 }
 
 /// A keyboard map: each entry binds one key to one action (an action may have two keys).
-pub struct Map(pub &'static [(Action, KeyboardShortcut)]);
+pub struct Map(pub std::borrow::Cow<'static, [(Action, KeyboardShortcut)]>);
+
+/// A key the user chose for an action (Help → Keyboard shortcuts), kept in the preferences:
+/// the action by its menu label, the key by its name and modifiers. It replaces the action's
+/// own keys, and the key is taken from any other action that had it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct KeyOverride {
+    pub action: String,
+    pub key: String,
+    #[serde(default)]
+    pub ctrl: bool,
+    #[serde(default)]
+    pub shift: bool,
+    #[serde(default)]
+    pub alt: bool,
+}
+
+impl KeyOverride {
+    pub fn new(action: Action, shortcut: KeyboardShortcut) -> KeyOverride {
+        KeyOverride {
+            action: action.label().to_owned(),
+            key: shortcut.logical_key.name().to_owned(),
+            ctrl: shortcut.modifiers.command || shortcut.modifiers.ctrl,
+            shift: shortcut.modifiers.shift,
+            alt: shortcut.modifiers.alt,
+        }
+    }
+
+    fn shortcut(&self) -> Option<KeyboardShortcut> {
+        let key = Key::from_name(&self.key)?;
+        let mut m = Modifiers::NONE;
+        if self.ctrl {
+            m = m.plus(Modifiers::COMMAND);
+        }
+        if self.shift {
+            m = m.plus(Modifiers::SHIFT);
+        }
+        if self.alt {
+            m = m.plus(Modifiers::ALT);
+        }
+        Some(KeyboardShortcut::new(m, key))
+    }
+}
+
+/// The default map with `overrides` laid over it (see [`KeyOverride`]); an override naming
+/// an action or key this version does not know is skipped.
+pub fn with_overrides(overrides: &[KeyOverride]) -> Vec<(Action, KeyboardShortcut)> {
+    let mut out: Vec<(Action, KeyboardShortcut)> = MAP.0.to_vec();
+    for o in overrides {
+        let (Some(action), Some(shortcut)) = (
+            MAP.0
+                .iter()
+                .map(|(a, _)| *a)
+                .find(|a| a.label() == o.action),
+            o.shortcut(),
+        ) else {
+            continue;
+        };
+        out.retain(|(a, s)| *a != action && *s != shortcut);
+        out.push((action, shortcut));
+    }
+    out
+}
+
+static CURRENT: std::sync::RwLock<Option<Vec<(Action, KeyboardShortcut)>>> =
+    std::sync::RwLock::new(None);
+
+/// Puts the user's keys in place (at start and after each change).
+pub fn set_overrides(overrides: &[KeyOverride]) {
+    let map = (!overrides.is_empty()).then(|| with_overrides(overrides));
+    if let Ok(mut c) = CURRENT.write() {
+        *c = map;
+    }
+}
+
+/// The keyboard map in force: [`MAP`] with the user's keys.
+pub fn current() -> Map {
+    match CURRENT.read().ok().and_then(|c| c.clone()) {
+        Some(v) => Map(std::borrow::Cow::Owned(v)),
+        None => Map(MAP.0.clone()),
+    }
+}
 
 /// The window's keyboard map.
-pub const MAP: Map = Map(&[
+pub const MAP: Map = Map(std::borrow::Cow::Borrowed(&[
     (Action::Survey, key(Key::N)),
     (Action::RotateLeft, cmd(Key::OpenBracket)),
     (Action::RotateRight, cmd(Key::CloseBracket)),
@@ -403,12 +484,12 @@ pub const MAP: Map = Map(&[
     (Action::Label(Some(Label::Green)), key(Key::Num8)),
     (Action::Label(Some(Label::Blue)), key(Key::Num9)),
     (Action::About, key(Key::F1)),
-]);
+]));
 
 impl Map {
     /// Every entry, in the order Help lists them.
-    pub fn entries(&self) -> &'static [(Action, KeyboardShortcut)] {
-        self.0
+    pub fn entries(&self) -> &[(Action, KeyboardShortcut)] {
+        &self.0
     }
 
     /// The first key bound to `action` (the one a menu shows).
@@ -505,7 +586,8 @@ impl Keys {
         if !free {
             return Vec::new();
         }
-        ctx.input_mut(|i| MAP.fired(i, |a| !(just_freed && a == Action::LeaveTool) && enabled(a)))
+        let map = current();
+        ctx.input_mut(|i| map.fired(i, |a| !(just_freed && a == Action::LeaveTool) && enabled(a)))
     }
 }
 
@@ -694,5 +776,30 @@ mod tests {
         let fired = MAP.fired(&mut input, |a| a != Action::Redo && a != Action::DeleteSpot);
         assert_eq!(fired, vec![Action::Library]);
         assert_eq!(input.events.len(), 2, "the redo and delete presses stay");
+    }
+
+    #[test]
+    fn a_users_key_replaces_the_actions_own_and_is_taken_from_another() {
+        let map = Map(std::borrow::Cow::Owned(with_overrides(&[
+            KeyOverride::new(Action::Export, cmd(Key::K)),
+            KeyOverride::new(Action::Library, key(Key::D)),
+            KeyOverride {
+                action: "No such action".into(),
+                key: "K".into(),
+                ctrl: false,
+                shift: false,
+                alt: false,
+            },
+        ])));
+        assert_eq!(map.shortcut(Action::Export), Some(cmd(Key::K)));
+        assert!(
+            !map.entries().contains(&(Action::Export, cmd_shift(Key::E))),
+            "its own key is gone"
+        );
+        assert_eq!(map.best(Key::D, Modifiers::NONE), Some(Action::Library));
+        assert_eq!(map.shortcut(Action::Develop), None, "D was taken");
+        // Back in the preferences and out again, the same key.
+        let o = KeyOverride::new(Action::Export, cmd_shift(Key::F2));
+        assert_eq!(o.shortcut(), Some(cmd_shift(Key::F2)));
     }
 }

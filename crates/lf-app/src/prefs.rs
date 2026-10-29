@@ -103,6 +103,8 @@ pub struct Prefs {
     pub grid_cell: f32,
     /// The Metadata panel's presets: a creator, a copyright and keywords applied in one go.
     pub meta_presets: Vec<MetaPreset>,
+    /// Keys the user chose (Help → Keyboard shortcuts), over the default map.
+    pub shortcuts: Vec<crate::shortcuts::KeyOverride>,
 }
 
 /// A metadata preset (an empty field is left alone when applied).
@@ -138,6 +140,7 @@ impl Default for Prefs {
             auto_import: None,
             grid_cell: crate::library::grid::CELL,
             meta_presets: Vec::new(),
+            shortcuts: Vec::new(),
             develop_quality: DevelopQuality::default(),
             proof_profile: None,
         }
@@ -217,6 +220,13 @@ mod tests {
                 creator: Some("Asha".into()),
                 copyright: None,
                 keywords: vec!["wedding".into()],
+            }],
+            shortcuts: vec![crate::shortcuts::KeyOverride {
+                action: "Export…".into(),
+                key: "K".into(),
+                ctrl: true,
+                shift: false,
+                alt: false,
             }],
             grid_cell: 260.0,
             auto_import: Some(AutoImportPrefs {

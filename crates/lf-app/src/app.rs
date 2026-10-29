@@ -79,6 +79,8 @@ pub struct App {
     /// egui's renderer, for the Develop preview's texture (a restarted library needs it too).
     render_state: Option<RenderState>,
     prefs: Prefs,
+    /// Help → Keyboard shortcuts: the action waiting for its new key.
+    keys_capture: Option<Action>,
     jobs: Jobs,
     toasts: Toasts,
     logo: Option<egui::TextureHandle>,
@@ -125,6 +127,7 @@ impl App {
             log::error!("{e}");
         }
         let prefs = Prefs::load(&dirs.config);
+        crate::shortcuts::set_overrides(&prefs.shortcuts);
         let flow = SessionFlow::new(&prefs, &dirs.config);
         let render_state = cc.wgpu_render_state.clone();
         let library = gpu.as_ref().ok().map(|gpu| {
@@ -138,6 +141,7 @@ impl App {
             gpu,
             render_state,
             prefs,
+            keys_capture: None,
             jobs: Jobs::new(cc.egui_ctx.clone()),
             toasts: Toasts::default(),
             logo: load_logo(&cc.egui_ctx),
@@ -375,11 +379,25 @@ impl App {
                     }
                 }
             }
-            Some(Dialog::Keys) => {
-                if keys::show(ctx) {
+            Some(Dialog::Keys) => match keys::show(ctx, &mut self.keys_capture) {
+                keys::KeysAction::None => {}
+                keys::KeysAction::Close => {
                     self.dialog = None;
+                    self.keys_capture = None;
                 }
-            }
+                keys::KeysAction::Set(action, shortcut) => {
+                    let o = crate::shortcuts::KeyOverride::new(action, shortcut);
+                    self.prefs.shortcuts.retain(|x| x.action != o.action);
+                    self.prefs.shortcuts.push(o);
+                    crate::shortcuts::set_overrides(&self.prefs.shortcuts);
+                    self.save_prefs();
+                }
+                keys::KeysAction::Reset => {
+                    self.prefs.shortcuts.clear();
+                    crate::shortcuts::set_overrides(&self.prefs.shortcuts);
+                    self.save_prefs();
+                }
+            },
             Some(Dialog::Preferences) => {
                 let root = self
                     .library

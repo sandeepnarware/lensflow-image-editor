@@ -257,6 +257,10 @@ shown alone (nearest first) until the filter is cleared.
 Painter (Home → Selection → Painter): choose a keyword, a star rating, a colour label or a flag,
 then click thumbnails (or drag across them) to give it to each; the selection stays as it is.
 
+Your own keyboard shortcuts (Help → Keyboard shortcuts): "Change…" beside an action, then press
+the key you want (with Ctrl, Shift or Alt); it is that action's alone from then on. "Reset all"
+goes back to the defaults.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

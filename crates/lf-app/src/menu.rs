@@ -10,7 +10,7 @@
 //! and the fold live in egui's memory (they are not preferences).
 
 use crate::session::Session;
-use crate::shortcuts::{Action, MAP};
+use crate::shortcuts::Action;
 use crate::theme;
 use eframe::egui::{self, Color32, Sense};
 use lf_catalog::cull::{Flag, Label};
@@ -675,7 +675,7 @@ fn button(ui: &mut egui::Ui, action: Action, enabled: bool, on: bool) -> egui::R
     };
     let (rect, response) = ui.allocate_exact_size(egui::vec2(BUTTON_W, BUTTON_H), sense);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, action.label()));
-    let tip = match MAP.shortcut(action) {
+    let tip = match crate::shortcuts::current().shortcut(action) {
         Some(key) => format!("{} ({})", action.label(), ui.ctx().format_shortcut(&key)),
         None => action.label().to_owned(),
     };

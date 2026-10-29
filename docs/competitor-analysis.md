@@ -85,6 +85,7 @@ close or competitors ship new features.
 - Sync metadata (Lightroom's): done, the Metadata panel.
 - Find similar photos: done, Home → Stacks → Similar (by fingerprint).
 - Painter tool (Lightroom's spray can): done, Home → Selection → Painter.
+- Customizable keyboard shortcuts (Capture One's): done, Help → Keyboard shortcuts.
 
 ### Tier 4: large or strategic
 

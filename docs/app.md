@@ -960,6 +960,14 @@ instead `touch` the cell the pointer is on with the button down (each photo once
 `lift` when the button comes up). After the grid is drawn, `apply_paint` sets the mark as chosen
 (`set_mark`, never toggled) or adds the keyword (`change_meta`).
 
+Keyboard shortcuts can be changed: `shortcuts::MAP` stays the default (a `Cow`), and
+`prefs.shortcuts` holds `KeyOverride`s (the action by its menu label, the key by egui's key
+name and Ctrl/Shift/Alt). `with_overrides` lays them over the defaults (an action's own keys
+replaced; another action holding the key loses it; an unknown action or key skipped), and
+`set_overrides` puts the result in a process-wide map that `shortcuts::current()` returns, read
+by the key handling, the ribbon's tooltips and Help. Help → Keyboard shortcuts' "Change…" waits
+for the next key (Esc cancels; `App::keys_capture`).
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

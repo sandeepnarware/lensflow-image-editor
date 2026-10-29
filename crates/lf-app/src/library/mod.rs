@@ -48,7 +48,7 @@ use crate::dialogs::match_reference::{
 };
 use crate::jobs::{Jobs, Lane, Msg};
 use crate::prefs::Prefs;
-use crate::shortcuts::{Action, Keys, MAP};
+use crate::shortcuts::{Action, Keys};
 use crate::theme;
 use crate::thumbs_ui::{ThumbEvent, Thumbs};
 use crate::toast::{Level, Toasts};
@@ -1879,7 +1879,7 @@ impl Library {
         let held = !blocked
             && crate::shortcuts::keys_free(ctx)
             && matches!(self.mode, Mode::Develop(_))
-            && ctx.input(|i| MAP.is_held(i, Action::BeforeAfter));
+            && ctx.input(|i| crate::shortcuts::current().is_held(i, Action::BeforeAfter));
         self.develop.set_before_held(held);
         let mut keys = self.keys;
         let fired = keys.read(ctx, blocked, |a| self.enabled(a) || others(a));
