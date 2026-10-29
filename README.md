@@ -218,6 +218,9 @@ judge them; remembered.
 Survey (`N`, Library → Survey): two to twelve selected photos in a grid, zoomed and panned
 together; × on a photo takes it out of the survey and the selection.
 
+History (Develop, under Versions): every edit step of the open photo, newest first, named by
+what it changed ("Exposure", "Crop", "Masks +2"); click one to go back (or forward) to it.
+
 Show clipping (`J`, View → Clipping): in Develop, highlights clipped to white show
 red and shadows crushed to black show blue, while you edit. The preview only:
 exports never carry it.

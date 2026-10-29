@@ -73,6 +73,8 @@ pub enum EditOp {
     Undo,
     Redo,
     Reset(&'static [GroupKey]),
+    /// The History panel: go to this step.
+    Jump(i64),
 }
 
 /// Opens the catalogue connection once.
@@ -222,6 +224,7 @@ impl EditSession {
             EditOp::Undo => edit.undo(catalog),
             EditOp::Redo => edit.redo(catalog),
             EditOp::Reset(groups) => edit.reset_groups(groups, catalog),
+            EditOp::Jump(id) => edit.jump(catalog, id),
         };
         if !matches!(&result, Err(e) if e.is_busy()) {
             self.busy = 0;
@@ -240,7 +243,7 @@ impl EditSession {
                 self.busy += 1;
                 let dirty = self.edit.as_ref().is_some_and(|e| e.dirty);
                 self.retry_at = dirty.then(|| Instant::now() + RETRY_AFTER);
-                let stepping = matches!(op, EditOp::Undo | EditOp::Redo);
+                let stepping = matches!(op, EditOp::Undo | EditOp::Redo | EditOp::Jump(_));
                 // Logged once per streak: at the first refusal and when the user is told.
                 if self.busy == 1 || self.busy == BUSY_TOASTS_AFTER || stepping {
                     log::info!(

@@ -23,6 +23,7 @@ pub mod edit_state;
 pub mod editing;
 pub mod extras;
 pub mod histogram;
+pub mod history_panel;
 pub mod info;
 mod navigator;
 pub mod open;
@@ -142,6 +143,8 @@ pub struct Develop {
     local_ai: bool,
     /// View → Info: the file's facts over the preview.
     info_overlay: bool,
+    /// The History section's rows.
+    history: history_panel::HistoryUi,
     /// A preset's adaptive AI masks still to find in the open photo.
     adaptive: extras::AdaptiveQueue,
     /// Soft-proofing through this ICC profile (View → Soft proof), and what the proof LUT was
@@ -211,6 +214,7 @@ impl Develop {
             local_ai: false,
             adaptive: extras::AdaptiveQueue::default(),
             info_overlay: false,
+            history: history_panel::HistoryUi::default(),
             proof: None,
             proof_key: None,
             before_held: false,
@@ -306,6 +310,11 @@ impl Develop {
 
     pub fn redo(&mut self, toasts: &mut Toasts) {
         self.run_edit(EditOp::Redo, toasts);
+    }
+
+    /// The History panel: back (or forward) to step `id`.
+    pub fn jump_history(&mut self, id: i64, toasts: &mut Toasts) {
+        self.run_edit(EditOp::Jump(id), toasts);
     }
 
     /// Puts `groups` back to their defaults (one history step).

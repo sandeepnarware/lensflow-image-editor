@@ -60,6 +60,19 @@ impl EditState {
         self.step(catalog, true)
     }
 
+    /// Goes to history step `id` (the History panel), a gesture in progress committed first.
+    pub fn jump(&mut self, catalog: &Catalog, id: i64) -> Result<Option<Sidecar>> {
+        self.commit(catalog)?;
+        let jumped = edits::jump(catalog, self.photo_id, id)?;
+        if let Some(sidecar) = &jumped {
+            self.settings = sidecar.settings.clone();
+            self.committed = sidecar.settings.clone();
+            self.dirty = false;
+        }
+        self.refresh_steps(catalog);
+        Ok(jumped)
+    }
+
     /// Steps forward again. `None` at the newest step.
     pub fn redo(&mut self, catalog: &Catalog) -> Result<Option<Sidecar>> {
         self.step(catalog, false)
@@ -106,6 +119,11 @@ impl EditState {
             Ok(steps) => self.steps = steps,
             Err(e) => log::warn!("could not read the history of photo {}: {e}", self.photo_id),
         }
+    }
+
+    /// How many steps undo and redo can take: `(back, forward)`.
+    pub fn steps(&self) -> (i64, i64) {
+        self.steps
     }
 
     pub fn can_undo(&self) -> bool {

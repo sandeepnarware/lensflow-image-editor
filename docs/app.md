@@ -889,6 +889,13 @@ out by `compare::grid_of` (side by side up to three, then the squarest grid a li
 tall); each cell has × (`leave_survey`: out of the survey and the selection; one left closes
 it). Compare's hint lost its "⇄", which egui's fonts lack (Compare panicked on opening).
 
+The History section (`develop/history_panel.rs`) lists `lf_catalog::edits::history` (the photo's
+steps, oldest first, and the cursor), newest first, each named by `describe` (the first setting
+that differs from the step before, desktop keys by their own name, "+n" for more; the first is
+"Opened"). It is read again only when the photo, its committed settings or its undo position
+change. A click is `EditOp::Jump` → `EditState::jump` → `edits::jump` (the cursor moved to
+that step, its settings put back, a sidecar written), as several undos would.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

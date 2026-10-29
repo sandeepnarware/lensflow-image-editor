@@ -283,6 +283,67 @@ fn step(catalog: &Catalog, photo_id: i64, back: bool) -> Result<Option<Sidecar>>
     Ok(Some(sidecar))
 }
 
+/// One step of a photo's history.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HistoryEntry {
+    pub id: i64,
+    pub settings: EditSettings,
+    pub created_at: String,
+}
+
+/// A photo's history, oldest first, and the step it stands at (none: never edited).
+pub fn history(catalog: &Catalog, photo_id: i64) -> Result<(Vec<HistoryEntry>, Option<i64>)> {
+    let mut st = catalog
+        .conn
+        .prepare("SELECT id, settings, created_at FROM history WHERE photo_id = ?1 ORDER BY id")?;
+    let rows = st
+        .query_map([photo_id], |r| {
+            Ok(HistoryEntry {
+                id: r.get(0)?,
+                settings: EditSettings::from_json_str(&r.get::<_, String>(1)?),
+                created_at: r.get(2)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let cursor: Option<i64> = catalog
+        .conn
+        .query_row(
+            "SELECT history_id FROM history_cursor WHERE photo_id = ?1",
+            [photo_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok((rows, cursor))
+}
+
+/// Moves the photo's history to step `id` (one of its own), as undo and redo do several steps
+/// at once; `None` when there is no such step or it is already there.
+pub fn jump(catalog: &Catalog, photo_id: i64, id: i64) -> Result<Option<Sidecar>> {
+    let tx = catalog.write_tx()?;
+    check_photo(&tx, photo_id)?;
+    if cursor_of(&tx, photo_id)? == Some(id) {
+        return Ok(None);
+    }
+    let text: Option<String> = tx
+        .query_row(
+            "SELECT settings FROM history WHERE photo_id = ?1 AND id = ?2",
+            (photo_id, id),
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(text) = text else {
+        return Ok(None);
+    };
+    tx.execute(
+        "UPDATE history_cursor SET history_id = ?2 WHERE photo_id = ?1",
+        (photo_id, id),
+    )?;
+    put_edits(&tx, photo_id, &EditSettings::from_json_str(&text), now())?;
+    let sidecar = build_sidecar(&tx, photo_id)?;
+    tx.commit()?;
+    Ok(Some(sidecar))
+}
+
 /// Step back one history entry; `None` at the oldest.
 pub fn undo(catalog: &Catalog, photo_id: i64) -> Result<Option<Sidecar>> {
     step(catalog, photo_id, true)

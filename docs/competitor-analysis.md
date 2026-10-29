@@ -73,6 +73,7 @@ close or competitors ship new features.
 - Rotate in the Library grid (Lightroom's `Ctrl+[` / `Ctrl+]`): done.
 - Thumbnail size slider (Lightroom's grid slider): done.
 - Survey view (Lightroom's `N`): done, Library → Survey.
+- History panel (Lightroom's): done, Develop → History.
 
 ### Tier 4: large or strategic
 

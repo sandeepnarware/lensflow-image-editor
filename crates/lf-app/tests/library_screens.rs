@@ -3100,3 +3100,41 @@ fn survey_shows_the_selection_and_x_takes_one_out() {
     h.step();
     assert_eq!(h.state().lib.surveying(), None);
 }
+
+/// Develop's History: each step named by what it changed; a click goes back to it.
+#[test]
+fn history_lists_the_steps_and_a_click_goes_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    develop_one(&mut h, dir.path());
+    for change in [
+        (|s: &mut lf_settings::EditSettings| s.exposure = 1.0)
+            as fn(&mut lf_settings::EditSettings),
+        |s| s.contrast = 20.0,
+    ] {
+        let st = h.state_mut();
+        st.lib.develop_mut().edit(change);
+        st.lib.develop_mut().commit(&mut st.toasts);
+    }
+    h.step();
+    h.get_by_label(lf_app::develop::history_panel::TITLE)
+        .click();
+    h.step();
+    h.step();
+    use egui::accesskit::Role;
+    assert!(
+        h.query_by_role_and_label(Role::Button, "Contrast")
+            .is_some()
+    );
+    h.get_by_role_and_label(Role::Button, "Exposure").click();
+    h.step();
+    h.step();
+    let s = settings(&h);
+    assert_eq!(
+        (s.exposure, s.contrast),
+        (1.0, 0.0),
+        "back to the exposure step"
+    );
+}
