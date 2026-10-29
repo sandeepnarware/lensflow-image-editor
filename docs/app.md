@@ -837,6 +837,14 @@ strongest is 1). Moving up raises, down lowers, half a slider unit per point, ea
 share, for the property the section shows (`PanelState::hsl_mode`, followed while the tool is
 open); release is one history step.
 
+Defringe (`lf_settings::defringe`, `desktop.defringe`; `panels/defringe.rs`) runs in the
+develop shader's input stage, after lateral CA and before a film negative (`defringe`): a
+pixel is near an edge by the largest brightness step to its neighbours 1, 2 and 4 source pixels
+away (smoothstep 0.05..0.2), and is greyed towards its own brightness by its amount times that,
+times how close its hue is to the purple or green hue chosen (full within 17.5°, none past
+35°), times its saturation (smoothstep 0.05..0.2). `fringe_on.x` is 0 when both amounts are 0,
+so the pass is the web's.
+
 Focus peaking (View → Peaking, `Shift+J`) and Visualize spots (View → Spots view) are preview
 overlays, never in renders or exports: `DrawOptions::{peaking, spots_view}` become bits 2 and 4
 of the develop pass's `clip_warn` (bit 1 is clipping). Both take a 5-tap Laplacian of the

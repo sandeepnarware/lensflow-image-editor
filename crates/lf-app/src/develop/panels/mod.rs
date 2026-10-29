@@ -8,6 +8,7 @@ pub mod calibration;
 pub mod color;
 pub mod crop;
 pub mod curve;
+pub mod defringe;
 pub mod detail;
 pub mod effects;
 pub mod grading;
@@ -261,6 +262,20 @@ pub fn show(
     }
     out.absorb(r);
     out.lens_profile |= profile;
+    let mut r = SliderResponse::default();
+    if section(ui, "defringe", defringe::TITLE, false, |ui| {
+        r = defringe::show(ui, s)
+    }) {
+        let before = s.clone();
+        defringe::reset(s);
+        if *s != before {
+            r = SliderResponse {
+                changed: true,
+                released: true,
+            };
+        }
+    }
+    out.absorb(r);
     let mut r = SliderResponse::default();
     if section(ui, "negative", negative::TITLE, false, |ui| {
         r = negative::show(ui, s, ctx.sample)

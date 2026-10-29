@@ -79,6 +79,8 @@ struct Uniforms {
     calib_tint: vec4<f32>,  // shadows tint, on (0: the web's pass exactly)
     neg_base: vec4<f32>,    // desktop only: film base (linear), on (0: none)
     neg_dmax: vec4<f32>,    // each channel's largest density
+    fringe: vec4<f32>,      // desktop only: defringe's purple amount, hue, green amount, hue
+    fringe_on: vec4<f32>,   // on (0: the web's pass exactly), the hues' reach (degrees)
 }
 
 @group(0) @binding(0) var u_img: texture_2d<f32>;    // the photo (after spots)
@@ -112,6 +114,32 @@ fn sample_2d(t: texture_2d<f32>, s: sampler, uv: vec2<f32>) -> vec4<f32> {
 
 const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
 fn luma(c: vec3<f32>) -> f32 { return dot(c, LUMA); }
+
+// Desktop only: defringe (`lf_settings::defringe`): a purple or green pixel near a strong
+// edge (a brightness step within four source pixels) is greyed by its amount.
+fn defringe(c: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
+    let y = luma(c);
+    let px = 1.0 / vec2<f32>(textureDimensions(u_img, 0));
+    var edge = 0.0;
+    for (var i = 1; i <= 4; i = i * 2) {
+        let d = px * f32(i);
+        edge = max(edge, abs(luma(sample_2d(u_img, s_img, uv + vec2<f32>(d.x, 0.0)).rgb) - y));
+        edge = max(edge, abs(luma(sample_2d(u_img, s_img, uv - vec2<f32>(d.x, 0.0)).rgb) - y));
+        edge = max(edge, abs(luma(sample_2d(u_img, s_img, uv + vec2<f32>(0.0, d.y)).rgb) - y));
+        edge = max(edge, abs(luma(sample_2d(u_img, s_img, uv - vec2<f32>(0.0, d.y)).rgb) - y));
+    }
+    let near = smoothstep(0.05, 0.2, edge);
+    if (near <= 0.0) { return c; }
+    let hsv = rgb2hsv(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)));
+    let hue = hsv.x * 360.0;
+    let reach = u.fringe_on.y;
+    let dp = abs(glsl_mod(hue - u.fringe.y + 540.0, 360.0) - 180.0);
+    let dg = abs(glsl_mod(hue - u.fringe.w + 540.0, 360.0) - 180.0);
+    let wp = u.fringe.x * (1.0 - smoothstep(reach * 0.5, reach, dp));
+    let wg = u.fringe.z * (1.0 - smoothstep(reach * 0.5, reach, dg));
+    let k = clamp(max(wp, wg) * near * smoothstep(0.05, 0.2, hsv.y), 0.0, 1.0);
+    return mix(c, vec3<f32>(y), k);
+}
 
 // Desktop only: colour calibration (`lf_settings::calibration`), in linear light, before every
 // other adjustment: the primaries' matrix, then a green-magenta tint strongest in the shadows.
@@ -428,6 +456,7 @@ fn fs_develop(in: VsOut) -> @location(0) vec4<f32> {
             c = to_gamma(to_linear(c) * (1.0 + u.lens.y * dot(q, q) / u.persp.z));
         }
     }
+    if (u.fringe_on.x != 0.0) { c = defringe(c, uv); }
     if (u.neg_base.w != 0.0) {
         // Desktop only: a film negative to a positive (`lf_settings::negative`): the light
         // passed as a share of the film base's, to density, scaled by the photo's range.

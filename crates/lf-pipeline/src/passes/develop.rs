@@ -83,6 +83,10 @@ pub struct Uniforms {
     pub neg_base: [f32; 4],
     /// Each channel's largest density (`w` unused).
     pub neg_dmax: [f32; 4],
+    /// Desktop only: defringe's purple amount (0..1), purple hue, green amount, green hue.
+    pub fringe: [f32; 4],
+    /// 1 when defringe is on (0: the web's pass exactly), the hues' reach in degrees, unused.
+    pub fringe_on: [f32; 4],
 }
 
 /// One local adjustment as `develop.wgsl`'s `MaskU` takes it (seven 16-byte rows).
@@ -182,7 +186,7 @@ impl MaskUniform {
 const _: () = {
     use std::mem::{offset_of, size_of};
     assert!(size_of::<MaskUniform>() == 112);
-    assert!(size_of::<Uniforms>() == 624 + 16 + MAX_MASKS * 112 + 32 + 64 + 32);
+    assert!(size_of::<Uniforms>() == 624 + 16 + MAX_MASKS * 112 + 32 + 64 + 32 + 32);
     assert!(offset_of!(Uniforms, wb) == 128);
     assert!(offset_of!(Uniforms, pixel) == 232);
     assert!(offset_of!(Uniforms, hsl) == 240);
@@ -222,6 +226,8 @@ impl Uniforms {
         let calibration = lf_settings::calibration::Calibration::from_settings(s);
         let calib = calibration.matrix();
         let negative = lf_settings::negative::Negative::from_settings(s).filter(|_| f.develop);
+        let defringe = lf_settings::defringe::Defringe::from_settings(s);
+        let defringe_on = f.develop && !defringe.is_off();
         let aspect = f64::from(f.img_size[0]) / f64::from(f.img_size[1].max(1));
         let mut mask_uniforms = [MaskUniform::default(); MAX_MASKS];
         for (layer, (slot, mask)) in mask_uniforms.iter_mut().zip(&masks.0).enumerate() {
@@ -311,6 +317,13 @@ impl Uniforms {
             neg_dmax: negative.map_or([1.0; 4], |n| {
                 [n.dmax[0] as f32, n.dmax[1] as f32, n.dmax[2] as f32, 1.0]
             }),
+            fringe: defringe.uniform(),
+            fringe_on: [
+                f32::from(u8::from(defringe_on)),
+                lf_settings::defringe::WIDTH as f32,
+                0.0,
+                0.0,
+            ],
         }
     }
 }

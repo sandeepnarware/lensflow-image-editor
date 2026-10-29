@@ -65,6 +65,7 @@ close or competitors ship new features.
 - Navigator panel (Lightroom's): done, Develop's side panel.
 - Colour readout under the cursor (Lightroom's RGB under the histogram): done.
 - Targeted adjustment for Colour mix (Lightroom's TAT): done.
+- Defringe (purple and green amount and hue, Lightroom's): done, Develop → Defringe.
 
 ### Tier 4: large or strategic
 

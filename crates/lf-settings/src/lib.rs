@@ -11,6 +11,7 @@ pub mod adaptive;
 pub mod amount;
 pub mod calibration;
 pub mod curve;
+pub mod defringe;
 pub mod geometry;
 pub mod groups;
 pub mod heal;
