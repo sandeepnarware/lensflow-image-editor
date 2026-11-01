@@ -110,7 +110,7 @@ pub fn read_xmp(bytes: &[u8]) -> Result<LrPreset, ReadError> {
         .descendants()
         .find(|n| is_rdf(n, "Description") && carries_crs(n))
         .ok_or(ReadError::NotAPreset)?;
-    let Value::Object(mut settings) = description_object(description) else {
+    let Value::Object(mut settings) = settings_object(description) else {
         return Err(ReadError::NotAPreset);
     };
     Ok(finish(&mut settings))
@@ -365,7 +365,10 @@ impl Lua<'_> {
                     self.ws();
                     // `$$$/AgPreset/Moody=Moody`: the text after the first `=` is the string.
                     let raw = self.string()?;
-                    let text = raw.split_once('=').map_or(raw.as_str(), |(_, t)| t);
+                    let text = match raw.strip_prefix("$$$/") {
+                        Some(_) => raw.split_once('=').map_or(raw.as_str(), |(_, t)| t),
+                        None => raw.as_str(),
+                    };
                     Some(Value::String(text.to_owned()))
                 }
                 _ => None,
@@ -459,4 +462,25 @@ fn num(v: &Value) -> String {
         Some(f) => format!("{f}"),
         None => String::new(),
     }
+}
+
+/// The top-level `rdf:Description` as settings: only `crs:` attributes and children, so
+/// `xmp:`, `dc:` and `photoshop:` extras stay out. `Name`, `Group` and `PresetType` are
+/// kept as text, so a preset called "1985" is not read as a number.
+fn settings_object(n: roxmltree::Node) -> Value {
+    let mut map = Map::new();
+    for a in n.attributes().filter(|a| a.namespace() == Some(CRS_NS)) {
+        let v = match a.name() {
+            "Name" | "Group" | "PresetType" => Value::String(a.value().to_owned()),
+            _ => scalar(a.value()),
+        };
+        map.insert(a.name().to_owned(), v);
+    }
+    for c in n
+        .children()
+        .filter(|c| c.is_element() && c.tag_name().namespace() == Some(CRS_NS))
+    {
+        map.insert(c.tag_name().name().to_owned(), element_value(c, false));
+    }
+    Value::Object(map)
 }

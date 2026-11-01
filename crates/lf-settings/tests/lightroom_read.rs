@@ -127,3 +127,42 @@ fn broken_and_huge_files_are_refused() {
         Err(ReadError::NotAPreset)
     ));
 }
+
+const SHELL: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/" ATTRS/></rdf:RDF></x:xmpmeta>"#;
+
+#[test]
+fn only_crs_keys_reach_the_settings() {
+    let xml = SHELL.replace(
+        "ATTRS",
+        r#"crs:Exposure2012="+1.0" xmp:CreatorTool="Lightroom" dc:title="x""#,
+    );
+    let p = read_xmp(xml.as_bytes()).unwrap();
+    assert_eq!(p.settings["Exposure2012"], json!(1.0));
+    assert!(!p.settings.contains_key("CreatorTool"));
+    assert!(!p.settings.contains_key("title"));
+}
+
+#[test]
+fn numeric_and_boolean_looking_names_stay_text() {
+    let xml = SHELL.replace(
+        "ATTRS",
+        r#"crs:Name="1985" crs:Group="True" crs:Exposure2012="1""#,
+    );
+    let p = read_xmp(xml.as_bytes()).unwrap();
+    assert_eq!(p.name, "1985");
+    assert_eq!(p.group.as_deref(), Some("True"));
+}
+
+#[test]
+fn only_zstr_keys_are_split_at_the_equals_sign() {
+    let src = |title: &str| {
+        format!(
+            "s = {{ title = ZSTR \"{title}\", value = {{ settings = {{ Exposure2012 = 1 }} }} }}"
+        )
+    };
+    assert_eq!(
+        read_lrtemplate(&src("$$$/A/B=Moody")).unwrap().name,
+        "Moody"
+    );
+    assert_eq!(read_lrtemplate(&src("A=B")).unwrap().name, "A=B");
+}
