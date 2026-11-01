@@ -75,14 +75,6 @@ impl Sample {
         }
     }
 
-    /// The sample of a rendered image (`rgb` is `width * height` interleaved RGB, 0..1).
-    pub fn of_rgb(width: u32, height: u32, rgb: &[f32]) -> Sample {
-        Sample::reduce(width, height, |x, y| {
-            let i = 3 * (y as usize * width as usize + x as usize);
-            [rgb[i], rgb[i + 1], rgb[i + 2]]
-        })
-    }
-
     /// The sample of an opened picture.
     pub fn of(picture: &Picture) -> Sample {
         match picture {
@@ -254,16 +246,23 @@ pub fn auto_tone(sample: &Sample, settings: &EditSettings) -> Option<Tone> {
 }
 
 /// Runs Auto white balance and/or Auto tone on `settings` from `sample`, in that order (tone
-/// reads the white balance just set), as an imported Lightroom preset asks. Either is skipped
-/// when the photo gives too little to go by.
-pub fn apply_auto(settings: &mut EditSettings, sample: &Sample, wb: bool, tone: bool) {
-    if wb && let Some((t, tint)) = auto_wb(sample) {
-        settings.temperature = t;
-        settings.tint = tint;
+/// reads the white balance just set), as an imported Lightroom preset asks. An auto the photo
+/// gives too little for is skipped; `false` says one was.
+pub fn apply_auto(settings: &mut EditSettings, sample: &Sample, wb: bool, tone: bool) -> bool {
+    let mut all = true;
+    if wb {
+        match auto_wb(sample) {
+            Some((t, tint)) => (settings.temperature, settings.tint) = (t, tint),
+            None => all = false,
+        }
     }
-    if tone && let Some(found) = auto_tone(sample, settings) {
-        found.apply(settings);
+    if tone {
+        match auto_tone(sample, settings) {
+            Some(found) => found.apply(settings),
+            None => all = false,
+        }
     }
+    all
 }
 
 #[cfg(test)]

@@ -11,7 +11,6 @@ use crate::lightroom::import::shown_name;
 use crate::theme;
 use eframe::egui::{self, RichText};
 use lf_catalog::{Catalog, CatalogError, edits};
-use lf_pipeline::Gpu;
 use lf_settings::EditSettings;
 use lf_settings::groups::{GroupKey, groups_in};
 use serde_json::Value;
@@ -66,57 +65,44 @@ pub fn apply_one(
     recipe: &Recipe,
     saver: &SidecarSaver,
 ) -> Result<(), String> {
-    apply_with(catalog, photo_id, saver, |_, current| {
-        Ok(recipe.apply(current))
-    })
-}
-
-/// [`apply_one`] for a preset that asks for Auto white balance or Auto tone (an imported
-/// Lightroom preset): the preset is laid on first, then each photo is rendered small without
-/// its white balance and tone and the autos are worked out from that, so each photo gets its
-/// own values. A photo that cannot be rendered still gets the preset, without the autos.
-pub fn apply_one_auto(
-    catalog: &Catalog,
-    photo_id: i64,
-    recipe: &Recipe,
-    saver: &SidecarSaver,
-    gpu: Option<&Arc<Gpu>>,
-) -> Result<(), String> {
-    let (wb, tone) = match recipe {
-        Recipe::Look(look) => lf_settings::lightroom::auto_flags(look),
-        _ => (false, false),
-    };
-    let Some(gpu) = gpu.filter(|_| wb || tone) else {
-        return apply_one(catalog, photo_id, recipe, saver);
-    };
     apply_with(catalog, photo_id, saver, |photo, current| {
         let mut next = recipe.apply(current);
-        let mut plain = next.clone();
-        let neutral = EditSettings::default_settings();
-        plain.temperature = neutral.temperature;
-        plain.tint = neutral.tint;
-        for (to, from) in [
-            (&mut plain.exposure, neutral.exposure),
-            (&mut plain.contrast, neutral.contrast),
-            (&mut plain.highlights, neutral.highlights),
-            (&mut plain.shadows, neutral.shadows),
-            (&mut plain.whites, neutral.whites),
-            (&mut plain.blacks, neutral.blacks),
-        ] {
-            *to = from;
-        }
-        match crate::ai_job::render(gpu, std::path::Path::new(&photo.path), &plain, SAMPLE_EDGE) {
-            Ok(img) => {
-                let sample = Sample::of_rgb(img.w as u32, img.h as u32, &img.data);
-                apply_auto(&mut next, &sample, wb, tone);
+        if let Recipe::Look(look) = recipe {
+            let (wb, tone) = lf_settings::lightroom::auto_flags(look);
+            if wb || tone {
+                run_auto(photo, current, &mut next, wb, tone);
             }
-            Err(e) => log::warn!("batch: photo {photo_id}: no Auto from the preset: {e}"),
         }
         Ok(next)
     })
 }
 
-/// The long edge of the render Auto white balance and Auto tone are read from.
+/// The Auto white balance / Auto tone an imported Lightroom preset asks for, from this photo
+/// opened as Develop opens it (its own settings, [`SAMPLE_EDGE`] long edge, preview quality)
+/// so the sample is the one the Auto buttons would read. A photo that cannot be opened (an
+/// offline one, or a decode error) still gets the preset, without the autos.
+fn run_auto(
+    photo: &lf_catalog::PhotoRow,
+    current: &EditSettings,
+    next: &mut EditSettings,
+    wb: bool,
+    tone: bool,
+) {
+    let develop = lf_settings::DevelopSettings::from_settings(current);
+    match lf_raw::open::open(
+        std::path::Path::new(&photo.path),
+        lf_raw::demosaic::Quality::Preview,
+        &develop,
+        SAMPLE_EDGE,
+    ) {
+        Ok(opened) => {
+            apply_auto(next, &Sample::of(&opened.picture), wb, tone);
+        }
+        Err(e) => log::warn!("batch: photo {}: no Auto from the preset: {e}", photo.id),
+    }
+}
+
+/// The long edge of the photo Auto white balance and Auto tone are read from.
 const SAMPLE_EDGE: u32 = 512;
 
 /// The per-photo path every multi-photo edit takes: the photo's settings become
@@ -168,20 +154,6 @@ pub fn run(
     recipe: &Recipe,
     saver: &SidecarSaver,
     stop: &AtomicBool,
-    report: impl FnMut(&BatchProgress),
-) -> BatchProgress {
-    run_with_gpu(catalog, ids, recipe, saver, None, stop, report)
-}
-
-/// [`run`] with the shared device, for presets that run Auto white balance or Auto tone per
-/// photo ([`apply_one_auto`]).
-pub fn run_with_gpu(
-    catalog: &Catalog,
-    ids: &[i64],
-    recipe: &Recipe,
-    saver: &SidecarSaver,
-    gpu: Option<&Arc<Gpu>>,
-    stop: &AtomicBool,
     mut report: impl FnMut(&BatchProgress),
 ) -> BatchProgress {
     let mut p = BatchProgress {
@@ -192,7 +164,7 @@ pub fn run_with_gpu(
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        if let Err(e) = apply_one_auto(catalog, id, recipe, saver, gpu) {
+        if let Err(e) = apply_one(catalog, id, recipe, saver) {
             log::warn!("batch: photo {id} could not be edited: {e}");
             p.failed.push((id, e));
         }
@@ -212,7 +184,6 @@ pub fn spawn(
     ids: Vec<i64>,
     recipe: Recipe,
     saver: SidecarSaver,
-    gpu: Arc<Gpu>,
     stop: Arc<AtomicBool>,
 ) {
     let reporter = jobs.reporter();
@@ -230,7 +201,7 @@ pub fn spawn(
                 });
             }
         };
-        let last = run_with_gpu(&catalog, &ids, &recipe, &saver, Some(&gpu), &stop, |p| {
+        let last = run(&catalog, &ids, &recipe, &saver, &stop, |p| {
             reporter.send(Msg::BatchProgress(p.clone()));
         });
         Msg::BatchProgress(last)
@@ -580,6 +551,45 @@ mod tests {
         assert_eq!(exposure(ids[0]), Some(1.5));
         assert_eq!(exposure(ids[1]), None, "never started");
         assert_eq!(exposure(ids[2]), None);
+    }
+
+    #[test]
+    fn a_preset_with_auto_tone_gets_each_photos_own_auto_tone() {
+        let (d, c, ids) = catalogue(1);
+        let path = d.path().join("0.jpg");
+        image::RgbImage::from_fn(400, 300, |x, _| {
+            let v = (5.0 + 85.0 * x as f32 / 400.0) as u8;
+            image::Rgb([v, v, v])
+        })
+        .save_with_format(&path, image::ImageFormat::Jpeg)
+        .unwrap();
+        let look = json!({"v": 2, "desktop": {"lightroom": {"auto": {"wb": false, "tone": true}}}});
+        apply_one(
+            &c,
+            ids[0],
+            &Recipe::Look(look.clone()),
+            &SidecarSaver::new(),
+        )
+        .unwrap();
+
+        let start = EditSettings::default_settings();
+        let opened = lf_raw::open::open(
+            &path,
+            lf_raw::demosaic::Quality::Preview,
+            &lf_settings::DevelopSettings::from_settings(&start),
+            512,
+        )
+        .unwrap();
+        let mut want = Recipe::Look(look).apply(&start);
+        crate::develop::auto::apply_auto(
+            &mut want,
+            &crate::develop::auto::Sample::of(&opened.picture),
+            false,
+            true,
+        );
+        let got = edits::get_settings(&c, ids[0]).unwrap().unwrap();
+        assert!(got.exposure > 0.0, "{}", got.exposure);
+        assert_eq!(got, want);
     }
 
     #[test]

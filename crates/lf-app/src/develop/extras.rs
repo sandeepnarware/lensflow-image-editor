@@ -371,8 +371,13 @@ impl Develop {
                     // An imported Lightroom preset's Auto WB / Auto tone, from this photo, in
                     // the same history step (the hover preview above never runs them).
                     let (wb, tone) = lf_settings::lightroom::auto_flags(&row.settings);
-                    if let Some(opened) = self.opened().filter(|_| wb || tone) {
-                        crate::develop::auto::apply_auto(&mut next, &opened.sample, wb, tone);
+                    if wb || tone {
+                        let ran = self.opened().is_some_and(|o| {
+                            crate::develop::auto::apply_auto(&mut next, &o.sample, wb, tone)
+                        });
+                        if !ran {
+                            toasts.push(Level::Info, crate::develop::auto::NO_NEUTRAL);
+                        }
                     }
                     self.apply_with_amount(row.name.clone(), next, toasts);
                     self.queue_adaptive(&row.settings, toasts);

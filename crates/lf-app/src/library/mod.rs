@@ -2587,7 +2587,6 @@ impl Library {
                     dialog.ids.clone(),
                     recipe,
                     self.develop.saver(),
-                    self.gpu.clone(),
                     dialog.stop.clone(),
                 );
             }
