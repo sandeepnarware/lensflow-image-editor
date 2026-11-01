@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0-c000 1.000000, 0000/00/00-00:00:00">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:PresetType="Normal"
+   crs:Version="15.0"
+   crs:ProcessVersion="11.0">
+   <crs:Name>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">Warm Fade</rdf:li>
+    </rdf:Alt>
+   </crs:Name>
+   <crs:Group>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">Studio</rdf:li>
+    </rdf:Alt>
+   </crs:Group>
+   <crs:Exposure2012>+0.50</crs:Exposure2012>
+   <crs:Contrast2012>+20</crs:Contrast2012>
+   <crs:ConvertToGrayscale>False</crs:ConvertToGrayscale>
+   <crs:ToneCurvePV2012>
+    <rdf:Seq>
+     <rdf:li>0, 0</rdf:li>
+     <rdf:li>128, 140</rdf:li>
+     <rdf:li>255, 255</rdf:li>
+    </rdf:Seq>
+   </crs:ToneCurvePV2012>
+   <crs:MaskGroupBasedCorrections>
+    <rdf:Seq>
+     <rdf:li>
+      <rdf:Description
+       crs:What="Correction"
+       crs:CorrectionAmount="1"
+       crs:LocalExposure2012="+0.25">
+       <crs:CorrectionMasks>
+        <rdf:Seq>
+         <rdf:li
+          crs:What="Mask/Gradient"
+          crs:ZeroX="0.1"
+          crs:ZeroY="0.2"/>
+        </rdf:Seq>
+       </crs:CorrectionMasks>
+      </rdf:Description>
+     </rdf:li>
+    </rdf:Seq>
+   </crs:MaskGroupBasedCorrections>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>

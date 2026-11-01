@@ -18,7 +18,7 @@ lf-settings = { path = "../lf-settings" }
 lf-merge = { path = "../lf-merge" }
 lf-ai = { path = "../lf-ai" }
 # lensfun's XML lens database (automatic lens profiles).
-roxmltree = "0.21"
+roxmltree.workspace = true
 lf-grade = { path = "../lf-grade" }
 # File dialogs (MIT). Default features: the XDG desktop portal on Linux, so no GTK.
 rfd = "0.17"

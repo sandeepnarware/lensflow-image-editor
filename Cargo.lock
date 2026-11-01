@@ -3184,6 +3184,7 @@ name = "lf-settings"
 version = "0.1.0"
 dependencies = [
  "lf-fixtures",
+ "roxmltree",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

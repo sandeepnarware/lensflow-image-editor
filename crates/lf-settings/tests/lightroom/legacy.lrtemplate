@@ -1,0 +1,23 @@
+s = {
+	id = "6F3A1C52-3B1E-4F6B-9A0D-2E8B7C4D9A10",
+	internalName = "Moody",
+	title = ZSTR "$$$/AgPreset/Moody=Moody",
+	type = "Develop",
+	value = {
+		settings = {
+			ConvertToGrayscale = true,
+			Contrast2012 = 25,
+			Exposure2012 = -0.3,
+			ProcessVersion = "6.7",
+			ToneCurvePV2012 = {
+				0,
+				0,
+				255,
+				255,
+			},
+			ToneCurveName2012 = "Linear",
+		},
+		uuid = "A1B2C3D4-0000-4000-8000-0123456789AB",
+	},
+	version = 0,
+}
