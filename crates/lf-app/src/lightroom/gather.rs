@@ -169,31 +169,14 @@ fn gather_zip(path: &Path, stop: &AtomicBool, out: &mut Gathered) {
         out.failed.push((shown, ZIP_TOO_MANY.into()));
         return;
     }
-    // Declared sizes first: a pack that claims to unpack past the cap is refused whole.
+    // Names first, without opening anything: only preset entries count toward the cap
+    // (packs often bundle sample photos and PDFs, even encrypted ones, that are never read).
+    let mut wanted: Vec<(usize, PathBuf)> = Vec::new();
     let mut declared = 0u64;
     for i in 0..archive.len() {
-        match archive.by_index_raw(i) {
-            Ok(entry) => declared = declared.saturating_add(entry.size()),
-            Err(_) => {
-                out.failed.push((shown, ZIP_UNREADABLE.into()));
-                return;
-            }
-        }
-    }
-    if declared > MAX_ZIP_BYTES {
-        out.failed.push((shown, ZIP_TOO_BIG.into()));
-        return;
-    }
-
-    let mut taken = 0u64;
-    for i in 0..archive.len() {
-        if stop.load(Ordering::Relaxed) {
+        let Ok(entry) = archive.by_index_raw(i) else {
+            out.failed.push((shown, ZIP_UNREADABLE.into()));
             return;
-        }
-        let Ok(entry) = archive.by_index(i) else {
-            out.failed
-                .push((format!("{pack} / #{}", i + 1), ENTRY_UNREADABLE.into()));
-            continue;
         };
         if entry.is_dir() {
             continue;
@@ -210,7 +193,26 @@ fn gather_zip(path: &Path, stop: &AtomicBool, out: &mut Gathered) {
         {
             continue;
         }
+        declared = declared.saturating_add(entry.size());
+        wanted.push((i, inner));
+    }
+    // A pack whose presets claim to unpack past the cap is refused whole.
+    if declared > MAX_ZIP_BYTES {
+        out.failed.push((shown, ZIP_TOO_BIG.into()));
+        return;
+    }
+
+    let mut taken = 0u64;
+    for (i, inner) in wanted {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let entry_name = file_name_of(&inner);
         let source = format!("{pack} / {}", inner.to_string_lossy().replace('\\', "/"));
+        let Ok(entry) = archive.by_index(i) else {
+            out.failed.push((source, ENTRY_UNREADABLE.into()));
+            continue;
+        };
         if entry.size() > MAX_FILE_BYTES {
             out.failed.push((source, FILE_TOO_BIG.into()));
             continue;
@@ -393,5 +395,44 @@ mod tests {
         std::fs::write(dir.path().join("A.xmp"), b"a").unwrap();
         let got = gather(&[dir.path().to_path_buf()], &AtomicBool::new(true));
         assert!(got.found.is_empty());
+    }
+
+    #[test]
+    fn only_preset_entries_count_toward_the_caps() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack = dir.path().join("pack.zip");
+        write_zip(
+            &pack,
+            &[
+                ("Samples/shot.jpg", vec![0u8; 60 * 1024 * 1024]),
+                ("Moody.xmp", b"x".to_vec()),
+            ],
+        );
+        let got = gather(&[pack], &no_stop());
+        assert!(got.failed.is_empty(), "{:?}", got.failed);
+        assert_eq!(got.found.len(), 1);
+        assert_eq!(got.found[0].file_name, "Moody.xmp");
+    }
+
+    #[test]
+    fn a_lying_declared_size_is_stopped_by_the_read_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack = dir.path().join("liar.zip");
+        let big = vec![b' '; MAX_FILE_BYTES as usize + 1000];
+        write_zip(&pack, &[("Liar.xmp", big)]);
+        // Rewrite the central directory's uncompressed size to claim 10 bytes.
+        let mut raw = std::fs::read(&pack).unwrap();
+        let at = raw
+            .windows(4)
+            .rposition(|w| w == [0x50, 0x4b, 0x01, 0x02])
+            .unwrap();
+        raw[at + 24..at + 28].copy_from_slice(&10u32.to_le_bytes());
+        std::fs::write(&pack, raw).unwrap();
+        let got = gather(&[pack], &no_stop());
+        assert!(got.found.is_empty(), "{:?}", got.found.len());
+        assert_eq!(got.failed.len(), 1);
+        // The zip reader itself rejects a size that disagrees with the data (so the entry
+        // is refused); if it ever stopped doing so, the read cap would give FILE_TOO_BIG.
+        assert!([ENTRY_UNREADABLE, FILE_TOO_BIG].contains(&got.failed[0].1.as_str()));
     }
 }
