@@ -43,7 +43,13 @@ pub fn clear() {
 /// Keeps a table registered through [`clear`] while held; dropping it leaves the table
 /// registered (as [`register`] does) but no longer kept.
 #[must_use = "the table is kept only while this is held"]
-pub struct Pinned(String);
+pub struct Pinned {
+    name: String,
+    /// The name had no table before [`pin`] registered this one.
+    fresh: bool,
+    /// [`Pinned::forget`] was called: drop the table with the last guard if it was new.
+    forget: bool,
+}
 
 /// Registers `lut` as `name` and keeps it through [`clear`] until the guard is dropped: for
 /// a job that renders with a table it made (the example fit's candidates), so a catalogue
@@ -55,19 +61,39 @@ pub fn pin(name: &str, lut: Lut) -> Pinned {
         .get_or_insert_with(HashMap::new)
         .entry(name.to_owned())
         .or_default() += 1;
+    let fresh = get(name).is_none();
     register(name, lut);
-    Pinned(name.to_owned())
+    Pinned {
+        name: name.to_owned(),
+        fresh,
+        forget: false,
+    }
+}
+
+impl Pinned {
+    /// Drops the guard and, when [`pin`] made the table's name new and no other guard holds
+    /// it, unregisters it: a table that only a fit's candidate needed must not stay on offer
+    /// (it has no `.cube` file). A name that was registered before stays.
+    pub fn forget(mut self) {
+        self.forget = self.fresh;
+    }
 }
 
 impl Drop for Pinned {
     fn drop(&mut self) {
         let mut pinned = PINNED.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(p) = pinned.as_mut()
-            && let Some(n) = p.get_mut(&self.0)
+            && let Some(n) = p.get_mut(&self.name)
         {
             *n -= 1;
             if *n == 0 {
-                p.remove(&self.0);
+                p.remove(&self.name);
+                if self.forget {
+                    let mut reg = REGISTRY.write().unwrap_or_else(|e| e.into_inner());
+                    if let Some(r) = reg.as_mut() {
+                        r.remove(&self.name);
+                    }
+                }
             }
         }
     }

@@ -1138,10 +1138,16 @@ impl Develop {
 
     /// The adjust panels for the open photo; a gesture's end commits it.
     fn panels_ui(&mut self, ui: &mut egui::Ui, toasts: &mut Toasts) {
+        let root = self.session.root().map(std::path::Path::to_path_buf);
         let (State::Ready(opened, _), Some(edit)) = (&self.state, self.session.edit_mut()) else {
             return;
         };
-        let luts = lf_pipeline::lut::names();
+        let current = lf_settings::lut::LutChoice::from_settings(&edit.settings).map(|c| c.name);
+        let luts = crate::luts::offered(
+            lf_pipeline::lut::names(),
+            root.as_deref(),
+            current.as_deref(),
+        );
         let profiles = lf_raw::dcp::names();
         let ctx = PanelContext {
             profiles: &profiles,

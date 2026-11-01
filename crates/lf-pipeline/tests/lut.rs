@@ -72,3 +72,26 @@ fn a_pinned_table_outlives_a_clear_until_unpinned() {
     lf_pipeline::lut::clear();
     assert!(lf_pipeline::lut::get("test-pinned").is_none());
 }
+
+#[test]
+fn forgetting_a_new_pin_unregisters_it_but_not_an_old_name() {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    lf_pipeline::lut::clear();
+    lf_pipeline::lut::pin("test-fresh", Lut::identity(2)).forget();
+    assert!(
+        lf_pipeline::lut::get("test-fresh").is_none(),
+        "a table only the fit needed is not left on offer"
+    );
+    lf_pipeline::lut::register("test-old", Lut::identity(2));
+    lf_pipeline::lut::pin("test-old", Lut::identity(2)).forget();
+    assert!(
+        lf_pipeline::lut::get("test-old").is_some(),
+        "a name registered before stays"
+    );
+    // Held by another guard: stays until the last one is gone.
+    let first = lf_pipeline::lut::pin("test-shared", Lut::identity(2));
+    lf_pipeline::lut::pin("test-shared", Lut::identity(2)).forget();
+    assert!(lf_pipeline::lut::get("test-shared").is_some());
+    drop(first);
+    lf_pipeline::lut::clear();
+}

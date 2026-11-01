@@ -147,6 +147,20 @@ pub fn write_embedded(root: &Path, preset: &serde_json::Value) -> Result<(), Str
     Ok(())
 }
 
+/// The registered names the LUT panel offers: an embedded table (`lr-`) only when its
+/// `.cube` file is in `root`'s LUT folder, or the open photo already uses it (`current`).
+/// One without a file (a fit's leftover) would be lost with the next catalogue open.
+pub fn offered(names: Vec<String>, root: Option<&Path>, current: Option<&str>) -> Vec<String> {
+    names
+        .into_iter()
+        .filter(|n| {
+            !n.starts_with("lr-")
+                || current == Some(n.as_str())
+                || root.is_some_and(|r| folder(r).join(format!("{n}.cube")).exists())
+        })
+        .collect()
+}
+
 /// The registry is process-wide and [`load_all`] clears it, so tests that register or read
 /// tables take turns through this.
 #[cfg(test)]
@@ -188,6 +202,19 @@ mod tests {
             text.push_str(&format!("{} {} {}\n", p[0], p[1], p[2]));
         }
         text
+    }
+
+    #[test]
+    fn the_panel_hides_embedded_tables_without_a_file() {
+        let root = tempfile::tempdir().unwrap();
+        write_cube(root.path(), "lr-saved", b"x").unwrap();
+        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let all = names(&["Film", "lr-saved", "lr-fileless", "lr-used"]);
+        assert_eq!(
+            offered(all.clone(), Some(root.path()), Some("lr-used")),
+            names(&["Film", "lr-saved", "lr-used"])
+        );
+        assert_eq!(offered(all, None, None), names(&["Film"]));
     }
 
     #[test]

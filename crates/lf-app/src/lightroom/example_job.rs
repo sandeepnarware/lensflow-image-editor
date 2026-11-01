@@ -211,6 +211,10 @@ pub fn match_with(
                 .map(embedded_name)
                 .unwrap_or_default();
             let pinned = decode_table(&encoded).map(|t| lf_pipeline::lut::pin(&name, t));
+            // The table before it is no longer needed: off the registry unless it was there.
+            if let Some((.., Some(old))) = candidate.take() {
+                old.forget();
+            }
             candidate = Some((f.table.data.clone(), name, pinned));
         }
         let Some((_, name, _)) = &candidate else {
@@ -230,6 +234,11 @@ pub fn match_with(
         last = Some(img.clone());
         img
     });
+    // The last candidate too: whether the preset is saved or not, the fit's tables must not
+    // stay on offer without a `.cube` file (saving writes the file and registers it again).
+    if let Some((.., Some(last))) = candidate.take() {
+        last.forget();
+    }
     if let Some(e) = failed {
         return Err(e);
     }
@@ -584,6 +593,28 @@ mod tests {
         ] {
             assert_eq!(p.size, [W, H]);
         }
+    }
+
+    #[test]
+    fn the_fits_tables_are_not_left_registered() {
+        let _turn = turn();
+        lf_pipeline::lut::clear();
+        let photo = colourful();
+        let theirs = lightroom_export(&photo);
+        let mut seen = Vec::new();
+        match_with(
+            &mut pipeline(&photo, &mut seen),
+            &theirs,
+            None,
+            "x",
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(
+            lf_pipeline::lut::names().iter().all(|n| !n.starts_with("lr-")),
+            "{:?}",
+            lf_pipeline::lut::names()
+        );
     }
 
     #[test]
