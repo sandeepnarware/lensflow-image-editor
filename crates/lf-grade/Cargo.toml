@@ -8,4 +8,5 @@ repository.workspace = true
 [dependencies]
 image = { workspace = true, features = ["jpeg"] }
 thiserror.workspace = true
+lf-merge = { path = "../lf-merge" }
 lf-settings = { path = "../lf-settings" }

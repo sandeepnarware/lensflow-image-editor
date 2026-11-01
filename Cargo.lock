@@ -3128,6 +3128,7 @@ name = "lf-grade"
 version = "0.1.0"
 dependencies = [
  "image",
+ "lf-merge",
  "lf-settings",
  "thiserror 2.0.21",
 ]

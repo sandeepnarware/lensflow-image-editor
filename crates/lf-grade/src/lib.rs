@@ -4,12 +4,14 @@
 //! * [`correct`] is one calibration round, using the inverse of the shader's formulas.
 //! * [`calibrate`] loops rounds with an injected renderer.
 //! * [`apply_strength`] blends a grade towards neutral; [`exposure_offset`] matches brightness.
+//! * [`example`] learns a colour table, vignette and grain from an example pair.
 //! * [`sheet`] picks sample photos and tiles them into the contact sheet.
 //!
 //! Luma is 0.2126 R + 0.7152 G + 0.0722 B on gamma values, as the shader's.
 
 mod calibrate;
 mod correct;
+pub mod example;
 mod measure;
 pub mod sheet;
 mod strength;
