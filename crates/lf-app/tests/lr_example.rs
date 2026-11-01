@@ -43,16 +43,16 @@ fn picture() -> egui::ColorImage {
 }
 
 fn matched(fit: Fit, preset: Option<&serde_json::Value>) -> Box<Matched> {
-    Box::new(Matched {
-        preset: example_job::matched_preset(preset, "Moody", &fit),
+    Box::new(Matched::new(
+        example_job::matched_preset(preset, "Moody", &fit),
         fit,
-        previews: Previews {
+        Previews {
             before: picture(),
             lightroom: picture(),
             after: picture(),
             difference: picture(),
         },
-    })
+    ))
 }
 
 #[test]
@@ -138,4 +138,19 @@ fn a_failed_match_says_why() {
     h.get_by_label(lr_example::CLOSE).click();
     h.step();
     assert_eq!(h.state().1, [LrExampleAction::Close]);
+}
+
+#[test]
+fn a_preset_over_the_size_cap_cannot_be_saved() {
+    let mut big = serde_json::json!({"v": 2});
+    big["desktop"] = serde_json::json!({"notes": "x".repeat(70_000)});
+    let mut dialog = LrExampleDialog::new(Some(("Big".into(), big.clone())), None);
+    dialog.finished(Ok(matched(fit(true, 1.0, 2.0), Some(&big))));
+    let mut h = harness(dialog);
+    h.run_steps(2);
+    for label in [lr_example::SAVE, lr_example::SAVE_AS_NEW] {
+        let button = h.get_by_role_and_label(Role::Button, label);
+        assert!(button.accesskit_node().is_disabled(), "{label}");
+    }
+    assert!(h.query_by_label(lr_example::TOO_LARGE).is_some());
 }

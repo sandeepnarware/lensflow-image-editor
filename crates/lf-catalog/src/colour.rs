@@ -157,7 +157,8 @@ pub fn convert16(pixels: &mut [u16], space: &OutputSpace) -> Result<Vec<u8>, Col
 }
 
 /// 16-bit RGB `pixels` in the colour space of the ICC profile `icc` (embedded in a file the
-/// app reads, such as Lightroom's export for "Match a Lightroom example…") converted to sRGB,
+/// app reads, such as Lightroom's export for "Match a Lightroom example…") converted to sRGB
+/// (a grey profile leaves them as they are),
 /// where the develop pipeline's colours live. Relative colorimetric, so colours inside sRGB
 /// keep their values (a measurement wants them unchanged, not perceptually squeezed), and
 /// unoptimised: Little CMS's precalculated table is off by about 1 % in the darks and at the
@@ -165,8 +166,13 @@ pub fn convert16(pixels: &mut [u16], space: &OutputSpace) -> Result<Vec<u8>, Col
 pub fn to_srgb16(icc: &[u8], pixels: &mut [u16]) -> Result<(), ColourError> {
     let source = Profile::new_icc(icc)
         .map_err(|_| ColourError::Unreadable("embedded in the file".to_owned()))?;
-    if source.color_space() != lcms2::ColorSpaceSignature::RgbData {
-        return Err(ColourError::NotRgb("embedded in the file".to_owned()));
+    match source.color_space() {
+        lcms2::ColorSpaceSignature::RgbData => {}
+        // A grey file (a black-and-white export): its decoded grey goes to all three channels,
+        // kept as sRGB grey. Its tone curve may differ a little from sRGB's, which a fit's
+        // table takes up; refusing it would turn away every B&W preset's example.
+        lcms2::ColorSpaceSignature::GrayData => return Ok(()),
+        _ => return Err(ColourError::NotRgb("embedded in the file".to_owned())),
     }
     let t: Transform<[u16; 3], [u16; 3]> = Transform::new_flags(
         &source,
@@ -283,6 +289,15 @@ mod tests {
             to_srgb16(b"not a profile", &mut same),
             Err(ColourError::Unreadable(_))
         ));
+    }
+
+    #[test]
+    fn a_grey_profile_keeps_the_grey_values() {
+        let grey = Profile::new_gray(&xyy(0.3457, 0.3585), &ToneCurve::new(2.2)).unwrap();
+        let original = vec![1000u16, 1000, 1000, 40000, 40000, 40000];
+        let mut px = original.clone();
+        to_srgb16(&grey.icc().unwrap(), &mut px).unwrap();
+        assert_eq!(px, original);
     }
 
     #[test]

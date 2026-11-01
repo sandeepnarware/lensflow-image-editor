@@ -375,7 +375,7 @@ pub fn icon(action: Action) -> &'static str {
         Action::RemoveFromAlbum => "➖",
         Action::MatchReference => "🎯",
         Action::ImportLrPresets => "📥",
-        Action::MatchLrExample => "🎨",
+        Action::MatchLrExample => "🎞",
         Action::EditIn => "✏",
         Action::MergeHdr => "◑",
         Action::MergePanorama => "↔",

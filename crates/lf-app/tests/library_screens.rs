@@ -3681,6 +3681,8 @@ fn a_lightroom_example_is_matched_with_the_pipeline_and_saved_as_presets() {
     };
     assert!(matched.fit.aligned, "{:?}", matched.fit);
     assert!(matched.fit.delta_e_mean < 5.0, "{:?}", matched.fit);
+    // A grain-free 8-bit export: its rounding is not grain.
+    assert!(matched.fit.grain < 5.0, "grain {}", matched.fit.grain);
     assert_ne!(Verdict::of(&matched.fit), Verdict::NotAGoodMatch);
     assert!(h.query_by_label(Verdict::of(&matched.fit).text()).is_some());
     assert!(

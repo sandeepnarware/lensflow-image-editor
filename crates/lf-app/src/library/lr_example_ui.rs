@@ -10,7 +10,6 @@ use crate::jobs::{Lane, Msg};
 use crate::lightroom::import::unique_name;
 use crate::toast::Level;
 use eframe::egui;
-use lf_settings::lightroom::budget::desktop_fits;
 use std::path::PathBuf;
 
 /// The job's name (a panic in it is reported under this name).
@@ -19,6 +18,13 @@ pub const JOB: &str = "match a Lightroom example";
 /// "Preset “Moody (matched)” saved."
 pub fn saved_text(name: &str) -> String {
     format!("Preset “{name}” saved.")
+}
+
+/// The warning when the saved preset's table file could not be written.
+pub fn table_not_written_text(e: &str) -> String {
+    format!(
+        "The preset was saved, but its colour table could not be stored in the catalogue ({e}). Photos may lose it when the catalogue opens again; apply the preset again then."
+    )
 }
 
 impl Library {
@@ -90,13 +96,7 @@ impl Library {
                 &name,
                 &stop,
             )
-            .map(|(preset, fit, previews)| {
-                Box::new(Matched {
-                    preset,
-                    fit,
-                    previews,
-                })
-            });
+            .map(|(preset, fit, previews)| Box::new(Matched::new(preset, fit, previews)));
             Msg::LrExampleFitted { dialog: id, result }
         });
     }
@@ -145,10 +145,10 @@ impl Library {
         let Stage::Done(matched) = &dialog.stage else {
             return;
         };
-        let preset = matched.preset.clone();
+        let (preset, fits) = (matched.preset.clone(), matched.fits);
         let replacing = dialog.preset.as_ref().map(|(name, _)| name.clone());
         let base = dialog.base_name();
-        if !desktop_fits(&preset) {
+        if !fits {
             if let Some(d) = self.lr_example.as_mut() {
                 d.error = Some(lr_example::TOO_LARGE.to_owned());
             }
@@ -176,12 +176,15 @@ impl Library {
         };
         match saved {
             Ok(name) => {
-                if let Err(e) = crate::luts::write_embedded(&root, &preset) {
-                    // The preset carries its table: applying it writes the file again.
-                    log::warn!("the matched preset's table was not written: {e}");
-                }
                 self.lr_example = None;
                 env.toasts.push(Level::Success, saved_text(&name));
+                if let Err(e) = crate::luts::write_embedded(&root, &preset) {
+                    // The fit left the table registered, so photos show it until the
+                    // catalogue opens again; `ensure_embedded` trusts the registry and will not
+                    // write the file meanwhile, so say so now.
+                    log::warn!("the matched preset's table was not written: {e}");
+                    env.toasts.push(Level::Warning, table_not_written_text(&e));
+                }
             }
             Err(e) => {
                 if let Some(d) = self.lr_example.as_mut() {

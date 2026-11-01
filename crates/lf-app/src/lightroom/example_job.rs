@@ -22,7 +22,7 @@ use lf_grade::example::{self, Fit, Image, TARGET_MEAN, TARGET_P95};
 use lf_pipeline::Gpu;
 use lf_settings::lightroom::LIGHTROOM_KEY;
 use lf_settings::lightroom::budget::fit_budget;
-use lf_settings::lut::{Lut, LutChoice, decode_table, embedded_name, encode_table};
+use lf_settings::lut::{LutChoice, decode_table, embedded_name, encode_table};
 use lf_settings::{DevelopSettings, EditSettings};
 use serde_json::{Value, json};
 
@@ -38,6 +38,9 @@ pub const DIFFERENCE_GAIN: f32 = 4.0;
 
 /// Shown when the export's embedded profile cannot be turned into sRGB.
 pub const NOT_CONVERTED: &str = "Export from Lightroom in sRGB, or with an embedded profile.";
+/// Shown when a candidate table is missing from the registry after a render (it could not be
+/// made, or went missing): the render is not used.
+pub const TABLE_LOST: &str = "The colour table could not be kept while rendering. Try again.";
 /// Shown after Stop.
 pub const STOPPED: &str = "The match was stopped.";
 /// The verdicts ([`Verdict::text`]).
@@ -144,6 +147,9 @@ pub fn matched_preset(preset: Option<&Value>, name: &str, fit: &Fit) -> Value {
     let o = out.as_object_mut().expect("an object");
     o.insert("vignette".into(), json!(fit.vignette));
     o.insert("vignetteMidpoint".into(), json!(fit.vignette_midpoint));
+    // Grain is written even at 0: the table and vignette were fitted with exactly this grain,
+    // and a photo's own grain left in place would add to Lightroom's look (the Effects group
+    // is carried anyway for the vignette, so an absent grain would mean 0 all the same).
     o.insert("grain".into(), json!(fit.grain));
     o.insert("grainSize".into(), json!(fit.grain_size));
     if !o.get("desktop").is_some_and(Value::is_object) {
@@ -192,7 +198,9 @@ pub fn match_with(
     let mut last: Option<Image> = None;
     // The table as the preset will carry it (16-bit) and its embedded name, made once per
     // table the fit tries.
-    let mut candidate: Option<(Vec<[f32; 3]>, String, Option<Lut>)> = None;
+    // Each is pinned while the fit renders with it, so a catalogue opening meanwhile (which
+    // clears the registry) cannot make a render go without it.
+    let mut candidate: Option<(Vec<[f32; 3]>, String, Option<lf_pipeline::lut::Pinned>)> = None;
     let fit = example::fit(&ours, theirs, &mut |f: &Fit| {
         if !candidate
             .as_ref()
@@ -202,15 +210,16 @@ pub fn match_with(
             let name = lf_settings::lut::well_formed_hash(&encoded)
                 .map(embedded_name)
                 .unwrap_or_default();
-            candidate = Some((f.table.data.clone(), name, decode_table(&encoded)));
+            let pinned = decode_table(&encoded).map(|t| lf_pipeline::lut::pin(&name, t));
+            candidate = Some((f.table.data.clone(), name, pinned));
         }
-        let Some((_, name, table)) = &candidate else {
+        let Some((_, name, _)) = &candidate else {
             unreachable!("a candidate was just made")
         };
         let img = if failed.is_some() || stopped() {
             ours.clone()
         } else {
-            match render_with_table(render, &effects_settings(&base, name, f), name, table) {
+            match render_with_table(render, &effects_settings(&base, name, f), name) {
                 Ok(img) => img,
                 Err(e) => {
                     failed = Some(e);
@@ -255,32 +264,18 @@ pub fn match_with(
     Ok((matched_preset(preset, name, &fit), fit, previews))
 }
 
-/// How many times a render is tried again when its table went missing meanwhile.
-const TABLE_RETRIES: usize = 2;
-
-/// `render(settings)` with `table` registered as `name`, which `settings` names. The registry
-/// is process-wide and opening a catalogue clears it, which would silently render without the
-/// table: so it is registered just before, checked after, and the render made again when it
-/// was gone (a clear after the renderer took the table is harmless, and only costs a render).
+/// `render(settings)`, where `settings` names the table registered (and pinned) as `name`;
+/// an error when the table is not there after all, never a render without it to fit on.
 fn render_with_table(
     render: &mut dyn FnMut(&EditSettings) -> Result<Image, String>,
     settings: &EditSettings,
     name: &str,
-    table: &Option<Lut>,
 ) -> Result<Image, String> {
-    let Some(table) = table else {
-        return render(settings);
-    };
-    let mut tries = 0;
-    loop {
-        lf_pipeline::lut::register(name, table.clone());
-        let img = render(settings)?;
-        if lf_pipeline::lut::get(name).is_some() || tries == TABLE_RETRIES {
-            return Ok(img);
-        }
-        log::info!("the example fit's table was cleared while rendering; rendering again");
-        tries += 1;
+    let img = render(settings)?;
+    if lf_pipeline::lut::get(name).is_none() {
+        return Err(TABLE_LOST.to_owned());
     }
+    Ok(img)
 }
 
 /// `img` shrunk to [`PREVIEW_EDGE`] (never enlarged), as an egui picture.
@@ -315,6 +310,9 @@ pub fn read_export(path: &Path) -> Result<Image, String> {
     let orientation = decoder.orientation().map_err(unreadable_text)?;
     let mut img = image::DynamicImage::from_decoder(decoder).map_err(unreadable_text)?;
     img.apply_orientation(orientation);
+    // 16-bit before shrinking: the resize writes the format it is given, and averaging into
+    // 8 bits would round the export again (fine detail the grain fit would count).
+    let mut img = image::DynamicImage::ImageRgb16(img.into_rgb16());
     let edge = EXPORT_EDGE;
     if img.width().max(img.height()) > edge {
         img = img.resize(edge, edge, image::imageops::FilterType::Triangle);
@@ -396,6 +394,7 @@ mod tests {
     use super::*;
     use lf_grade::example::{radius, vignette};
     use lf_settings::lightroom::budget::desktop_fits;
+    use lf_settings::lut::Lut;
 
     const W: usize = 256;
     const H: usize = 192;
@@ -443,8 +442,8 @@ mod tests {
         }
     }
 
-    /// The injected pipeline: the photo with the registered table the settings name and
-    /// their vignette (grain left out), recording each settings it was given.
+    /// The injected pipeline: the photo with the registered table the settings name, their
+    /// vignette and a deterministic grain, recording each settings it was given.
     fn pipeline<'a>(
         photo: &'a Image,
         seen: &'a mut Vec<EditSettings>,
@@ -454,9 +453,60 @@ mod tests {
             let table = LutChoice::from_settings(s).and_then(|c| lf_pipeline::lut::get(&c.name));
             Ok(map(photo, |x, y, c| {
                 let c = table.as_ref().map_or(c, |t| t.apply(c));
-                vignette(c, radius(x, y, W, H), s.vignette, s.vignette_midpoint)
+                let c = vignette(c, radius(x, y, W, H), s.vignette, s.vignette_midpoint);
+                let n = noise(x, y) * (s.grain / 100.0) as f32 * 0.2;
+                c.map(|v| (v + n).clamp(0.0, 1.0))
             }))
         }
+    }
+
+    /// Repeatable noise in -0.5..0.5, the same for every render (as the shader's).
+    fn noise(x: usize, y: usize) -> f32 {
+        let mut h = (x as u32).wrapping_mul(0x9E37_79B1) ^ (y as u32).wrapping_mul(0x85EB_CA77);
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2C1B_3C6D);
+        h ^= h >> 12;
+        (h & 0xFFFF) as f32 / 65535.0 - 0.5
+    }
+
+    /// `img` as an 8-bit file stores it.
+    fn eight_bit(img: &Image) -> Image {
+        map(img, |_, _, c| c.map(|v| (v * 255.0).round() / 255.0))
+    }
+
+    #[test]
+    fn a_grain_free_8_bit_export_gets_no_grain() {
+        let _turn = turn();
+        let photo = eight_bit(&colourful());
+        let theirs = eight_bit(&map(&photo, |_, _, c| look(c)));
+        let mut seen = Vec::new();
+        let (out, fit, _) = match_with(
+            &mut pipeline(&photo, &mut seen),
+            &theirs,
+            None,
+            "x",
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(fit.grain < 5.0, "grain {}", fit.grain);
+        assert_eq!(out["grain"].as_f64(), Some(fit.grain));
+    }
+
+    #[test]
+    fn a_render_without_its_table_is_an_error() {
+        let _turn = turn();
+        let mut render = |_: &EditSettings| -> Result<Image, String> {
+            Ok(Image {
+                w: 1,
+                h: 1,
+                data: vec![0.0; 3],
+            })
+        };
+        let s = EditSettings::default_settings();
+        assert_eq!(
+            render_with_table(&mut render, &s, "lr-never-registered").unwrap_err(),
+            TABLE_LOST
+        );
     }
 
     /// The LUT registry is process-wide: tests that use it take turns with `luts`'s.
@@ -629,27 +679,22 @@ mod tests {
     }
 
     #[test]
-    fn a_table_cleared_mid_render_is_rendered_again() {
+    fn a_pinned_table_survives_a_catalogue_opening_mid_render() {
         let _turn = turn();
-        let table = Some(Lut::identity(2));
-        let settings = EditSettings::default_settings();
-        let mut calls = 0;
+        let _pinned = lf_pipeline::lut::pin("lr-pinned", Lut::identity(2));
         let mut render = |_: &EditSettings| -> Result<Image, String> {
-            calls += 1;
-            if calls == 1 {
-                // A catalogue opened meanwhile.
-                lf_pipeline::lut::clear();
-            }
-            let had = lf_pipeline::lut::get("lr-cleared").is_some();
+            // A catalogue opened meanwhile.
+            lf_pipeline::lut::clear();
+            let had = lf_pipeline::lut::get("lr-pinned").is_some();
             Ok(Image {
                 w: 1,
                 h: 1,
                 data: vec![if had { 1.0 } else { 0.0 }; 3],
             })
         };
-        let img = render_with_table(&mut render, &settings, "lr-cleared", &table).unwrap();
-        assert_eq!(img.data, [1.0; 3], "the render with its table");
-        assert_eq!(calls, 2);
+        let s = EditSettings::default_settings();
+        let img = render_with_table(&mut render, &s, "lr-pinned").unwrap();
+        assert_eq!(img.data, [1.0; 3], "the render had its table");
     }
 
     #[test]
@@ -760,5 +805,20 @@ mod tests {
         let read = read_export(&path).unwrap();
         assert_eq!(read.w, EXPORT_EDGE as usize);
         assert_eq!(read.h, 27);
+
+        // An 8-bit export is shrunk in 16 bits: averaged values between 8-bit steps survive.
+        let path = dir.path().join("big8.png");
+        image::RgbImage::from_fn(3000, 20, |x, _| {
+            image::Rgb([(x / 3 % 2) as u8 * 2 + 100; 3])
+        })
+        .save(&path)
+        .unwrap();
+        let read = read_export(&path).unwrap();
+        assert!(
+            read.data
+                .iter()
+                .any(|v| ((v * 255.0) - (v * 255.0).round()).abs() > 0.1),
+            "every value on an 8-bit step"
+        );
     }
 }

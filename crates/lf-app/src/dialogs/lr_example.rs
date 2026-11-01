@@ -77,6 +77,20 @@ pub struct Matched {
     pub preset: Value,
     pub fit: Fit,
     pub previews: Previews,
+    /// Whether the preset is within the size cap (judged once, not every frame).
+    pub fits: bool,
+}
+
+impl Matched {
+    pub fn new(preset: Value, fit: Fit, previews: Previews) -> Matched {
+        let fits = desktop_fits(&preset);
+        Matched {
+            preset,
+            fit,
+            previews,
+            fits,
+        }
+    }
 }
 
 /// Where the dialog is.
@@ -297,7 +311,7 @@ impl LrExampleDialog {
         ui.label(difference_text(fit));
         ui.label(RichText::new(details_text(fit)).small().color(theme::MUTED));
         ui.add_space(12.0);
-        let fits = desktop_fits(&matched.preset);
+        let fits = matched.fits;
         ui.horizontal(|ui| {
             if self.preset.is_some() {
                 let save = ui

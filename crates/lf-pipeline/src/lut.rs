@@ -6,7 +6,7 @@
 //! the develop pass never reads.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use half::f16;
 use lf_settings::EditSettings;
@@ -20,6 +20,8 @@ use crate::gpu::Gpu;
 pub const SOFT_PROOF: &str = "\u{1}soft-proof";
 
 static REGISTRY: RwLock<Option<HashMap<String, Arc<Lut>>>> = RwLock::new(None);
+/// Names [`clear`] keeps, each with how many [`Pinned`] guards hold it.
+static PINNED: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
 
 /// Makes `lut` available under `name` (replacing one of that name).
 pub fn register(name: &str, lut: Lut) {
@@ -28,9 +30,47 @@ pub fn register(name: &str, lut: Lut) {
         .insert(name.to_owned(), Arc::new(lut));
 }
 
-/// Forgets every table (another catalogue is opening).
+/// Forgets every table (another catalogue is opening), except those pinned.
 pub fn clear() {
-    *REGISTRY.write().unwrap_or_else(|e| e.into_inner()) = None;
+    let pinned = PINNED.lock().unwrap_or_else(|e| e.into_inner());
+    let mut reg = REGISTRY.write().unwrap_or_else(|e| e.into_inner());
+    match (pinned.as_ref(), reg.as_mut()) {
+        (Some(p), Some(r)) if !p.is_empty() => r.retain(|name, _| p.contains_key(name)),
+        _ => *reg = None,
+    }
+}
+
+/// Keeps a table registered through [`clear`] while held; dropping it leaves the table
+/// registered (as [`register`] does) but no longer kept.
+#[must_use = "the table is kept only while this is held"]
+pub struct Pinned(String);
+
+/// Registers `lut` as `name` and keeps it through [`clear`] until the guard is dropped: for
+/// a job that renders with a table it made (the example fit's candidates), so a catalogue
+/// opening meanwhile cannot make it render without it.
+pub fn pin(name: &str, lut: Lut) -> Pinned {
+    *PINNED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(HashMap::new)
+        .entry(name.to_owned())
+        .or_default() += 1;
+    register(name, lut);
+    Pinned(name.to_owned())
+}
+
+impl Drop for Pinned {
+    fn drop(&mut self) {
+        let mut pinned = PINNED.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(p) = pinned.as_mut()
+            && let Some(n) = p.get_mut(&self.0)
+        {
+            *n -= 1;
+            if *n == 0 {
+                p.remove(&self.0);
+            }
+        }
+    }
 }
 
 /// The table registered under `name`.
