@@ -170,24 +170,14 @@ impl Lut {
 
     /// The table as `.cube` text (red fastest, as [`Lut::parse_cube`] reads it).
     pub fn to_cube(&self) -> String {
+        use std::fmt::Write as _;
         let mut text = String::with_capacity(self.data.len() * 24 + 64);
         if let Some(t) = &self.title {
-            text.push_str(&format!(
-                "TITLE \"{t}\"
-"
-            ));
+            let _ = writeln!(text, "TITLE \"{t}\"");
         }
-        text.push_str(&format!(
-            "LUT_3D_SIZE {}
-",
-            self.size
-        ));
+        let _ = writeln!(text, "LUT_3D_SIZE {}", self.size);
         for p in &self.data {
-            text.push_str(&format!(
-                "{:.6} {:.6} {:.6}
-",
-                p[0], p[1], p[2]
-            ));
+            let _ = writeln!(text, "{:.6} {:.6} {:.6}", p[0], p[1], p[2]);
         }
         text
     }
