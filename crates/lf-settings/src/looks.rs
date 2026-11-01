@@ -5,6 +5,7 @@ use std::sync::LazyLock;
 use serde_json::{Map, Value, json};
 
 use crate::groups::{DEFAULT_COPY_GROUPS, GroupKey, apply_groups, desktop_groups, groups_in};
+use crate::lightroom::is_lightroom;
 use crate::{EditSettings, HSL_BANDS};
 
 pub struct Look {
@@ -114,7 +115,17 @@ pub static LOOKS: LazyLock<[Look; 12]> = LazyLock::new(|| {
 
 /// A look or preset applied to a photo: replaces the look groups it carries and the desktop
 /// edits it carries, keeps the crop and spots.
+///
+/// An imported Lightroom preset (`desktop.lightroom`) is applied Lightroom's way instead: it
+/// changes only the groups it carries and resets nothing, so the photo keeps the rest.
 pub fn apply_look(onto: &EditSettings, look: &Value) -> EditSettings {
+    if is_lightroom(look) {
+        let carried: Vec<GroupKey> = groups_in(look)
+            .into_iter()
+            .filter(|g| !matches!(g, GroupKey::Geometry | GroupKey::Spots))
+            .collect();
+        return apply_groups(onto, look, &carried);
+    }
     let has_look_groups = groups_in(look)
         .iter()
         .any(|g| !matches!(g, GroupKey::Geometry | GroupKey::Spots));

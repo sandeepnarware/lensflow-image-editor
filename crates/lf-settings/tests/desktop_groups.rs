@@ -135,3 +135,35 @@ fn a_preset_carrying_desktop_edits_applies_them() {
     let web = apply_look(&next, &json!({"v": 2, "contrast": 20}));
     assert_eq!(desktop(&web, "calibration"), Some(json!({"redHue": 20})));
 }
+
+#[test]
+fn an_imported_preset_changes_only_what_it_carries() {
+    let onto = normalise(&json!({
+        "v": 2, "exposure": 1.0, "contrast": 30, "temperature": 10,
+        "crop": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 1.0},
+        "spots": [{"x": 0.5, "y": 0.5, "r": 0.02, "sx": 0.1, "sy": 0.1}]
+    }));
+    let preset = json!({"v": 2, "contrast": 20, "desktop": {"lightroom": {"name": "x"}}});
+    assert!(lf_settings::lightroom::is_lightroom(&preset));
+    let next = apply_look(&onto, &preset);
+    assert_eq!(next.exposure, 1.0);
+    assert_eq!(next.contrast, 20.0);
+    assert_eq!(next.temperature, 10.0);
+    assert_eq!(next.crop.w, 0.5);
+    assert!(desktop(&next, lf_settings::lightroom::LIGHTROOM_KEY).is_none());
+
+    // Crop and spots in the preset never reach the photo.
+    let with_geometry = json!({
+        "v": 2, "contrast": 20,
+        "crop": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2},
+        "spots": [],
+        "desktop": {"lightroom": {"name": "x"}}
+    });
+    let next = apply_look(&onto, &with_geometry);
+    assert_eq!(next.crop, onto.crop);
+    assert_eq!(next.spots, onto.spots);
+
+    // A look without the marker still resets the groups it doesn't mention.
+    let plain = apply_look(&onto, &json!({"v": 2, "contrast": 20}));
+    assert_eq!(plain.exposure, 0.0);
+}

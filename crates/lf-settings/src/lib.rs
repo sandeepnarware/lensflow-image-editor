@@ -17,6 +17,7 @@ pub mod groups;
 pub mod heal;
 pub mod lens;
 pub mod lens_blur;
+pub mod lightroom;
 pub mod looks;
 pub mod lut;
 pub mod masks;
