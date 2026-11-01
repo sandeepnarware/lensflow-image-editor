@@ -24,7 +24,6 @@ use crate::dialogs::save_preset::MAX_NAME;
 /// The account server's limit of presets per studio (`PhotoEditPreset::MAX_PER_STUDIO`).
 pub const MAX_PRESETS: usize = 2000;
 /// Shown for a Lightroom profile (a "Look"), which is not a develop preset.
-pub const PROFILE: &str = "This is a profile, not a preset.";
 /// Shown for a preset whose settings stay over the cap even without Lightroom's copy.
 pub const TOO_LARGE: &str = "This preset is too large to keep.";
 /// Shown for a preset the catalogue could not save, before the catalogue's own words.
@@ -42,6 +41,8 @@ pub struct ImportReport {
     pub failed: Vec<(String, String)>,
     /// The presets not saved because the studio reached [`MAX_PRESETS`] (their names).
     pub left_out: Vec<String>,
+    /// Files that were Lightroom profiles (not presets): skipped, not failures.
+    pub skipped_profiles: usize,
     /// Stop was pressed: how many of the files found were not processed.
     pub stopped: Option<usize>,
 }
@@ -184,7 +185,7 @@ fn import_one(studio: &mut Studio, f: Found, report: &mut ImportReport) {
         }
     };
     if preset.kind == LrKind::Profile {
-        report.failed.push((f.source, PROFILE.to_owned()));
+        report.skipped_profiles += 1;
         return;
     }
     let wanted = wanted_name(&preset, &f);
@@ -394,10 +395,8 @@ mod tests {
             .into_bytes();
         let report = import(&catalog, 7, vec![found("look.xmp", None, bytes)], &stop);
         assert!(report.imported.is_empty());
-        assert_eq!(
-            report.failed,
-            [("pack.zip / look.xmp".to_owned(), PROFILE.to_owned())]
-        );
+        assert!(report.failed.is_empty(), "a profile is skipped, not a failure");
+        assert_eq!(report.skipped_profiles, 1);
     }
 
     #[test]

@@ -3537,7 +3537,12 @@ fn lightroom_presets_are_imported_from_the_action_and_the_presets_panel() {
     assert!(h.query_by_label(&lr_import::imported_text(2)).is_some());
     assert!(
         h.query_by_label_contains(lr_import::FAILED_TITLE).is_some(),
-        "the profile and the broken file are listed"
+        "the broken file is listed"
+    );
+    assert!(
+        h.query_by_label(&lr_import::skipped_profiles_text(1))
+            .is_some(),
+        "the profile is skipped, on its own line"
     );
     let catalog = lf_catalog::Catalog::open(&dir.path().join("catalogue")).unwrap();
     let names: Vec<String> = lf_catalog::presets::list(&catalog, 7)
@@ -3550,9 +3555,20 @@ fn lightroom_presets_are_imported_from_the_action_and_the_presets_panel() {
         h.state_mut().lib.take_presets_changed(),
         "a sync is asked for"
     );
-    h.get_by_label(lr_import::CLOSE).click();
+    // An imported preset's "Match a Lightroom example…" opens that dialog for it.
+    h.get_all_by_label(lr_import::MATCH_EXAMPLE)
+        .next()
+        .unwrap()
+        .click();
+    h.step();
     h.step();
     assert!(h.state().lib.lr_import().is_none());
+    let matching = h.state().lib.lr_example().expect("the match dialog opened");
+    assert_eq!(matching.preset.as_ref().unwrap().0, "Studio - Warm Fade");
+    h.get_by_role_and_label(Role::Button, lf_app::dialogs::lr_example::CANCEL)
+        .click();
+    h.step();
+    assert!(h.state().lib.lr_example().is_none());
 
     // The presets panel's link opens it too, and lists what was imported.
     develop_one(&mut h, dir.path());
@@ -3598,8 +3614,11 @@ fn an_import_answer_for_another_catalogue_does_not_leave_the_dialog_waiting() {
     });
     assert!(matches!(
         h.state().lib.lr_import().map(|d| &d.stage),
-        Some(Stage::Done(_))
+        Some(Stage::Elsewhere)
     ));
+    h.step();
+    assert!(h.query_by_label(lr_import::OTHER_CATALOGUE).is_some());
+    assert!(h.query_by_label_contains("0 presets").is_none());
 }
 
 /// A colourful 8-bit picture (tiles across the colour cube in a grey frame), and Lightroom's

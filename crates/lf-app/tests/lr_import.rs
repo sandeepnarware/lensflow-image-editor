@@ -71,7 +71,7 @@ fn the_summary_lists_the_notes_of_each_preset() {
             "That file is not readable XML, so it is not a Lightroom preset.".into(),
         )],
         left_out: vec!["Extra".into()],
-        stopped: None,
+        ..ImportReport::default()
     });
     let mut h = harness(dialog);
     h.run_steps(2);
@@ -147,4 +147,41 @@ fn a_stopped_import_says_how_many_files_were_not_processed() {
     let mut h = harness(dialog);
     h.run_steps(2);
     assert!(h.query_by_label(&lr_import::stopped_text(3)).is_some());
+}
+
+#[test]
+fn profiles_are_a_separate_skipped_line_not_a_failure() {
+    let mut dialog = LrImportDialog::new(Vec::new());
+    dialog.stage = Stage::Done(ImportReport {
+        imported: vec![("Plain".into(), Vec::new())],
+        skipped_profiles: 2,
+        ..ImportReport::default()
+    });
+    let mut h = harness(dialog);
+    h.run_steps(2);
+    assert_eq!(
+        lr_import::skipped_profiles_text(2),
+        "Skipped: 2 profiles (Lightroom profiles are not presets)."
+    );
+    assert!(
+        h.query_by_label(&lr_import::skipped_profiles_text(2))
+            .is_some()
+    );
+    assert!(h.query_by_label_contains(lr_import::FAILED_TITLE).is_none());
+}
+
+#[test]
+fn each_imported_preset_offers_a_match_to_a_lightroom_example() {
+    let mut dialog = LrImportDialog::new(Vec::new());
+    dialog.stage = Stage::Done(ImportReport {
+        imported: vec![("One".into(), Vec::new()), ("Two".into(), Vec::new())],
+        ..ImportReport::default()
+    });
+    let mut h = harness(dialog);
+    h.run_steps(2);
+    let buttons: Vec<_> = h.get_all_by_label(lr_import::MATCH_EXAMPLE).collect();
+    assert_eq!(buttons.len(), 2);
+    buttons[1].click();
+    h.step();
+    assert_eq!(h.state().1, [LrImportAction::MatchExample("Two".into())]);
 }

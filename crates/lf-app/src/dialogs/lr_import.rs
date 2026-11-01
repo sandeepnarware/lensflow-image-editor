@@ -27,6 +27,11 @@ pub const STOP: &str = "Stop";
 pub const CLOSE: &str = "Close";
 pub const FAILED_TITLE: &str = "Could not be imported";
 pub const NOTES_TITLE: &str = "Imported with notes";
+pub const MATCH_EXAMPLE: &str = "Match a Lightroom example…";
+pub const IMPORTED_TITLE: &str = "Imported presets";
+/// Shown when the import's answer was for another catalogue than the one open now.
+pub const OTHER_CATALOGUE: &str =
+    "The presets were imported into another catalogue, not the one that is open now.";
 
 /// The files the "Choose files…" picker offers.
 pub const PRESET_FILES: &[&str] = &["xmp", "lrtemplate", "zip"];
@@ -38,6 +43,15 @@ pub fn imported_text(n: usize) -> String {
     } else {
         format!("{} presets imported.", count(n))
     }
+}
+
+/// The profiles line: Lightroom profiles are looks of another kind, left alone on purpose.
+pub fn skipped_profiles_text(n: usize) -> String {
+    let what = if n == 1 { "profile" } else { "profiles" };
+    format!(
+        "Skipped: {} {what} (Lightroom profiles are not presets).",
+        count(n)
+    )
 }
 
 /// The left-out line: the studio is full.
@@ -74,6 +88,8 @@ pub enum Stage {
     Choosing,
     Importing,
     Done(ImportReport),
+    /// The answer was for another catalogue ([`OTHER_CATALOGUE`]).
+    Elsewhere,
 }
 
 /// What the dialog asks for.
@@ -86,6 +102,8 @@ pub enum LrImportAction {
     ChooseFolder,
     /// Import what was chosen.
     Import(Vec<PathBuf>),
+    /// Open "Match a Lightroom example…" for the imported preset of this name.
+    MatchExample(String),
     Close,
 }
 
@@ -156,7 +174,16 @@ impl LrImportDialog {
                     }
                 }
                 Stage::Done(report) => {
-                    summary_ui(ui, report);
+                    if let Some(name) = summary_ui(ui, report) {
+                        action = LrImportAction::MatchExample(name);
+                    }
+                    ui.add_space(12.0);
+                    if ui.button(CLOSE).clicked() {
+                        action = LrImportAction::Close;
+                    }
+                }
+                Stage::Elsewhere => {
+                    ui.label(OTHER_CATALOGUE);
                     ui.add_space(12.0);
                     if ui.button(CLOSE).clicked() {
                         action = LrImportAction::Close;
@@ -221,11 +248,16 @@ impl LrImportDialog {
     }
 }
 
-/// The summary: imported, with notes (each preset's opens to show them), failed, left out.
-fn summary_ui(ui: &mut egui::Ui, report: &ImportReport) {
+/// The summary: imported (each with "Match a Lightroom example…", whose preset's name is
+/// answered), with notes (each preset's opens to show them), failed, skipped profiles, left out.
+fn summary_ui(ui: &mut egui::Ui, report: &ImportReport) -> Option<String> {
+    let mut matched = None;
     ui.label(RichText::new(imported_text(report.imported.len())).strong());
     if let Some(n) = report.stopped {
         ui.label(RichText::new(stopped_text(n)).color(theme::WARNING));
+    }
+    if report.skipped_profiles > 0 {
+        ui.label(RichText::new(skipped_profiles_text(report.skipped_profiles)).color(theme::MUTED));
     }
     let noted: Vec<_> = report
         .imported
@@ -236,6 +268,18 @@ fn summary_ui(ui: &mut egui::Ui, report: &ImportReport) {
         .id_salt("lr-import-summary")
         .max_height(360.0)
         .show(ui, |ui| {
+            if !report.imported.is_empty() {
+                ui.add_space(6.0);
+                ui.label(IMPORTED_TITLE);
+                for (name, _) in &report.imported {
+                    ui.horizontal(|ui| {
+                        ui.label(shown_name(ui.ctx(), name));
+                        if ui.small_button(MATCH_EXAMPLE).clicked() {
+                            matched = Some(name.clone());
+                        }
+                    });
+                }
+            }
             if !noted.is_empty() {
                 ui.add_space(6.0);
                 ui.label(format!("{NOTES_TITLE} ({})", count(noted.len())));
@@ -274,4 +318,5 @@ fn summary_ui(ui: &mut egui::Ui, report: &ImportReport) {
                 }
             }
         });
+    matched
 }

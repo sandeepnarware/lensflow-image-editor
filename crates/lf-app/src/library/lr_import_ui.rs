@@ -45,6 +45,18 @@ impl Library {
             LrImportAction::ChooseFiles => pick(dialog.id, false, env),
             LrImportAction::ChooseFolder => pick(dialog.id, true, env),
             LrImportAction::Import(paths) => self.start_lr_import(paths, env),
+            LrImportAction::MatchExample(name) => {
+                let preset = self
+                    .develop
+                    .preset_rows()
+                    .into_iter()
+                    .find(|r| r.name == name)
+                    .map(|r| (r.name, r.settings));
+                if self.can_match_lr() {
+                    self.lr_import = None;
+                    self.open_lr_example(preset);
+                }
+            }
         }
     }
 
@@ -84,7 +96,7 @@ impl Library {
             if let Some(dialog) = &mut self.lr_import
                 && dialog.stage == Stage::Importing
             {
-                dialog.stage = Stage::Done(ImportReport::default());
+                dialog.stage = Stage::Elsewhere;
             }
             return;
         }
