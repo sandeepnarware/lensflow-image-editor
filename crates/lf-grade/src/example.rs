@@ -17,14 +17,21 @@ use lf_settings::lut::Lut;
 /// as text) to travel inside a preset.
 pub const TABLE_SIZE: usize = 17;
 
+/// The difference a usable fit stays under (ΔE2000 at working size): its mean and its 95th
+/// percentile.
+pub const TARGET_MEAN: f64 = 2.0;
+pub const TARGET_P95: f64 = 5.0;
+
 /// Alignment searches a pyramid of this many halvings (shifts up to about ±16 pixels).
 const ALIGN_LEVELS: u32 = 4;
-/// After the shift, a mean absolute luma difference above this means the pair does not show
-/// the same picture (or not framed the same way).
-const MISALIGNED_LUMA: f64 = 0.15;
+/// After the fit, a mean absolute luma difference between the fit's prediction and theirs
+/// above this means the pair does not show the same picture framed the same way.
+const MISALIGNED_RESIDUAL: f64 = 0.03;
 /// The share of each edge left out: shifting, resizing and lens differences make it unreliable.
 const BORDER: f64 = 0.05;
-/// A channel at or beyond these is clipped: the true colour is lost, so the pixel is left out.
+/// Clipping limits. A pixel is left out when its luma is at or beyond these (blown to white or
+/// crushed to black), or when all three channels are; one channel at an end alone is kept, as
+/// vivid colours (a saturated red has blue and green near zero) are what a look must learn.
 const CLIP_HIGH: f32 = 0.995;
 const CLIP_LOW: f32 = 0.005;
 /// At most this many pixels feed the table and vignette fits (evenly spread), which bounds the
@@ -68,6 +75,12 @@ impl Image {
 }
 
 /// What the fit learned, as our own settings, and how close it came.
+///
+/// A fit is always returned, but it is only worth keeping when the pair lined up *and* the
+/// result came close: callers must check `aligned` and judge `delta_e_mean` and
+/// `delta_e_p95` against the target ([`TARGET_MEAN`], [`TARGET_P95`]) before trusting
+/// `table`. Either alone is not enough: a mild warp (a lens profile applied on one side
+/// only) can stay "aligned" while the difference stays high.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Fit {
     /// The colour table (size [`TABLE_SIZE`]), applied to our finished colour.
@@ -82,7 +95,8 @@ pub struct Fit {
     pub delta_e_mean: f64,
     pub delta_e_p95: f64,
     /// False when the pair does not line up: a different photo, or cropped or turned
-    /// differently. The numbers are still filled in, but mean little.
+    /// differently, judged on what the fit left unexplained (a strong look alone never makes
+    /// it false). The numbers are still filled in, but mean little.
     pub aligned: bool,
 }
 
@@ -119,15 +133,7 @@ pub fn fit(ours: &Image, theirs: &Image, render_effects: &mut dyn FnMut(&Fit) ->
         mask = vec![true; w * h];
         aligned = false;
     }
-    let (ly, ty) = (ours.luma(), theirs.luma());
-    let (mut sum, mut n) = (0f64, 0usize);
-    for i in (0..w * h).filter(|&i| mask[i]) {
-        sum += (ly[i] - ty[i]).abs() as f64;
-        n += 1;
-    }
-    if sum / n as f64 > MISALIGNED_LUMA {
-        aligned = false;
-    }
+    let ty = theirs.luma();
 
     // The pixels the table and vignette learn from, evenly thinned.
     let valid: Vec<usize> = (0..w * h).filter(|&i| mask[i]).collect();
@@ -182,9 +188,25 @@ pub fn fit(ours: &Image, theirs: &Image, render_effects: &mut dyn FnMut(&Fit) ->
             })
             .collect(),
     };
-    let blocks = flat_blocks(&predicted.luma(), &mask, w, h);
+    let predicted_luma = predicted.luma();
+
+    // Lined up or not is judged on what the fit could not explain: a look, however strong,
+    // is a mapping of colours the table and vignette take up, while a different picture, a
+    // crop, a turn or a warp leaves pixels whose partners show something else.
+    // Both are lightly blurred first, so grain and noise (which no fit predicts) average out.
+    let (near_predicted, near_theirs) = (box3(&predicted_luma, w, h), box3(&ty, w, h));
+    let residual = (0..w * h)
+        .filter(|&i| mask[i])
+        .map(|i| (near_predicted[i] - near_theirs[i]).abs() as f64)
+        .sum::<f64>()
+        / mask.iter().filter(|&&m| m).count() as f64;
+    if residual > MISALIGNED_RESIDUAL {
+        result.aligned = false;
+    }
+
+    let blocks = flat_blocks(&predicted_luma, &mask, w, h);
     if !blocks.is_empty() {
-        let base = fine_detail(&predicted.luma(), w, h, &blocks);
+        let base = fine_detail(&predicted_luma, w, h, &blocks);
         let theirs_fine = fine_detail(&ty, w, h, &blocks);
         let calibration = render_effects(&Fit {
             grain: CALIBRATION_GRAIN,
@@ -210,28 +232,68 @@ pub fn fit(ours: &Image, theirs: &Image, render_effects: &mut dyn FnMut(&Fit) ->
     result
 }
 
-/// `img` resized to `w`×`h` by bilinear interpolation between pixel centres.
+/// `img` resized to `w`×`h`, each axis on its own: shrinking averages every source pixel the
+/// output pixel covers (by how much of it is covered), so fine detail such as grain or noise
+/// averages out instead of aliasing; enlarging interpolates bilinearly between pixel centres.
 pub fn resize(img: &Image, w: usize, h: usize) -> Image {
-    let (sw, sh) = (img.w, img.h);
-    let mut data = Vec::with_capacity(w * h * 3);
-    let axis = |i: usize, n: usize, sn: usize| {
-        let p = ((i as f32 + 0.5) * sn as f32 / n as f32 - 0.5).clamp(0.0, (sn - 1) as f32);
-        let lo = (p.floor() as usize).min(sn.saturating_sub(2));
-        (lo, (lo + 1).min(sn - 1), p - lo as f32)
-    };
-    for y in 0..h {
-        let (y0, y1, ty) = axis(y, h, sh);
-        for x in 0..w {
-            let (x0, x1, tx) = axis(x, w, sw);
-            for c in 0..3 {
-                let at = |xx: usize, yy: usize| img.data[(yy * sw + xx) * 3 + c];
-                let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * tx;
-                let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;
-                data.push(top + (bottom - top) * ty);
+    let across = taps(img.w, w);
+    let down = taps(img.h, h);
+    // Across first, into `w`×`img.h`, then down.
+    let mut wide = vec![0f32; w * img.h * 3];
+    for y in 0..img.h {
+        for (x, tap) in across.iter().enumerate() {
+            for &(sx, weight) in tap {
+                for c in 0..3 {
+                    wide[(y * w + x) * 3 + c] += img.data[(y * img.w + sx) * 3 + c] * weight;
+                }
+            }
+        }
+    }
+    let mut data = vec![0f32; w * h * 3];
+    for (y, tap) in down.iter().enumerate() {
+        for &(sy, weight) in tap {
+            for x in 0..w {
+                for c in 0..3 {
+                    data[(y * w + x) * 3 + c] += wide[(sy * w + x) * 3 + c] * weight;
+                }
             }
         }
     }
     Image { w, h, data }
+}
+
+/// For each of `n` output positions along an axis of `sn` source pixels, the source pixels it
+/// reads and their weights (summing to 1): the covered footprint when shrinking, the two
+/// nearest pixel centres when enlarging (or keeping the size).
+fn taps(sn: usize, n: usize) -> Vec<Vec<(usize, f32)>> {
+    let scale = sn as f64 / n as f64;
+    (0..n)
+        .map(|i| {
+            if scale > 1.0 {
+                let (from, to) = (i as f64 * scale, (i + 1) as f64 * scale);
+                let mut tap = Vec::new();
+                let mut s = from.floor() as usize;
+                while (s as f64) < to && s < sn {
+                    let cover = (to.min(s as f64 + 1.0) - from.max(s as f64)) / scale;
+                    if cover > 0.0 {
+                        tap.push((s, cover as f32));
+                    }
+                    s += 1;
+                }
+                tap
+            } else {
+                let p = ((i as f64 + 0.5) * scale - 0.5).clamp(0.0, (sn - 1) as f64);
+                let lo = (p.floor() as usize).min(sn.saturating_sub(2));
+                let hi = (lo + 1).min(sn - 1);
+                let t = (p - lo as f64) as f32;
+                if hi == lo {
+                    vec![(lo, 1.0)]
+                } else {
+                    vec![(lo, 1.0 - t), (hi, t)]
+                }
+            }
+        })
+        .collect()
 }
 
 /// The vignette's normalised radius at pixel (`x`, `y`) of a `w`×`h` image: 0 in the centre,
@@ -499,21 +561,12 @@ fn flat_blocks(luma: &[f32], mask: &[bool], w: usize, h: usize) -> Vec<(usize, u
 /// The standard deviation of `luma`'s fine detail (each pixel minus its 3×3 box mean) over
 /// the pixels of `blocks`.
 fn fine_detail(luma: &[f32], w: usize, h: usize, blocks: &[(usize, usize)]) -> f64 {
-    let at = |x: isize, y: isize| {
-        luma[(y.clamp(0, h as isize - 1) as usize) * w + x.clamp(0, w as isize - 1) as usize]
-    };
+    let mean3 = box3(luma, w, h);
     let (mut sum, mut sq, mut count) = (0f64, 0f64, 0f64);
     for &(bx, by) in blocks {
         for y in by..by + GRAIN_BLOCK {
             for x in bx..bx + GRAIN_BLOCK {
-                let (xi, yi) = (x as isize, y as isize);
-                let mut box3 = 0f32;
-                for oy in -1..=1 {
-                    for ox in -1..=1 {
-                        box3 += at(xi + ox, yi + oy);
-                    }
-                }
-                let v = (luma[y * w + x] - box3 / 9.0) as f64;
+                let v = (luma[y * w + x] - mean3[y * w + x]) as f64;
                 sum += v;
                 sq += v * v;
                 count += 1.0;
@@ -524,6 +577,26 @@ fn fine_detail(luma: &[f32], w: usize, h: usize, blocks: &[(usize, usize)]) -> f
     (sq / count - mean * mean).max(0.0).sqrt()
 }
 
+/// Each pixel of `luma` (`w`×`h`) replaced by the mean of its 3×3 neighbourhood (edges
+/// repeated).
+fn box3(luma: &[f32], w: usize, h: usize) -> Vec<f32> {
+    let at = |x: isize, y: isize| {
+        luma[(y.clamp(0, h as isize - 1) as usize) * w + x.clamp(0, w as isize - 1) as usize]
+    };
+    (0..w * h)
+        .map(|i| {
+            let (x, y) = ((i % w) as isize, (i / w) as isize);
+            let mut sum = 0f32;
+            for oy in -1..=1 {
+                for ox in -1..=1 {
+                    sum += at(x + ox, y + oy);
+                }
+            }
+            sum / 9.0
+        })
+        .collect()
+}
+
 /// How much of `with` is beyond `without`, for independent noise (`sqrt(a² - b²)`, never
 /// below zero).
 fn quadrature_excess(with: f64, without: f64) -> f64 {
@@ -531,14 +604,15 @@ fn quadrature_excess(with: f64, without: f64) -> f64 {
 }
 
 /// Which pixels are compared: inside the 5 % border, still inside `theirs` after the shift,
-/// and clipped in neither image.
+/// and clipped (see [`CLIP_HIGH`]) in neither image.
 fn compared(ours: &Image, theirs: &Image, dx: i32, dy: i32) -> Vec<bool> {
     let (w, h) = (ours.w, ours.h);
     let (bx, by) = (
         (w as f64 * BORDER).ceil() as usize,
         (h as f64 * BORDER).ceil() as usize,
     );
-    let clipped = |c: [f32; 3]| c.iter().any(|&v| !(CLIP_LOW..CLIP_HIGH).contains(&v));
+    let end = |v: f32| !(CLIP_LOW..CLIP_HIGH).contains(&v);
+    let clipped = |c: [f32; 3]| end(luma(c)) || c.iter().all(|&v| end(v));
     (0..w * h)
         .map(|i| {
             let (x, y) = (i % w, i / w);

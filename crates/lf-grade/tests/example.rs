@@ -249,11 +249,138 @@ fn resizing_keeps_a_flat_image_flat_and_sizes_right() {
         && (p[2] - 0.75).abs() < 1e-6));
 }
 
+/// `img` sampled bilinearly at `(x, y)` in pixels (pixel centres at whole numbers), clamped.
+fn sample(img: &Image, x: f32, y: f32) -> [f32; 3] {
+    let x = x.clamp(0.0, (img.w - 1) as f32);
+    let y = y.clamp(0.0, (img.h - 1) as f32);
+    let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+    let (x1, y1) = ((x0 + 1).min(img.w - 1), (y0 + 1).min(img.h - 1));
+    let (tx, ty) = (x - x0 as f32, y - y0 as f32);
+    let at = |xx: usize, yy: usize, c: usize| img.data[(yy * img.w + xx) * 3 + c];
+    [0, 1, 2].map(|c| {
+        let top = at(x0, y0, c) + (at(x1, y0, c) - at(x0, y0, c)) * tx;
+        let bottom = at(x0, y1, c) + (at(x1, y1, c) - at(x0, y1, c)) * tx;
+        top + (bottom - top) * ty
+    })
+}
+
+/// `img` warped about its centre: each output pixel reads from where `from` sends it.
+fn warp(img: &Image, from: impl Fn(f32, f32) -> (f32, f32)) -> Image {
+    let (cx, cy) = ((img.w - 1) as f32 / 2.0, (img.h - 1) as f32 / 2.0);
+    map(img, |x, y, _| {
+        let (sx, sy) = from(x as f32 - cx, y as f32 - cy);
+        sample(img, sx + cx, sy + cy)
+    })
+}
+
+/// A colour-for-colour look.
+type Look = fn([f32; 3]) -> [f32; 3];
+
+#[test]
+fn strong_looks_stay_aligned() {
+    let ours = colourful();
+    let looks: [(&str, Look); 2] = [
+        ("brighter", |c| c.map(|v| v.powf(0.6))),
+        ("darker", |c| c.map(|v| v * 0.45)),
+    ];
+    for (name, f) in looks {
+        let theirs = map(&ours, |_, _, c| f(c));
+        let fitted = fit(&ours, &theirs, &mut effects(&ours));
+        assert!(fitted.aligned, "{name}: said not aligned");
+        assert!(
+            fitted.delta_e_mean < 1.0,
+            "{name}: mean {}",
+            fitted.delta_e_mean
+        );
+    }
+}
+
+#[test]
+fn vivid_colours_are_learned() {
+    // Fully saturated colours: green at zero, red and blue across their range.
+    let ours = map(&colourful(), |x, y, c| {
+        let inside = (16..W - 16).contains(&x) && (16..H - 16).contains(&y);
+        if inside {
+            [
+                (x - 16) as f32 / (W - 33) as f32,
+                0.0,
+                (y - 16) as f32 / (H - 33) as f32,
+            ]
+        } else {
+            c
+        }
+    });
+    let theirs = map(&ours, |_, _, c| look(c));
+    let f = fit(&ours, &theirs, &mut effects(&ours));
+    let mut seed = 5u64;
+    let mut worst = 0f64;
+    for _ in 0..100 {
+        let c = [
+            0.2 + 0.75 * lcg(&mut seed),
+            0.0,
+            0.2 + 0.75 * lcg(&mut seed),
+        ];
+        worst = worst.max(delta_e2000(f.table.apply(c), look(c)));
+    }
+    assert!(worst < 1.5, "worst difference {worst}");
+}
+
+#[test]
+fn a_turned_or_warped_pair_says_so() {
+    let looked = map(&colourful(), |_, _, c| look(c));
+    let ours = colourful();
+    let (sin, cos) = 2f32.to_radians().sin_cos();
+    let turned = warp(&looked, |x, y| (x * cos - y * sin, x * sin + y * cos));
+    let f = fit(&ours, &turned, &mut effects(&ours));
+    assert!(
+        !f.aligned || f.delta_e_mean > 2.0,
+        "turned 2 degrees: aligned, mean {}",
+        f.delta_e_mean
+    );
+
+    let half = (W * W + H * H) as f32 / 4.0;
+    let barrel = warp(&looked, |x, y| {
+        let k = 1.0 + 0.04 * (x * x + y * y) / half;
+        (x * k, y * k)
+    });
+    let f = fit(&ours, &barrel, &mut effects(&ours));
+    assert!(
+        !f.aligned || f.delta_e_mean > 2.0,
+        "barrel: aligned, mean {}",
+        f.delta_e_mean
+    );
+}
+
+#[test]
+fn shrinking_averages_away_fine_detail() {
+    // Fine lines, one pixel lit in three: across red's columns and green's rows. Each output
+    // pixel covers 6 x 6, so it must be exactly a third (sampling would give 0.5, 0 or 1).
+    let (w, h) = (120, 96);
+    let data = (0..w * h)
+        .flat_map(|i| {
+            let lit = |v: usize| if v.is_multiple_of(3) { 1.0 } else { 0.0 };
+            [lit(i % w), lit(i / w), 1.0 / 3.0]
+        })
+        .collect();
+    let out = resize(&Image { w, h, data }, w / 6, h / 6);
+    assert_eq!((out.w, out.h), (20, 16));
+    let worst = out
+        .data
+        .iter()
+        .map(|v| (v - 1.0 / 3.0).abs())
+        .fold(0f32, f32::max);
+    assert!(worst < 1e-4, "fine lines shrunk 6x are not flat: {worst}");
+}
+
 #[test]
 fn delta_e2000_matches_published_pairs() {
     // Sharma, Wu and Dalal (2005), "The CIEDE2000 color-difference formula", Table 1,
-    // pairs 1, 7, 17 and 25.
+    // pairs 1, 4 (a' of zero in the second sample), 7, 11 and 15 (hues on either side of
+    // the wrap, whose mean and difference go round through 0), 17 and 25.
     let pairs = [
+        ([50.0, -1.3802, -84.2814], [50.0, 0.0, -82.7485], 1.0000),
+        ([50.0, 2.49, -0.001], [50.0, -2.49, 0.0011], 7.2195),
+        ([50.0, -0.001, 2.49], [50.0, 0.0011, -2.49], 4.7461),
         ([50.0, 2.6772, -79.7751], [50.0, 0.0, -82.7485], 2.0425),
         ([50.0, 0.0, 0.0], [50.0, -1.0, 2.0], 2.3669),
         ([50.0, 2.5, 0.0], [73.0, 25.0, -18.0], 27.1492),
