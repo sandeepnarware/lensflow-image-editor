@@ -242,13 +242,13 @@ impl Choice {
 }
 
 /// The settings a source lays over each photo: the active photo's edits keep the look
-/// groups only (not its crop and spots), as a copy does by default.
+/// groups and desktop edits (not its crop, spots or masks), as a copy does by default.
 pub fn current_choice(settings: &EditSettings) -> Choice {
     Choice {
         label: CURRENT.to_owned(),
         recipe: Recipe::Paste(clipboard::picked(
             settings,
-            &lf_settings::groups::DEFAULT_COPY_GROUPS,
+            &lf_settings::groups::COPY_DEFAULT_GROUPS,
         )),
         drops_geometry: false,
     }

@@ -1,10 +1,11 @@
 //! Which parts of an edit to copy, paste or keep in a preset, as the web's `GroupPicker.vue`:
-//! "Include", All / None, and a checkbox per setting group (the 11 `GROUPS`). Also the
+//! "Include", All / None, and a checkbox per setting group (`GROUPS`: the web's 11 and the
+//! desktop's). Also the
 //! "Copy edits" dialog (`Ctrl+Shift+C`) built on it.
 
 use crate::theme;
 use eframe::egui::{self, RichText};
-use lf_settings::groups::{DEFAULT_COPY_GROUPS, GROUPS, GroupKey};
+use lf_settings::groups::{COPY_DEFAULT_GROUPS, GROUPS, GroupKey};
 
 pub const INCLUDE: &str = "Include";
 pub const ALL: &str = "All";
@@ -78,7 +79,7 @@ pub struct CopyDialog {
 impl Default for CopyDialog {
     fn default() -> Self {
         CopyDialog {
-            groups: DEFAULT_COPY_GROUPS.to_vec(),
+            groups: COPY_DEFAULT_GROUPS.to_vec(),
         }
     }
 }
@@ -124,6 +125,6 @@ mod tests {
         assert_eq!(g, [GroupKey::Light, GroupKey::Bw, GroupKey::Spots]);
         toggle(&mut g, GroupKey::Bw, false);
         assert_eq!(g, [GroupKey::Light, GroupKey::Spots]);
-        assert_eq!(CopyDialog::default().groups, DEFAULT_COPY_GROUPS);
+        assert_eq!(CopyDialog::default().groups, COPY_DEFAULT_GROUPS);
     }
 }

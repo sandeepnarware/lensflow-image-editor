@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 
 use serde_json::{Map, Value, json};
 
-use crate::groups::{DEFAULT_COPY_GROUPS, GroupKey, apply_groups, groups_in};
+use crate::groups::{DEFAULT_COPY_GROUPS, GroupKey, apply_groups, desktop_groups, groups_in};
 use crate::{EditSettings, HSL_BANDS};
 
 pub struct Look {
@@ -112,7 +112,8 @@ pub static LOOKS: LazyLock<[Look; 12]> = LazyLock::new(|| {
     ]
 });
 
-/// A look or preset applied to a photo: replaces the look groups it carries, keeps the crop and spots.
+/// A look or preset applied to a photo: replaces the look groups it carries and the desktop
+/// edits it carries, keeps the crop and spots.
 pub fn apply_look(onto: &EditSettings, look: &Value) -> EditSettings {
     let has_look_groups = groups_in(look)
         .iter()
@@ -131,5 +132,8 @@ pub fn apply_look(onto: &EditSettings, look: &Value) -> EditSettings {
     } else {
         &[]
     };
-    apply_groups(&base, &merged, groups)
+    let web = apply_groups(&base, &merged, groups);
+    // Desktop edits the preset carries (lens corrections, calibration, a LUT...) are laid on
+    // too; those it doesn't carry stay as the photo has them (the web never resets them).
+    apply_groups(&web, look, &desktop_groups(&groups_in(look)))
 }

@@ -4,7 +4,7 @@
 use super::group_picker;
 use crate::theme;
 use eframe::egui::{self, RichText};
-use lf_settings::groups::{DEFAULT_COPY_GROUPS, GroupKey};
+use lf_settings::groups::{COPY_DEFAULT_GROUPS, GroupKey};
 
 pub const TITLE: &str = "Save as preset";
 pub const TEXT: &str =
@@ -46,7 +46,7 @@ impl Default for SavePresetDialog {
     fn default() -> Self {
         SavePresetDialog {
             name: String::new(),
-            groups: DEFAULT_COPY_GROUPS.to_vec(),
+            groups: COPY_DEFAULT_GROUPS.to_vec(),
             error: None,
             ai_masks: None,
         }

@@ -8,7 +8,7 @@
 
 use crate::develop::debounce::SidecarSaver;
 use lf_catalog::Catalog;
-use lf_settings::groups::{GROUPS, GroupKey, apply_groups, groups_in, pick_groups};
+use lf_settings::groups::{GroupKey, apply_groups, drop_groups, groups_in, pick_groups};
 use lf_settings::looks::apply_look;
 use lf_settings::{EditSettings, normalise};
 use serde_json::{Map, Value};
@@ -56,20 +56,12 @@ impl Recipe {
         }
     }
 
-    /// The same without crop, rotation, straighten or spots, so each photo keeps its own
+    /// The same without crop, rotation, straighten, spots or healing, so each photo keeps its own
     /// (applying to many photos).
     pub fn without_geometry(self) -> Recipe {
         match self {
             Recipe::Paste(mut partial) => {
-                if let Some(m) = partial.as_object_mut() {
-                    for (group, _, keys) in GROUPS {
-                        if matches!(group, GroupKey::Geometry | GroupKey::Spots) {
-                            for key in keys {
-                                m.remove(*key);
-                            }
-                        }
-                    }
-                }
+                drop_groups(&mut partial, &[GroupKey::Geometry, GroupKey::Spots]);
                 Recipe::Paste(partial)
             }
             look => look,
@@ -234,6 +226,38 @@ mod tests {
         assert_eq!(next.exposure, 0.5);
         assert_eq!((next.crop, next.angle), (onto.crop, 3.0));
         assert!(next.spots.is_empty());
+    }
+
+    #[test]
+    fn a_paste_carries_the_desktop_edits_not_just_the_sliders() {
+        // The demo bug: only saturation came across; calibration and lens were dropped.
+        let source = lf_settings::normalise(&json!({"v": 2, "saturation": 30,
+            "desktop": {"calibration": {"redHue": 20}, "lens": {"distortion": 10},
+                        "heal": [{"r": 0.02}]}}));
+        let mut clip = Clipboard::default();
+        let text = clip.copy(&source, &lf_settings::groups::COPY_DEFAULT_GROUPS);
+        let onto = EditSettings::default_settings();
+        let one = Recipe::Paste(clip.slot().unwrap().clone()).apply(&onto);
+        let d = one.desktop.clone().unwrap();
+        assert_eq!(one.saturation, 30.0);
+        assert_eq!(d["calibration"], json!({"redHue": 20}));
+        assert_eq!(d["lens"], json!({"distortion": 10}));
+        assert!(d.get("heal").is_none(), "healing is off by default");
+        // The same through the system clipboard's text and a batch paste.
+        let many = Recipe::Paste(parse(&text).unwrap())
+            .without_geometry()
+            .apply(&onto);
+        assert_eq!(many.desktop, one.desktop);
+        // A batch paste of everything keeps each photo's own healing strokes.
+        let all: Vec<_> = lf_settings::groups::GROUPS.iter().map(|g| g.0).collect();
+        clip.copy(&source, &all);
+        let mut target = EditSettings::default_settings();
+        target.desktop =
+            lf_settings::normalise(&json!({"v": 2, "desktop": {"heal": [{"r": 0.1}]}})).desktop;
+        let batch = Recipe::Paste(clip.slot().unwrap().clone())
+            .without_geometry()
+            .apply(&target);
+        assert_eq!(batch.desktop.unwrap()["heal"], json!([{"r": 0.1}]));
     }
 
     #[test]
