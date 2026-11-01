@@ -26,3 +26,35 @@ pub fn is_lightroom(preset: &Value) -> bool {
         .and_then(|d| d.get(LIGHTROOM_KEY))
         .is_some()
 }
+
+/// Whether an imported preset asks for Auto white balance and Auto tone (`desktop.lightroom.auto`),
+/// which are worked out from each photo when the preset is applied, never stored in the preset.
+pub fn auto_flags(preset: &Value) -> (bool, bool) {
+    let flag = |key: &str| {
+        preset
+            .get("desktop")
+            .and_then(|d| d.get(LIGHTROOM_KEY))
+            .and_then(|l| l.get("auto"))
+            .and_then(|a| a.get(key))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    };
+    (flag("wb"), flag("tone"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn auto_flags_read_the_marker() {
+        let p = json!({"desktop": {"lightroom": {"auto": {"wb": true, "tone": false}}}});
+        assert_eq!(auto_flags(&p), (true, false));
+        assert_eq!(auto_flags(&json!({"v": 2})), (false, false));
+        assert_eq!(
+            auto_flags(&json!({"desktop": {"lightroom": {}}})),
+            (false, false)
+        );
+    }
+}

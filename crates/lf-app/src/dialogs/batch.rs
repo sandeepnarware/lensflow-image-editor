@@ -4,12 +4,14 @@
 //! stop flag checked between photos, so closing the window stops after the current photo.
 
 use crate::clipboard::{self, Recipe};
+use crate::develop::auto::{Sample, apply_auto};
 use crate::develop::debounce::{PendingWrite, SidecarSaver};
 use crate::jobs::{Jobs, Lane, Msg};
 use crate::lightroom::import::shown_name;
 use crate::theme;
 use eframe::egui::{self, RichText};
 use lf_catalog::{Catalog, CatalogError, edits};
+use lf_pipeline::Gpu;
 use lf_settings::EditSettings;
 use lf_settings::groups::{GroupKey, groups_in};
 use serde_json::Value;
@@ -69,6 +71,54 @@ pub fn apply_one(
     })
 }
 
+/// [`apply_one`] for a preset that asks for Auto white balance or Auto tone (an imported
+/// Lightroom preset): the preset is laid on first, then each photo is rendered small without
+/// its white balance and tone and the autos are worked out from that, so each photo gets its
+/// own values. A photo that cannot be rendered still gets the preset, without the autos.
+pub fn apply_one_auto(
+    catalog: &Catalog,
+    photo_id: i64,
+    recipe: &Recipe,
+    saver: &SidecarSaver,
+    gpu: Option<&Arc<Gpu>>,
+) -> Result<(), String> {
+    let (wb, tone) = match recipe {
+        Recipe::Look(look) => lf_settings::lightroom::auto_flags(look),
+        _ => (false, false),
+    };
+    let Some(gpu) = gpu.filter(|_| wb || tone) else {
+        return apply_one(catalog, photo_id, recipe, saver);
+    };
+    apply_with(catalog, photo_id, saver, |photo, current| {
+        let mut next = recipe.apply(current);
+        let mut plain = next.clone();
+        let neutral = EditSettings::default_settings();
+        plain.temperature = neutral.temperature;
+        plain.tint = neutral.tint;
+        for (to, from) in [
+            (&mut plain.exposure, neutral.exposure),
+            (&mut plain.contrast, neutral.contrast),
+            (&mut plain.highlights, neutral.highlights),
+            (&mut plain.shadows, neutral.shadows),
+            (&mut plain.whites, neutral.whites),
+            (&mut plain.blacks, neutral.blacks),
+        ] {
+            *to = from;
+        }
+        match crate::ai_job::render(gpu, std::path::Path::new(&photo.path), &plain, SAMPLE_EDGE) {
+            Ok(img) => {
+                let sample = Sample::of_rgb(img.w as u32, img.h as u32, &img.data);
+                apply_auto(&mut next, &sample, wb, tone);
+            }
+            Err(e) => log::warn!("batch: photo {photo_id}: no Auto from the preset: {e}"),
+        }
+        Ok(next)
+    })
+}
+
+/// The long edge of the render Auto white balance and Auto tone are read from.
+const SAMPLE_EDGE: u32 = 512;
+
 /// The per-photo path every multi-photo edit takes: the photo's settings become
 /// `next(photo, current)`, recorded with one `set_settings`, and its sidecar is written at
 /// once (unless the sidecar beside it is damaged: that file is left alone).
@@ -118,6 +168,20 @@ pub fn run(
     recipe: &Recipe,
     saver: &SidecarSaver,
     stop: &AtomicBool,
+    report: impl FnMut(&BatchProgress),
+) -> BatchProgress {
+    run_with_gpu(catalog, ids, recipe, saver, None, stop, report)
+}
+
+/// [`run`] with the shared device, for presets that run Auto white balance or Auto tone per
+/// photo ([`apply_one_auto`]).
+pub fn run_with_gpu(
+    catalog: &Catalog,
+    ids: &[i64],
+    recipe: &Recipe,
+    saver: &SidecarSaver,
+    gpu: Option<&Arc<Gpu>>,
+    stop: &AtomicBool,
     mut report: impl FnMut(&BatchProgress),
 ) -> BatchProgress {
     let mut p = BatchProgress {
@@ -128,7 +192,7 @@ pub fn run(
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        if let Err(e) = apply_one(catalog, id, recipe, saver) {
+        if let Err(e) = apply_one_auto(catalog, id, recipe, saver, gpu) {
             log::warn!("batch: photo {id} could not be edited: {e}");
             p.failed.push((id, e));
         }
@@ -148,6 +212,7 @@ pub fn spawn(
     ids: Vec<i64>,
     recipe: Recipe,
     saver: SidecarSaver,
+    gpu: Arc<Gpu>,
     stop: Arc<AtomicBool>,
 ) {
     let reporter = jobs.reporter();
@@ -165,7 +230,7 @@ pub fn spawn(
                 });
             }
         };
-        let last = run(&catalog, &ids, &recipe, &saver, &stop, |p| {
+        let last = run_with_gpu(&catalog, &ids, &recipe, &saver, Some(&gpu), &stop, |p| {
             reporter.send(Msg::BatchProgress(p.clone()));
         });
         Msg::BatchProgress(last)

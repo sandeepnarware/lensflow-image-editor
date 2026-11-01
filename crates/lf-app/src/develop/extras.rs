@@ -366,8 +366,14 @@ impl Develop {
             Some(presets::PresetAction::Apply(i)) => {
                 if let (Some(row), Some(edit)) = (rows.get(i), self.session.edit()) {
                     // As the web: a preset is applied as a look (its geometry and spots never).
-                    let next =
+                    let mut next =
                         crate::clipboard::Recipe::Look(row.settings.clone()).apply(&edit.settings);
+                    // An imported Lightroom preset's Auto WB / Auto tone, from this photo, in
+                    // the same history step (the hover preview above never runs them).
+                    let (wb, tone) = lf_settings::lightroom::auto_flags(&row.settings);
+                    if let Some(opened) = self.opened().filter(|_| wb || tone) {
+                        crate::develop::auto::apply_auto(&mut next, &opened.sample, wb, tone);
+                    }
                     self.apply_with_amount(row.name.clone(), next, toasts);
                     self.queue_adaptive(&row.settings, toasts);
                 }

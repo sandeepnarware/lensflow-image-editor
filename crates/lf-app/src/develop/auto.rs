@@ -75,6 +75,14 @@ impl Sample {
         }
     }
 
+    /// The sample of a rendered image (`rgb` is `width * height` interleaved RGB, 0..1).
+    pub fn of_rgb(width: u32, height: u32, rgb: &[f32]) -> Sample {
+        Sample::reduce(width, height, |x, y| {
+            let i = 3 * (y as usize * width as usize + x as usize);
+            [rgb[i], rgb[i + 1], rgb[i + 2]]
+        })
+    }
+
     /// The sample of an opened picture.
     pub fn of(picture: &Picture) -> Sample {
         match picture {
@@ -245,6 +253,19 @@ pub fn auto_tone(sample: &Sample, settings: &EditSettings) -> Option<Tone> {
     })
 }
 
+/// Runs Auto white balance and/or Auto tone on `settings` from `sample`, in that order (tone
+/// reads the white balance just set), as an imported Lightroom preset asks. Either is skipped
+/// when the photo gives too little to go by.
+pub fn apply_auto(settings: &mut EditSettings, sample: &Sample, wb: bool, tone: bool) {
+    if wb && let Some((t, tint)) = auto_wb(sample) {
+        settings.temperature = t;
+        settings.tint = tint;
+    }
+    if tone && let Some(found) = auto_tone(sample, settings) {
+        found.apply(settings);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,5 +384,33 @@ mod tests {
             applied.temperature, s.temperature,
             "white balance left alone"
         );
+    }
+
+    #[test]
+    fn a_preset_with_auto_tone_runs_auto_tone() {
+        let dark = Sample::of(&picture(|x, _| [0.02 + 0.33 * x as f32 / 400.0; 3]));
+        let mut s = EditSettings::default_settings();
+        apply_auto(&mut s, &dark, false, true);
+        assert!(s.exposure > 0.5, "{}", s.exposure);
+    }
+
+    #[test]
+    fn a_preset_without_auto_flags_does_not() {
+        let dark = Sample::of(&picture(|x, _| [0.02 + 0.33 * x as f32 / 400.0; 3]));
+        let mut s = EditSettings::default_settings();
+        apply_auto(&mut s, &dark, false, false);
+        assert_eq!(s, EditSettings::default_settings());
+    }
+
+    #[test]
+    fn auto_wb_flag_sets_the_balance() {
+        let cool = wb_gains(35.0, -15.0).map(|g| 1.0 / g);
+        let s = Sample::of(&picture(|_, y| {
+            cast([0.05 + 0.5 * f64::from(y) / 300.0; 3], cool)
+        }));
+        let mut e = EditSettings::default_settings();
+        apply_auto(&mut e, &s, true, false);
+        assert!((e.temperature - 35.0).abs() <= 3.0, "{}", e.temperature);
+        assert_eq!(e.exposure, 0.0);
     }
 }
