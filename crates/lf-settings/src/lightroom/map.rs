@@ -70,11 +70,11 @@ pub const CROP_NOTE: &str =
     "The crop and straighten angle are not carried: they belong to one photo.";
 pub const RETOUCH_NOTE: &str = "Spot removal is not carried: it belongs to one photo.";
 pub const MASKS_NOTE: &str = "Masks are not carried: they belong to one photo.";
-pub const MASK_KIND_NOTE: &str = "Only subject, sky and background masks without a range are      carried; masks drawn as brushes or gradients, other AI masks, ranges, or several masks      combined are not, because they belong to one photo.";
-pub const MASK_LOCAL_NOTE: &str = "Some of a mask's settings (texture, dehaze, hue, sharpness,      noise and the like) are not carried.";
+pub const MASK_KIND_NOTE: &str = "Only subject, sky and background masks without a range are carried; masks drawn as brushes or gradients, other AI masks, ranges, or several masks combined are not, because they belong to one photo.";
+pub const MASK_LOCAL_NOTE: &str = "Some of a mask's settings (texture, dehaze, hue, sharpness, noise and the like) are not carried.";
 pub const MASK_INACTIVE_NOTE: &str = "A mask that was switched off in Lightroom is not carried.";
 pub const MASK_OVERFLOW_NOTE: &str =
-    "There are more masks than we can hold; the extra ones      are not carried.";
+    "There are more masks than we can hold; the extra ones are not carried.";
 /// What replaces the shapes Lightroom stored for masks and spot removal.
 const OMITTED: &str = "(omitted)";
 pub const CURVE_UNREADABLE_NOTE: &str = "A tone curve could not be read and was left straight.";
