@@ -187,12 +187,127 @@ fn a_vignette_is_recovered() {
     assert!(f.delta_e_mean < 2.0, "mean {}", f.delta_e_mean);
 }
 
+fn fract(x: f32) -> f32 {
+    x - x.floor()
+}
+
+/// The shader's value noise: smooth between hashed lattice points.
+fn value_noise(p: [f32; 2]) -> f32 {
+    let hash = |p: [f32; 2]| {
+        let mut q = [fract(p[0] * 443.897), fract(p[1] * 441.423)];
+        let d = q[0] * (q[1] + 19.19) + q[1] * (q[0] + 19.19);
+        q[0] += d;
+        q[1] += d;
+        fract((q[0] + q[1]) * q[0])
+    };
+    let i = [p[0].floor(), p[1].floor()];
+    let f = [fract(p[0]), fract(p[1])].map(|t| t * t * (3.0 - 2.0 * t));
+    let mix = |a: f32, b: f32, t: f32| a + (b - a) * t;
+    mix(
+        mix(hash(i), hash([i[0] + 1.0, i[1]]), f[0]),
+        mix(
+            hash([i[0], i[1] + 1.0]),
+            hash([i[0] + 1.0, i[1] + 1.0]),
+            f[0],
+        ),
+        f[1],
+    )
+}
+
+/// Grain as the develop shader makes it: two octaves of value noise in cells set by the size,
+/// strongest in the midtones, offset by `seed` (another seed is another grain of the same kind).
+fn shader_grain(c: [f32; 3], x: usize, y: usize, amount: f64, size: f64, seed: f32) -> [f32; 3] {
+    if amount <= 0.0 {
+        return c;
+    }
+    let cell = 0.7 + (size / 100.0) as f32 * 3.0;
+    let p = [
+        (x as f32 + 0.5) / cell + seed,
+        (y as f32 + 0.5) / cell + seed,
+    ];
+    let n =
+        value_noise(p) * 0.6 + value_noise([p[0] * 2.13 + 17.0, p[1] * 2.13 + 17.0]) * 0.4 - 0.5;
+    let l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    let a = n * (amount / 100.0) as f32 * 0.22 * (0.4 + 0.6 * (1.0 - (2.0 * l - 1.0).abs()));
+    c.map(|v| v + a)
+}
+
+/// The injected renderer with the shader's grain.
+fn shader_effects(base: &Image) -> impl FnMut(&Fit) -> Image + '_ {
+    move |f: &Fit| {
+        map(base, |x, y, c| {
+            let t = f.table.apply(c);
+            let v = vignette(
+                t,
+                radius(x, y, base.w, base.h),
+                f.vignette,
+                f.vignette_midpoint,
+            );
+            shader_grain(v, x, y, f.grain, f.grain_size, 0.0).map(|v| v.clamp(0.0, 1.0))
+        })
+    }
+}
+
+/// `img` as an 8-bit export stores it.
+fn eight_bit(img: &Image) -> Image {
+    map(img, |_, _, c| {
+        c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() / 255.0)
+    })
+}
+
 #[test]
 fn grain_is_measured() {
     let ours = colourful();
-    let theirs = map(&ours, |x, y, c| grain(look(c), x, y, 40.0, 99));
-    let f = fit(&ours, &theirs, &mut effects(&ours));
-    assert!((f.grain - 40.0).abs() <= 8.0, "grain {}", f.grain);
+    let grainy = map(&ours, |x, y, c| grain(look(c), x, y, 40.0, 99));
+    let shader = map(&ours, |x, y, c| {
+        shader_grain(look(c), x, y, 40.0, 25.0, 31.7)
+    });
+    for (what, theirs, white) in [
+        ("float", grainy.clone(), true),
+        ("8-bit", eight_bit(&grainy), true),
+        ("shader float", shader.clone(), false),
+        ("shader 8-bit", eight_bit(&shader), false),
+    ] {
+        let f = if white {
+            fit(&ours, &theirs, &mut effects(&ours))
+        } else {
+            fit(&ours, &theirs, &mut shader_effects(&ours))
+        };
+        assert!((f.grain - 40.0).abs() <= 6.0, "{what}: grain {}", f.grain);
+    }
+}
+
+#[test]
+fn a_grain_free_export_gets_no_grain() {
+    let ours = colourful();
+    let clean = map(&ours, |_, _, c| look(c));
+    let ours8 = eight_bit(&ours);
+    for shader in [false, true] {
+        let render = |base: &Image, f: &Fit| {
+            if shader {
+                shader_effects(base)(f)
+            } else {
+                effects(base)(f)
+            }
+        };
+        let f = fit(&ours, &clean, &mut |f| render(&ours, f));
+        assert_eq!(f.grain, 0.0, "float export (shader grain {shader})");
+        // An 8-bit export re-quantises smooth gradients: that is not grain.
+        let f = fit(&ours, &eight_bit(&clean), &mut |f| render(&ours, f));
+        assert!(
+            f.grain < 5.0,
+            "8-bit export (shader {shader}): grain {}",
+            f.grain
+        );
+        // An 8-bit original (a JPEG or PNG), and Lightroom's 8-bit export of it.
+        let export = eight_bit(&map(&ours8, |_, _, c| look(c)));
+        let f = fit(&ours8, &export, &mut |f| render(&ours8, f));
+        assert!(
+            f.grain < 5.0,
+            "8-bit pair (shader {shader}): grain {}",
+            f.grain
+        );
+    }
 }
 
 #[test]

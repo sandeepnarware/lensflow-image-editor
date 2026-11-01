@@ -54,6 +54,14 @@ const GRAIN_BLOCK: usize = 16;
 const FLAT_SHARE: f64 = 0.20;
 /// The grain amount of the one calibration render, and the size we keep (our default).
 const CALIBRATION_GRAIN: f64 = 50.0;
+/// The fine detail 8-bit rounding leaves in luma: each channel's rounding error is uniform
+/// over one step (standard deviation `1/(255·√12)`), luma weighs the three independent errors
+/// (`√(0.2126² + 0.7152² + 0.0722²)` ≈ 0.75), and the 3×3 high-pass keeps `√(72/81)` of
+/// white noise. Taken out of theirs in quadrature, so an 8-bit export's rounding of smooth
+/// gradients does not read as grain.
+const QUANTISATION_FLOOR: f64 = 0.749 * 0.943 / (255.0 * 3.464_101_6);
+/// A grain below this is taken as none: what is left is the fit's own noise.
+const GRAIN_DEAD_ZONE: f64 = 5.0;
 const GRAIN_SIZE: f64 = 25.0;
 
 /// An image: `w`×`h` interleaved RGB, display sRGB values in 0..1.
@@ -111,8 +119,8 @@ pub struct Fit {
 /// `theirs` may be any size; it is resized to `ours` and lined up by a translation. The
 /// injected `render_effects` applies a fit's table, vignette and grain to our render with our
 /// pipeline's maths, and returns an image the size of `ours` (another size is resized). It is
-/// called twice: once at grain 50 to measure how strong our grain is, and once with the
-/// result, to measure the remaining difference.
+/// called three times: at grain 50 and at grain 0, whose difference is exactly our grain (its
+/// noise is deterministic), and once with the result, to measure the remaining difference.
 ///
 /// # Panics
 ///
@@ -212,19 +220,39 @@ pub fn fit(ours: &Image, theirs: &Image, render_effects: &mut dyn FnMut(&Fit) ->
         result.aligned = false;
     }
 
+    // Grain: the fine detail of what the table and vignette left unexplained (theirs minus
+    // our prediction) in flat places, against the fine detail our grain adds (a render with
+    // grain minus one without: the noise is deterministic, so that difference is exactly our
+    // grain). Measuring each image on its own and subtracting would count picture structure
+    // and re-quantisation that differ between the two as grain.
     let blocks = flat_blocks(&predicted_luma, &mask, w, h);
     if !blocks.is_empty() {
-        let base = fine_detail(&predicted_luma, w, h, &blocks);
-        let theirs_fine = fine_detail(&ty, w, h, &blocks);
-        let calibration = render_effects(&Fit {
-            grain: CALIBRATION_GRAIN,
-            ..result.clone()
-        });
-        let calibration = sized(calibration, w, h);
-        let ours_fine = fine_detail(&calibration.luma(), w, h, &blocks);
-        let per_unit = quadrature_excess(ours_fine, base) / CALIBRATION_GRAIN;
+        let unexplained: Vec<f32> = ty.iter().zip(&predicted_luma).map(|(t, p)| t - p).collect();
+        // An 8-bit export's own rounding is fine detail too, but not grain.
+        let theirs_fine =
+            quadrature_excess(fine_detail(&unexplained, w, h, &blocks), QUANTISATION_FLOOR);
+        let render_luma = |render_effects: &mut dyn FnMut(&Fit) -> Image, grain: f64| {
+            sized(
+                render_effects(&Fit {
+                    grain,
+                    ..result.clone()
+                }),
+                w,
+                h,
+            )
+            .luma()
+        };
+        let with = render_luma(render_effects, CALIBRATION_GRAIN);
+        let without = render_luma(render_effects, 0.0);
+        let ours_grain: Vec<f32> = with.iter().zip(&without).map(|(a, b)| a - b).collect();
+        let per_unit = fine_detail(&ours_grain, w, h, &blocks) / CALIBRATION_GRAIN;
         if per_unit > 1e-6 {
-            result.grain = (quadrature_excess(theirs_fine, base) / per_unit).clamp(0.0, 100.0);
+            let grain = theirs_fine / per_unit;
+            result.grain = if grain < GRAIN_DEAD_ZONE {
+                0.0
+            } else {
+                grain.min(100.0)
+            };
         }
     }
 
