@@ -17,6 +17,7 @@ pub fn folder(root: &Path) -> PathBuf {
 /// many were loaded. A file that cannot be read is logged and left out.
 pub fn load_all(root: &Path) -> usize {
     lf_pipeline::lut::clear();
+    failures().clear();
     let Ok(entries) = std::fs::read_dir(folder(root)) else {
         return 0;
     };
@@ -90,24 +91,52 @@ pub fn ensure_embedded(root: &Path, preset: &serde_json::Value) -> Result<Option
     if desktop_lut.get("table").is_none() {
         return Ok(None);
     }
-    let Some(mut lut) = lf_settings::lut::decode_table(desktop_lut) else {
+    // Hover calls this every frame: the common case is a table already registered, answered
+    // from its hash alone with no decoding, and a failed write is remembered, not retried.
+    let Some(hash) = lf_settings::lut::well_formed_hash(desktop_lut) else {
         return Err(CORRUPT_TABLE.to_owned());
     };
-    let name = lf_settings::lut::embedded_name(
-        desktop_lut
-            .get("hash")
-            .and_then(|h| h.as_str())
-            .unwrap_or_default(),
-    );
-    let path = folder(root).join(format!("{name}.cube"));
-    if !path.exists() {
+    let name = lf_settings::lut::embedded_name(hash);
+    if lf_pipeline::lut::get(&name).is_some() {
+        return Ok(Some(name));
+    }
+    let key = (root.to_path_buf(), name.clone());
+    if let Some(e) = failures().get(&key) {
+        return Err(e.clone());
+    }
+    let Some(mut lut) = lf_settings::lut::decode_table(desktop_lut) else {
+        failures().insert(key, CORRUPT_TABLE.to_owned());
+        return Err(CORRUPT_TABLE.to_owned());
+    };
+    if !folder(root).join(format!("{name}.cube")).exists() {
         lut.title = Some(name.clone());
-        write_cube(root, &name, lut.to_cube().as_bytes())?;
+        if let Err(e) = write_cube(root, &name, lut.to_cube().as_bytes()) {
+            failures().insert(key, e.clone());
+            return Err(e);
+        }
     }
-    if lf_pipeline::lut::get(&name).is_none() {
-        lf_pipeline::lut::register(&name, lut);
-    }
+    lf_pipeline::lut::register(&name, lut);
     Ok(Some(name))
+}
+
+type Failures = std::collections::HashMap<(PathBuf, String), String>;
+
+/// Tables that could not be made available, so a hover does not retry every frame. Cleared
+/// whenever a catalogue's LUTs are loaded (opening it again is a fresh try).
+fn failures() -> std::sync::MutexGuard<'static, Failures> {
+    static F: std::sync::OnceLock<std::sync::Mutex<Failures>> = std::sync::OnceLock::new();
+    F.get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// The toast when a preset with a colour table is applied with no catalogue open.
+pub const NO_CATALOGUE: &str =
+    "This preset's colour table cannot be stored without a catalogue, so it is applied without it.";
+
+/// Whether `preset` carries a colour table.
+pub fn carries_table(preset: &serde_json::Value) -> bool {
+    preset.pointer("/desktop/lut/table").is_some()
 }
 
 /// The toast when a preset's colour table cannot be read.
@@ -182,9 +211,34 @@ mod tests {
         assert_eq!(ensure_embedded(root.path(), &plain), Ok(None));
         let mut bad = preset.clone();
         bad["desktop"]["lut"]["table"] = "AAAA".into();
+        bad["desktop"]["lut"]["hash"] = "0123456789abcdef".into();
         assert_eq!(
             ensure_embedded(root.path(), &bad),
             Err(CORRUPT_TABLE.to_owned())
         );
+    }
+
+    #[test]
+    fn a_registered_table_is_not_decoded_again_and_a_failed_write_is_not_retried() {
+        let _turn = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tempfile::tempdir().unwrap();
+        let mut preset = serde_json::json!({"desktop": {"lut": lf_settings::lut::encode_table(&Lut::identity(4))}});
+        let name = ensure_embedded(root.path(), &preset).unwrap().unwrap();
+        // A damaged body with the registered hash still answers: nothing was decoded.
+        preset["desktop"]["lut"]["table"] = "AAAA".into();
+        assert_eq!(
+            ensure_embedded(root.path(), &preset).unwrap().unwrap(),
+            name
+        );
+
+        // A write that fails (the LUT folder's place is a file) is not tried again.
+        let blocked = tempfile::tempdir().unwrap();
+        std::fs::create_dir(blocked.path().join(".lensflow")).unwrap();
+        std::fs::write(folder(blocked.path()), "in the way").unwrap();
+        let other = serde_json::json!({"desktop": {"lut": lf_settings::lut::encode_table(&Lut::identity(3))}});
+        let first = ensure_embedded(blocked.path(), &other).unwrap_err();
+        std::fs::remove_file(folder(blocked.path())).unwrap();
+        assert_eq!(ensure_embedded(blocked.path(), &other).unwrap_err(), first);
+        assert!(!folder(blocked.path()).exists());
     }
 }

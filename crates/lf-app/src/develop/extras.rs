@@ -371,10 +371,16 @@ impl Develop {
                 if let (Some(row), Some(edit)) = (rows.get(i), self.session.edit()) {
                     // A table the preset carries goes into this catalogue first; if it cannot
                     // be written the preset still applies, without the table.
-                    if let Some(root) = self.session.root()
-                        && let Err(text) = crate::luts::ensure_embedded(root, &row.settings)
-                    {
-                        toasts.push(Level::Warning, text);
+                    match self.session.root() {
+                        Some(root) => {
+                            if let Err(text) = crate::luts::ensure_embedded(root, &row.settings) {
+                                toasts.push(Level::Warning, text);
+                            }
+                        }
+                        None if crate::luts::carries_table(&row.settings) => {
+                            toasts.push(Level::Warning, crate::luts::NO_CATALOGUE);
+                        }
+                        None => {}
                     }
                     // As the web: a preset is applied as a look (its geometry and spots never).
                     let mut next =

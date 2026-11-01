@@ -308,7 +308,7 @@ pub fn embedded_in(preset: &serde_json::Value) -> Option<Lut> {
 
 /// `preset` with an embedded table in `desktop.lut` replaced by the usual
 /// `{name, amount}` choice naming it ([`embedded_name`]), so a photo never stores the table.
-/// A preset without a table, or with a corrupt one (its `lut` is dropped: there is nothing to
+/// A preset without a table, or with a malformed hash (its `lut` is dropped: there is nothing to
 /// name), is returned as it is. Pure: [`crate::lut`]'s file is written by the app.
 pub fn name_embedded(preset: &serde_json::Value) -> serde_json::Value {
     let mut out = preset.clone();
@@ -318,11 +318,9 @@ pub fn name_embedded(preset: &serde_json::Value) -> serde_json::Value {
     if lut.get("table").is_none() {
         return out;
     }
-    match lut
-        .get("hash")
-        .and_then(|h| h.as_str())
-        .filter(|_| decode_table(lut).is_some())
-    {
+    // By the hash alone: this runs on every hover frame, so it never decodes the table.
+    // (`luts::ensure_embedded` is what checks the table and says when it is damaged.)
+    match well_formed_hash(lut) {
         Some(hash) => {
             let amount = lut.get("amount").cloned().unwrap_or(100.0.into());
             *lut = serde_json::json!({"name": embedded_name(hash), "amount": amount});
@@ -334,6 +332,14 @@ pub fn name_embedded(preset: &serde_json::Value) -> serde_json::Value {
         }
     }
     out
+}
+
+/// An embedded table's `hash` when it is 16 lowercase hex characters (so safe in a file name).
+pub fn well_formed_hash(table: &serde_json::Value) -> Option<&str> {
+    table
+        .get("hash")?
+        .as_str()
+        .filter(|h| h.len() == 16 && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
 }
 
 #[cfg(test)]
@@ -477,7 +483,7 @@ mod tests {
         let plain = serde_json::json!({"desktop": {"lut": {"name": "Film", "amount": 50}}});
         assert_eq!(name_embedded(&plain), plain);
         let mut bad = preset.clone();
-        bad["desktop"]["lut"]["table"] = "AAAA".into();
+        bad["desktop"]["lut"]["hash"] = "../../x".into();
         assert!(name_embedded(&bad)["desktop"].get("lut").is_none());
     }
 }

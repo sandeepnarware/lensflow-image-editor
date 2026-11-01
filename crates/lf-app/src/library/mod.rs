@@ -2581,7 +2581,8 @@ impl Library {
                     return;
                 };
                 dialog.started();
-                // A table a preset carries is put in the catalogue once, before the photos.
+                // A table a preset carries is put in the catalogue once, before the photos (a
+                // one-off small write, so it is fine on the UI thread).
                 if let clipboard::Recipe::Look(look) = &recipe
                     && let Err(text) = crate::luts::ensure_embedded(&root, look)
                 {
