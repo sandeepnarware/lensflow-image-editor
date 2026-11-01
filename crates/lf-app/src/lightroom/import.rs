@@ -11,7 +11,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use eframe::egui;
 use lf_catalog::{Catalog, presets};
@@ -42,6 +42,8 @@ pub struct ImportReport {
     pub failed: Vec<(String, String)>,
     /// The presets not saved because the studio reached [`MAX_PRESETS`] (their names).
     pub left_out: Vec<String>,
+    /// Stop was pressed: how many of the files found were not processed.
+    pub stopped: Option<usize>,
 }
 
 /// `wanted`, or `wanted (2)`, `wanted (3)`… : the first that is not `taken`. Names stay within
@@ -106,6 +108,14 @@ fn wanted_name(preset: &LrPreset, found: &Found) -> String {
     }
 }
 
+/// How far an import is: files done of the files gathered. The job writes it, the dialog
+/// reads it each frame (as the other `Long` jobs' counters).
+#[derive(Debug, Default)]
+pub struct Progress {
+    pub done: AtomicUsize,
+    pub total: AtomicUsize,
+}
+
 /// Saves each of `found` as a preset of `studio_id` in `catalog`, until `stop` is set.
 pub fn import(
     catalog: &Catalog,
@@ -113,7 +123,28 @@ pub fn import(
     found: Vec<Found>,
     stop: &AtomicBool,
 ) -> ImportReport {
+    import_counting(catalog, studio_id, found, stop, &Progress::default())
+}
+
+/// The studio's presets as they stand while importing.
+struct Studio<'a> {
+    catalog: &'a Catalog,
+    id: i64,
+    count: usize,
+    taken: HashSet<String>,
+}
+
+/// [`import`], counting each file done in `progress`.
+pub fn import_counting(
+    catalog: &Catalog,
+    studio_id: i64,
+    found: Vec<Found>,
+    stop: &AtomicBool,
+    progress: &Progress,
+) -> ImportReport {
     let mut report = ImportReport::default();
+    let total = found.len();
+    progress.total.store(total, Ordering::Relaxed);
     let existing = match presets::list(catalog, studio_id) {
         Ok(rows) => rows,
         Err(e) => {
@@ -122,58 +153,77 @@ pub fn import(
                 .into_iter()
                 .map(|f| (f.source, reason.clone()))
                 .collect();
+            progress.done.store(total, Ordering::Relaxed);
             return report;
         }
     };
-    let mut count = existing.len();
-    let mut taken: HashSet<String> = existing.into_iter().map(|r| r.name).collect();
-    for f in found {
+    let mut studio = Studio {
+        catalog,
+        id: studio_id,
+        count: existing.len(),
+        taken: existing.into_iter().map(|r| r.name).collect(),
+    };
+    for (i, f) in found.into_iter().enumerate() {
         if stop.load(Ordering::Relaxed) {
+            report.stopped = Some(total - i);
             break;
         }
-        let preset = match read_any(&f.file_name, &f.bytes) {
-            Ok(p) => p,
-            Err(e) => {
-                report.failed.push((f.source, e.to_string()));
-                continue;
-            }
-        };
-        if preset.kind == LrKind::Profile {
-            report.failed.push((f.source, PROFILE.to_owned()));
-            continue;
-        }
-        let wanted = wanted_name(&preset, &f);
-        if count >= MAX_PRESETS {
-            report.left_out.push(wanted);
-            continue;
-        }
-        let mut mapped = map(&preset);
-        if let Some(note) = fit_budget(&mut mapped.preset) {
-            mapped.notes.push(note.to_owned());
-        }
-        if !desktop_fits(&mapped.preset) {
-            report.failed.push((f.source, TOO_LARGE.to_owned()));
-            continue;
-        }
-        let name = unique_name(&wanted, &taken);
-        match presets::save(catalog, studio_id, &name, &mapped.preset) {
-            Ok(_) => {
-                count += 1;
-                taken.insert(name.clone());
-                report.imported.push((name, mapped.notes));
-            }
-            Err(e) => report.failed.push((f.source, format!("{NOT_SAVED} {e}"))),
-        }
+        import_one(&mut studio, f, &mut report);
+        progress.done.fetch_add(1, Ordering::Relaxed);
     }
     report
 }
 
+/// Reads, maps and saves one file, noting the outcome in `report`.
+fn import_one(studio: &mut Studio, f: Found, report: &mut ImportReport) {
+    let preset = match read_any(&f.file_name, &f.bytes) {
+        Ok(p) => p,
+        Err(e) => {
+            report.failed.push((f.source, e.to_string()));
+            return;
+        }
+    };
+    if preset.kind == LrKind::Profile {
+        report.failed.push((f.source, PROFILE.to_owned()));
+        return;
+    }
+    let wanted = wanted_name(&preset, &f);
+    if studio.count >= MAX_PRESETS {
+        report.left_out.push(wanted);
+        return;
+    }
+    let mut mapped = map(&preset);
+    if let Some(note) = fit_budget(&mut mapped.preset) {
+        mapped.notes.push(note.to_owned());
+    }
+    if !desktop_fits(&mapped.preset) {
+        report.failed.push((f.source, TOO_LARGE.to_owned()));
+        return;
+    }
+    let name = unique_name(&wanted, &studio.taken);
+    match presets::save(studio.catalog, studio.id, &name, &mapped.preset) {
+        Ok(_) => {
+            studio.count += 1;
+            studio.taken.insert(name.clone());
+            report.imported.push((name, mapped.notes));
+        }
+        Err(e) => report.failed.push((f.source, format!("{NOT_SAVED} {e}"))),
+    }
+}
+
 /// The whole job: gathers `paths`, opens the catalogue at `root` (its own connection) and
-/// imports into `studio_id`. Files that could not be gathered come first among the failures.
-pub fn run(root: &Path, studio_id: i64, paths: &[PathBuf], stop: &AtomicBool) -> ImportReport {
+/// imports into `studio_id`, counting in `progress`. Files that could not be gathered come
+/// first among the failures.
+pub fn run(
+    root: &Path,
+    studio_id: i64,
+    paths: &[PathBuf],
+    stop: &AtomicBool,
+    progress: &Progress,
+) -> ImportReport {
     let gathered = gather(paths, stop);
     let mut report = match Catalog::open(root) {
-        Ok(catalog) => import(&catalog, studio_id, gathered.found, stop),
+        Ok(catalog) => import_counting(&catalog, studio_id, gathered.found, stop, progress),
         Err(e) => {
             let reason = format!("{NOT_SAVED} {e}");
             ImportReport {
@@ -360,7 +410,29 @@ mod tests {
             vec![found("a.xmp", None, xmp("A", None, ""))],
             &stop,
         );
-        assert_eq!(report, ImportReport::default());
+        assert!(report.imported.is_empty());
+        assert_eq!(report.stopped, Some(1), "the one file was not processed");
+    }
+
+    #[test]
+    fn progress_counts_each_file_and_a_full_run_is_not_stopped() {
+        let (_dir, catalog) = catalogue();
+        let stop = AtomicBool::new(false);
+        let progress = Progress::default();
+        let report = import_counting(
+            &catalog,
+            7,
+            vec![
+                found("a.xmp", None, xmp("A", None, "")),
+                found("broken.xmp", None, b"no".to_vec()),
+                found("c.xmp", None, xmp("C", None, "")),
+            ],
+            &stop,
+            &progress,
+        );
+        assert_eq!(progress.total.load(Ordering::Relaxed), 3);
+        assert_eq!(progress.done.load(Ordering::Relaxed), 3);
+        assert_eq!(report.stopped, None);
     }
 
     #[test]

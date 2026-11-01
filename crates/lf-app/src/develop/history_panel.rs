@@ -130,6 +130,9 @@ impl Develop {
             .show(ui, |ui| {
                 for (id, name) in &self.history.rows {
                     let here = self.history.cursor == Some(*id);
+                    // Named from settings keys, which a sidecar or an imported preset
+                    // may carry: drawn glyph-safe.
+                    let name = crate::lightroom::import::shown_name(ui.ctx(), name);
                     if ui.selectable_label(here, name).clicked() && !here {
                         go = Some(*id);
                     }

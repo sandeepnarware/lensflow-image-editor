@@ -5,7 +5,7 @@
 //! [`crate::lightroom::import`] on the `Long` lane; the pickers run on their own threads.
 
 use crate::catalog_ext::count;
-use crate::lightroom::import::{ImportReport, MAX_PRESETS, shown_name};
+use crate::lightroom::import::{ImportReport, MAX_PRESETS, Progress, shown_name};
 use crate::theme;
 use eframe::egui::{self, Key, RichText};
 use std::path::PathBuf;
@@ -49,6 +49,23 @@ pub fn left_out_text(n: usize) -> String {
     )
 }
 
+/// "2 of 5 files" while importing.
+pub fn progress_text(done: usize, total: usize) -> String {
+    format!("{} of {} files", count(done), count(total))
+}
+
+/// The summary's line after Stop.
+pub fn stopped_text(not_processed: usize) -> String {
+    if not_processed == 1 {
+        "The import was stopped: 1 file was not processed.".to_owned()
+    } else {
+        format!(
+            "The import was stopped: {} files were not processed.",
+            count(not_processed)
+        )
+    }
+}
+
 static IDS: AtomicU64 = AtomicU64::new(1);
 
 /// Where the dialog is.
@@ -81,6 +98,8 @@ pub struct LrImportDialog {
     pub adobe: Vec<PathBuf>,
     pub stage: Stage,
     pub stop: Arc<AtomicBool>,
+    /// Files done of the files gathered, written by the job.
+    pub progress: Arc<Progress>,
 }
 
 impl LrImportDialog {
@@ -91,6 +110,7 @@ impl LrImportDialog {
             adobe,
             stage: Stage::Choosing,
             stop: Arc::new(AtomicBool::new(false)),
+            progress: Arc::new(Progress::default()),
         }
     }
 
@@ -112,10 +132,23 @@ impl LrImportDialog {
             match &self.stage {
                 Stage::Choosing => action = self.choosing_ui(ui),
                 Stage::Importing => {
+                    let done = self.progress.done.load(Ordering::Relaxed);
+                    let total = self.progress.total.load(Ordering::Relaxed);
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(IMPORTING);
+                        // Until the files are gathered there is no count yet.
+                        if total == 0 {
+                            ui.label(IMPORTING);
+                        } else {
+                            ui.label(progress_text(done, total));
+                        }
                     });
+                    if total > 0 {
+                        ui.add(egui::ProgressBar::new(done as f32 / total as f32));
+                    }
+                    // The job counts on its own thread: look again shortly.
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(200));
                     ui.add_space(8.0);
                     let stopping = self.stop.load(Ordering::SeqCst);
                     if ui.add_enabled(!stopping, egui::Button::new(STOP)).clicked() {
@@ -191,6 +224,9 @@ impl LrImportDialog {
 /// The summary: imported, with notes (each preset's opens to show them), failed, left out.
 fn summary_ui(ui: &mut egui::Ui, report: &ImportReport) {
     ui.label(RichText::new(imported_text(report.imported.len())).strong());
+    if let Some(n) = report.stopped {
+        ui.label(RichText::new(stopped_text(n)).color(theme::WARNING));
+    }
     let noted: Vec<_> = report
         .imported
         .iter()

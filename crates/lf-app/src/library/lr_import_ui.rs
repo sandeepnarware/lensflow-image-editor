@@ -58,8 +58,9 @@ impl Library {
         };
         dialog.stage = Stage::Importing;
         let stop = dialog.stop.clone();
+        let progress = dialog.progress.clone();
         env.jobs.spawn(Lane::Long, JOB, move || {
-            let report = crate::lightroom::import::run(&root, studio, &paths, &stop);
+            let report = crate::lightroom::import::run(&root, studio, &paths, &stop, &progress);
             Msg::LrImported { root, report }
         });
     }
@@ -78,6 +79,13 @@ impl Library {
     /// the summary (a toast says how many when it was closed meanwhile).
     pub(super) fn lr_imported(&mut self, root: PathBuf, report: ImportReport, env: &mut Env) {
         if self.root.as_deref() != Some(root.as_path()) {
+            // Another catalogue's answer: its presets are not this one's, but the dialog must
+            // not wait for an answer that will never come.
+            if let Some(dialog) = &mut self.lr_import
+                && dialog.stage == Stage::Importing
+            {
+                dialog.stage = Stage::Done(ImportReport::default());
+            }
             return;
         }
         if !report.imported.is_empty() {

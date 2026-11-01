@@ -40,8 +40,10 @@ pub enum PresetAction {
 }
 
 /// A small button showing `text`, named `name` for screen readers (and as its hover text).
+/// The screen reader gets `name` whole; the painted hover text goes through [`shown_name`].
 pub fn small_named(ui: &mut egui::Ui, text: &str, name: &str) -> egui::Response {
-    let response = ui.small_button(text).on_hover_text(name);
+    let hover = shown_name(ui.ctx(), name);
+    let response = ui.small_button(text).on_hover_text(hover);
     let name = name.to_owned();
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name.clone()));
     response
@@ -72,7 +74,7 @@ pub fn show(
             if r.clicked() {
                 action = Some(PresetAction::Apply(i));
             }
-            if small_named(ui, DELETE, &delete_label(&name)).clicked() {
+            if small_named(ui, DELETE, &delete_label(&row.name)).clicked() {
                 action = Some(PresetAction::Delete(i));
             }
         });
@@ -81,4 +83,40 @@ pub fn show(
         action = Some(PresetAction::ImportLr);
     }
     action
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable as _;
+
+    #[test]
+    fn a_name_the_fonts_lack_is_drawn_with_question_marks_but_read_out_whole() {
+        let real = "Studio - \u{5915}\u{713c}\u{3051}";
+        let rows = vec![LocalPresetRow {
+            id: 1,
+            studio_id: 7,
+            name: real.to_owned(),
+            settings: serde_json::json!({"v": 2}),
+            updated_at: "2026-11-01T00:00:00Z".to_owned(),
+            remote_id: None,
+            synced_at: None,
+            deleted_at: None,
+        }];
+        let mut h = Harness::builder().with_size([400.0, 300.0]).build_ui_state(
+            |ui, rows: &mut Vec<LocalPresetRow>| {
+                show(ui, rows, &mut None);
+            },
+            rows,
+        );
+        h.step();
+        assert!(
+            h.query_by_label("Studio - ???").is_some(),
+            "the painted name"
+        );
+        // The screen reader hears the real name; hovering paints its tooltip safely.
+        h.get_by_label(&delete_label(real)).hover();
+        h.run_steps(30);
+    }
 }

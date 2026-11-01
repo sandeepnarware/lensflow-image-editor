@@ -3565,3 +3565,39 @@ fn lightroom_presets_are_imported_from_the_action_and_the_presets_panel() {
     h.step();
     assert!(h.query_by_label(lr_import::TITLE).is_some());
 }
+
+#[test]
+fn an_import_answer_for_another_catalogue_does_not_leave_the_dialog_waiting() {
+    use lf_app::dialogs::lr_import::{self, Stage};
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    h.state_mut().lib.set_studio(Some(7));
+    assert!(run_action(&mut h, Action::ImportLrPresets));
+    h.step();
+    h.step();
+    let id = h.state().lib.lr_import().unwrap().id;
+    h.state_mut().handle(Msg::LrPicked {
+        dialog: id,
+        paths: vec![dir.path().join("nothing-here")],
+    });
+    h.step();
+    h.get_by_role_and_label(Role::Button, lr_import::IMPORT)
+        .click();
+    h.step();
+    // Messages are only drained at the start of a frame: the job's own answer is not in yet.
+    assert!(matches!(
+        h.state().lib.lr_import().map(|d| &d.stage),
+        Some(Stage::Importing)
+    ));
+    // An answer for a catalogue no longer open.
+    h.state_mut().handle(Msg::LrImported {
+        root: dir.path().join("elsewhere"),
+        report: Default::default(),
+    });
+    assert!(matches!(
+        h.state().lib.lr_import().map(|d| &d.stage),
+        Some(Stage::Done(_))
+    ));
+}

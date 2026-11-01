@@ -84,7 +84,10 @@ impl Toasts {
                     let shown_at = *toast.shown_at.get_or_insert(now);
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(&toast.text).color(toast.level.colour()));
+                            // A toast may name a preset or file from someone else's
+                            // file: drawn glyph-safe.
+                            let text = crate::lightroom::import::shown_name(ctx, &toast.text);
+                            ui.label(RichText::new(text).color(toast.level.colour()));
                             if toast.level == Level::Error && ui.small_button("Close").clicked() {
                                 closed = Some(toast.id);
                             }
@@ -101,5 +104,23 @@ impl Toasts {
         if let Some(id) = closed {
             self.toasts.retain(|t| t.id != id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable as _;
+
+    #[test]
+    fn a_toast_naming_a_preset_the_fonts_lack_is_drawn_with_question_marks() {
+        let mut toasts = Toasts::default();
+        toasts.push(Level::Success, "Preset \u{5915}\u{713c}\u{3051} saved.");
+        let mut h = Harness::builder()
+            .with_size([600.0, 300.0])
+            .build_ui_state(|ui, t: &mut Toasts| t.show(ui.ctx()), toasts);
+        h.step();
+        assert!(h.query_by_label("Preset ??? saved.").is_some());
     }
 }

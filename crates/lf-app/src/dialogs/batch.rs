@@ -6,6 +6,7 @@
 use crate::clipboard::{self, Recipe};
 use crate::develop::debounce::{PendingWrite, SidecarSaver};
 use crate::jobs::{Jobs, Lane, Msg};
+use crate::lightroom::import::shown_name;
 use crate::theme;
 use eframe::egui::{self, RichText};
 use lf_catalog::{Catalog, CatalogError, edits};
@@ -348,11 +349,14 @@ impl BatchDialog {
             .choices
             .get(self.chosen)
             .map_or_else(String::new, |c| c.label.clone());
+        // A preset's name comes from someone else's file (an import): drawn glyph-safe.
+        let shown = |ui: &egui::Ui, text: &str| shown_name(ui.ctx(), text);
         egui::ComboBox::from_label("Apply")
-            .selected_text(label)
+            .selected_text(shown(ui, &label))
             .show_ui(ui, |ui| {
                 for (i, c) in self.choices.iter().enumerate() {
-                    ui.selectable_value(&mut self.chosen, i, &c.label);
+                    let text = shown(ui, &c.label);
+                    ui.selectable_value(&mut self.chosen, i, text);
                 }
             });
         ui.add_space(6.0);
@@ -572,6 +576,29 @@ mod tests {
         let h = dialog(json!({"exposure": 1}));
         h.get_by_label(NOTE);
         assert!(h.query_by_label(PASTE_DROPS).is_none());
+    }
+
+    #[test]
+    fn a_preset_name_the_fonts_lack_is_drawn_with_question_marks() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable as _;
+        let choices = vec![Choice::preset(
+            "\u{5915}\u{713c}\u{3051}",
+            json!({"exposure": 1}),
+        )];
+        let mut h = Harness::builder().with_size([800.0, 600.0]).build_ui_state(
+            |ui, d: &mut BatchDialog| {
+                d.show(ui.ctx());
+            },
+            BatchDialog::new(vec![1], vec!["a.jpg".into()], choices),
+        );
+        h.step();
+        h.step();
+        h.get_by_label("Apply").click();
+        h.run_steps(4);
+        // Drawing the closed box and its open list did not panic; the list shows the name
+        // with the glyphs the fonts lack as `?`.
+        assert!(h.query_by_label_contains("Preset: ???").is_some());
     }
 
     #[test]

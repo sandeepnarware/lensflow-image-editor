@@ -8,6 +8,7 @@ use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use lf_app::dialogs::lr_import::{self, LrImportAction, LrImportDialog, Stage};
 use lf_app::lightroom::import::ImportReport;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 
 fn harness(dialog: LrImportDialog) -> Harness<'static, (LrImportDialog, Vec<LrImportAction>)> {
     Harness::builder().with_size([800.0, 700.0]).build_ui_state(
@@ -70,6 +71,7 @@ fn the_summary_lists_the_notes_of_each_preset() {
             "That file is not readable XML, so it is not a Lightroom preset.".into(),
         )],
         left_out: vec!["Extra".into()],
+        stopped: None,
     });
     let mut h = harness(dialog);
     h.run_steps(2);
@@ -93,6 +95,10 @@ fn the_summary_lists_the_notes_of_each_preset() {
     );
     assert!(h.query_by_label_contains("pack.zip / broken.xmp").is_some());
     assert!(h.query_by_label(&lr_import::left_out_text(1)).is_some());
+    assert!(
+        h.query_by_label_contains("stopped").is_none(),
+        "a full run says nothing about stopping"
+    );
     assert!(h.query_by_label("Extra").is_some());
     h.get_by_label(lr_import::CLOSE).click();
     h.step();
@@ -113,4 +119,32 @@ fn a_name_the_fonts_cannot_draw_is_shown_with_question_marks() {
     // Drawing it must not panic.
     h.run_steps(2);
     assert!(h.query_by_label("???").is_some());
+}
+
+#[test]
+fn importing_shows_how_many_files_are_done() {
+    let dialog = LrImportDialog::new(Vec::new());
+    dialog.progress.total.store(5, Ordering::Relaxed);
+    dialog.progress.done.store(2, Ordering::Relaxed);
+    let mut dialog = dialog;
+    dialog.stage = Stage::Importing;
+    let mut h = harness(dialog);
+    h.run_steps(2);
+    assert!(h.query_by_label(&lr_import::progress_text(2, 5)).is_some());
+    h.get_by_label(lr_import::STOP).click();
+    h.step();
+    assert!(h.state().0.stop.load(Ordering::SeqCst));
+}
+
+#[test]
+fn a_stopped_import_says_how_many_files_were_not_processed() {
+    let mut dialog = LrImportDialog::new(Vec::new());
+    dialog.stage = Stage::Done(ImportReport {
+        imported: vec![("Plain".into(), Vec::new())],
+        stopped: Some(3),
+        ..ImportReport::default()
+    });
+    let mut h = harness(dialog);
+    h.run_steps(2);
+    assert!(h.query_by_label(&lr_import::stopped_text(3)).is_some());
 }
