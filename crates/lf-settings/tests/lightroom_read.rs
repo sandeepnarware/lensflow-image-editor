@@ -166,3 +166,22 @@ fn only_zstr_keys_are_split_at_the_equals_sign() {
     );
     assert_eq!(read_lrtemplate(&src("A=B")).unwrap().name, "A=B");
 }
+
+#[test]
+fn odd_names_in_element_form_stay_text() {
+    let plain = SHELL.replace(
+        "ATTRS/>",
+        "crs:Exposure2012=\"1\"><crs:Name>1985</crs:Name><crs:Group>True</crs:Group><crs:PresetType>Normal</crs:PresetType></rdf:Description>",
+    );
+    let plain = plain.replace("</rdf:Description></rdf:Description>", "</rdf:Description>");
+    let p = read_xmp(plain.as_bytes()).unwrap();
+    assert_eq!(p.name, "1985");
+    assert_eq!(p.group.as_deref(), Some("True"));
+    let alt = SHELL.replace(
+        "ATTRS/>",
+        "crs:Exposure2012=\"1\"><crs:Name><rdf:Alt><rdf:li xml:lang=\"x-default\">1985</rdf:li></rdf:Alt></crs:Name><crs:Group><rdf:Alt><rdf:li xml:lang=\"x-default\">2024</rdf:li></rdf:Alt></crs:Group></rdf:Description>",
+    );
+    let p = read_xmp(alt.as_bytes()).unwrap();
+    assert_eq!(p.name, "1985");
+    assert_eq!(p.group.as_deref(), Some("2024"));
+}

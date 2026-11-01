@@ -480,7 +480,9 @@ fn settings_object(n: roxmltree::Node) -> Value {
         .children()
         .filter(|c| c.is_element() && c.tag_name().namespace() == Some(CRS_NS))
     {
-        map.insert(c.tag_name().name().to_owned(), element_value(c, false));
+        let name = c.tag_name().name();
+        let text = matches!(name, "Name" | "Group" | "PresetType");
+        map.insert(name.to_owned(), element_value(c, text));
     }
     Value::Object(map)
 }
