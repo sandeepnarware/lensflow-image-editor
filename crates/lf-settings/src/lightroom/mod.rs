@@ -8,8 +8,10 @@
 
 use serde_json::Value;
 
+pub mod map;
 pub mod read;
 
+pub use map::{Mapped, map};
 pub use read::{LrKind, LrPreset, ReadError, read_any, read_lrtemplate, read_xmp};
 
 /// The key inside `desktop` that marks a preset as imported from Lightroom.
