@@ -27,10 +27,12 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value, json};
 
-use super::{LIGHTROOM_KEY, LrPreset, curve};
+use super::{LIGHTROOM_KEY, LrPreset, budget, curve};
+use crate::adaptive::{self, AdaptiveMask};
 use crate::calibration::Calibration;
 use crate::defringe::{self, Defringe};
 use crate::lens::Lens;
+use crate::masks::{Local, MAX_MASKS};
 use crate::point_colour::{MAX_POINTS, Point, Points};
 use crate::shader_values::kelvin_wb;
 use crate::{CurvePoint, EditSettings, SETTINGS_VERSION};
@@ -68,6 +70,10 @@ pub const CROP_NOTE: &str =
     "The crop and straighten angle are not carried: they belong to one photo.";
 pub const RETOUCH_NOTE: &str = "Spot removal is not carried: it belongs to one photo.";
 pub const MASKS_NOTE: &str = "Masks are not carried: they belong to one photo.";
+pub const MASK_KIND_NOTE: &str = "Only subject, sky and people masks are carried; masks drawn      as brushes, gradients, ranges or combined with others are not, because they belong to one photo.";
+pub const MASK_LOCAL_NOTE: &str = "A mask's texture and dehaze are not carried.";
+/// What replaces the shapes Lightroom stored for masks and spot removal.
+const OMITTED: &str = "(omitted)";
 pub const CURVE_UNREADABLE_NOTE: &str = "A tone curve could not be read and was left straight.";
 pub const POINT_COLOUR_RANGE_NOTE: &str = "Point colour's separate hue, saturation and \
      luminance ranges were approximated by one range.";
@@ -130,6 +136,7 @@ pub fn map(p: &LrPreset) -> Mapped {
         desktop: Map::new(),
         notes: Vec::new(),
         handled: BOOKKEEPING.iter().map(|k| (*k).to_string()).collect(),
+        adaptive: Vec::new(),
     };
     m.out.insert("v".into(), json!(SETTINGS_VERSION));
     m.light();
@@ -154,7 +161,7 @@ pub fn map(p: &LrPreset) -> Mapped {
             "name": p.name,
             "group": p.group,
             "processVersion": p.process_version,
-            "settings": p.settings,
+            "settings": stored_settings(&p.settings),
             "auto": {"wb": auto_wb, "tone": auto_tone},
         }),
     );
@@ -162,13 +169,71 @@ pub fn map(p: &LrPreset) -> Mapped {
         mut out,
         desktop,
         notes,
+        adaptive: adaptive_masks,
         ..
     } = m;
     out.insert("desktop".into(), Value::Object(desktop));
-    Mapped {
-        preset: Value::Object(out),
-        notes,
+    let mut preset = Value::Object(out);
+    adaptive::write_into_preset(&mut preset, &adaptive_masks);
+    let mut notes = notes;
+    if let Some(note) = budget::fit_budget(&mut preset) {
+        notes.push(note.to_string());
     }
+    Mapped { preset, notes }
+}
+
+/// Lightroom's settings as kept under `desktop.lightroom`: the mask and spot-removal geometry
+/// is large and belongs to one photo, so it is replaced by a marker.
+fn stored_settings(settings: &Map<String, Value>) -> Map<String, Value> {
+    let mut kept = settings.clone();
+    for key in ["MaskGroupBasedCorrections", "RetouchInfo"] {
+        if let Some(v) = kept.get_mut(key) {
+            *v = json!(OMITTED);
+        }
+    }
+    kept
+}
+
+/// The AI mask a correction stands for, when every mask in it is one of a supported kind.
+/// Lightroom's `MaskSubType`: 1 subject, 2 sky, 3 people (the numbering of people is unverified
+/// against real files); a subject mask that is inverted is the background.
+fn ai_correction(c: &Value) -> Option<AdaptiveMask> {
+    let masks = c.get("CorrectionMasks")?.as_array()?;
+    let [mask] = masks.as_slice() else {
+        return None;
+    };
+    if mask.get("What").and_then(Value::as_str) != Some("Mask/Image") {
+        return None;
+    }
+    let what = match mask.get("MaskSubType").and_then(Value::as_i64)? {
+        1 => "subject",
+        2 => "sky",
+        3 => "people",
+        _ => return None,
+    };
+    let invert = mask.get("MaskInverted").and_then(Value::as_bool) == Some(true);
+    let f = |key: &str| c.get(key).and_then(Value::as_f64).filter(|v| v.is_finite());
+    // Lightroom's local sliders run -1..1, ours -100..100; exposure is in stops in both.
+    let pct = |key: &str| f(key).map_or(0.0, |v| v * 100.0);
+    let local = Local {
+        exposure: f("LocalExposure2012").unwrap_or(0.0),
+        contrast: pct("LocalContrast2012"),
+        highlights: pct("LocalHighlights2012"),
+        shadows: pct("LocalShadows2012"),
+        whites: pct("LocalWhites2012"),
+        blacks: pct("LocalBlacks2012"),
+        temperature: pct("LocalTemperature"),
+        tint: pct("LocalTint"),
+        saturation: pct("LocalSaturation"),
+        clarity: pct("LocalClarity2012"),
+    };
+    Some(AdaptiveMask {
+        what: what.to_owned(),
+        invert,
+        opacity: 100.0,
+        local,
+        range: Default::default(),
+    })
 }
 
 struct Mapper<'a> {
@@ -179,6 +244,8 @@ struct Mapper<'a> {
     notes: Vec<String>,
     /// Keys mapped, noted in a family, or bookkeeping; the rest are listed as not carried.
     handled: BTreeSet<String>,
+    /// AI masks carried over from `MaskGroupBasedCorrections`.
+    adaptive: Vec<AdaptiveMask>,
 }
 
 impl Mapper<'_> {
@@ -766,8 +833,8 @@ impl Mapper<'_> {
         if retouch {
             self.note(RETOUCH_NOTE);
         }
+        self.ai_masks();
         let masks = [
-            "MaskGroupBasedCorrections",
             "PaintBasedCorrections",
             "GradientBasedCorrections",
             "CircularGradientBasedCorrections",
@@ -791,6 +858,31 @@ impl Mapper<'_> {
             if !name.trim().is_empty() {
                 let note = format!("{PROFILE_NOTE} \"{}\".", name.trim());
                 self.note(&note);
+            }
+        }
+    }
+
+    /// Carries the corrections that are one AI mask; notes the others.
+    fn ai_masks(&mut self) {
+        let corrections = match self.get("MaskGroupBasedCorrections") {
+            Some(Value::Array(a)) => a.clone(),
+            _ => return,
+        };
+        for c in corrections {
+            if c.get("CorrectionActive").and_then(Value::as_bool) == Some(false) {
+                continue;
+            }
+            match ai_correction(&c) {
+                Some(mask) if self.adaptive.len() < MAX_MASKS => {
+                    if ["LocalTexture", "LocalDehaze"]
+                        .iter()
+                        .any(|k| c.get(*k).and_then(Value::as_f64).is_some_and(|v| v != 0.0))
+                    {
+                        self.note(MASK_LOCAL_NOTE);
+                    }
+                    self.adaptive.push(mask);
+                }
+                _ => self.note(MASK_KIND_NOTE),
             }
         }
     }

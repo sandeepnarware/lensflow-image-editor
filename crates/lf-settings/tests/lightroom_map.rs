@@ -341,3 +341,73 @@ fn transform_only_still_leaves_distortion_neutral() {
     let lens = Lens::from_settings(&normalise(&m.preset));
     assert_eq!((lens.vertical, lens.distortion), (-20.0, 0.0));
 }
+
+/// A correction as the reader nests Lightroom's `MaskGroupBasedCorrections` entries.
+fn correction(masks: Value, local: Value) -> Value {
+    let mut c = match local {
+        Value::Object(m) => m,
+        _ => Map::new(),
+    };
+    c.insert("CorrectionAmount".into(), json!(1));
+    c.insert("CorrectionActive".into(), json!(true));
+    c.insert("CorrectionMasks".into(), masks);
+    Value::Object(c)
+}
+
+fn ai_mask(sub_type: i64, inverted: bool) -> Value {
+    json!({"What": "Mask/Image", "MaskSubType": sub_type, "MaskSubCategoryID": 0,
+           "MaskInverted": inverted, "MaskValue": 1})
+}
+
+#[test]
+fn a_sky_mask_becomes_an_adaptive_sky_mask() {
+    let m = map::map(&preset(json!({
+        "Exposure2012": 0.2,
+        "MaskGroupBasedCorrections": [
+            correction(json!([ai_mask(2, false)]),
+                json!({"LocalExposure2012": -0.5, "LocalContrast2012": 0.25, "LocalSaturation": -0.1})),
+            correction(json!([ai_mask(1, true)]), json!({"LocalShadows2012": 0.4})),
+        ]
+    })));
+    let list = lf_settings::adaptive::from_preset(&m.preset);
+    assert_eq!(list.len(), 2);
+    assert_eq!((list[0].what.as_str(), list[0].invert), ("sky", false));
+    assert_eq!(list[0].opacity, 100.0);
+    assert!(close(list[0].local.exposure, -0.5));
+    assert!(close(list[0].local.contrast, 25.0));
+    assert!(close(list[0].local.saturation, -10.0));
+    assert_eq!((list[1].what.as_str(), list[1].invert), ("subject", true));
+    assert!(close(list[1].local.shadows, 40.0));
+    assert!(!m.notes.iter().any(|n| n.contains("Masks are not carried")));
+    assert_eq!(
+        m.preset["desktop"]["lightroom"]["settings"]["MaskGroupBasedCorrections"],
+        json!("(omitted)")
+    );
+}
+
+#[test]
+fn a_brushed_mask_is_noted_not_carried() {
+    let brush = json!({"What": "Mask/CircularGradient", "MaskSubType": 0});
+    let m = map::map(&preset(json!({
+        "MaskGroupBasedCorrections": [correction(json!([brush]), json!({"LocalExposure2012": 0.5}))]
+    })));
+    assert!(lf_settings::adaptive::from_preset(&m.preset).is_empty());
+    assert!(m.notes.iter().any(|n| n == map::MASK_KIND_NOTE));
+}
+
+#[test]
+fn the_budget_keeps_desktop_under_the_cap() {
+    let big = "x".repeat(40_000);
+    let mut p = json!({"v": 2, "desktop": {
+        "lut": {"table": big.clone()},
+        "lightroom": {"name": "A", "settings": {"Junk": big}}}});
+    let note = lf_settings::lightroom::budget::fit_budget(&mut p);
+    assert_eq!(note, Some(lf_settings::lightroom::budget::BUDGET_NOTE));
+    let d = serde_json::to_vec(&p["desktop"]).unwrap();
+    assert!(d.len() <= lf_settings::MAX_DESKTOP_JSON);
+    assert_eq!(p["desktop"]["lut"]["table"].as_str().unwrap().len(), 40_000);
+    assert!(normalise(&p).desktop.is_some());
+    // Under the cap nothing is touched.
+    let mut small = json!({"v": 2, "desktop": {"lightroom": {"settings": {"A": 1}}}});
+    assert_eq!(lf_settings::lightroom::budget::fit_budget(&mut small), None);
+}
