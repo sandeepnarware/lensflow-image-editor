@@ -47,6 +47,7 @@ close or competitors ship new features.
 ### Tier 3: workflow conveniences
 
 - ~~Presets with an Amount slider~~ (done: looks and studio presets, 0–200 %); ~~adaptive presets that carry AI masks~~ (done: Save as preset → AI masks).
+- ~~Lightroom preset import (`.xmp`, `.lrtemplate`)~~ (done: Develop → Presets → Import Lightroom presets; imported with notes, not identical) and ~~learning a look from an example~~ (done: Match a Lightroom example). Embedded profile tables are not decoded yet.
 - ~~Auto-sync (edit one photo, the selection follows)~~ (done: Home → Settings → Auto-sync).
 - ~~Batch rename of existing photos (PhotoLab 9)~~ (done: Home → Selection → Rename…).
 - ~~Second-monitor view~~ (done: View → 2nd window), ~~reference view~~ (done: View → Reference view, `Shift+R`), ~~focus peaking~~ (done: View → Peaking, `Shift+J`), ~~100% loupe~~ (done: Library → Loupe, `E`).

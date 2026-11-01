@@ -15,10 +15,10 @@ and 2d tasks 1–2 are built; packaging tasks 3–5 are in flight.
 
 | Crate | Role | Start here |
 | --- | --- | --- |
-| `lf-settings` | `EditSettings`, `normalise` (only safe JSON entry point), curves, geometry, looks, shader values, groups. `SETTINGS_VERSION` 2, `MAX_SPOTS` 48. | `src/lib.rs`, `src/settings.rs` |
+| `lf-settings` | `EditSettings`, `normalise` (only safe JSON entry point), curves, geometry, looks, shader values, groups, `lightroom/` (Lightroom `.xmp`/`.lrtemplate` reader, mapper with notes, curves, size budget). `SETTINGS_VERSION` 2, `MAX_SPOTS` 48. | `src/lib.rs`, `src/settings.rs` |
 | `lf-pipeline` | Headless wgpu renderer: `Gpu`, `Renderer`, mip-chained textures, copy/gaussian/spots/develop passes, curve texture, histogram, preview draw. | `src/renderer.rs`, `src/passes/develop.rs` |
 | `lf-raw` | Magic-byte kind sniffing, rawler decode, demosaic (bilinear/AHD/X-Trans/preview bin), WB + colour (or a DNG camera profile, `dcp.rs`) + highlight handling, f16 headroom, EXIF, frame cache, `lf-render` example. | `src/open.rs`, `src/develop.rs` |
-| `lf-grade` | CPU maths for "Match a reference": measure, correct, calibrate (injected renderer), strength/exposure, contact sheet. | `src/lib.rs` |
+| `lf-grade` | CPU maths for "Match a reference": measure, correct, calibrate (injected renderer), strength/exposure, contact sheet, `example.rs` (learn a table, vignette and grain from a Lightroom export). | `src/lib.rs` |
 | `lf-merge` | CPU merging: exposure fusion (Mertens, with ghost removal), focus stacking through Laplacian pyramids, median-threshold-bitmap alignment; panoramas (`panorama.rs`: cylinder fit, NCC registration, gain and feather blending; `stitch_rows_uncropped` for Fill edges), high resolution (`superres.rs`: sub-pixel shifts, Gaussian gather at 2×). No GPU, no catalogue. | `src/lib.rs` |
 | `lf-ai` | Local AI through ONNX Runtime (loaded at run time, never linked): pinned downloads (`assets.rs`), tiles, denoise and upscale (`restore.rs`), subject and sky masks (`segment.rs`), removal (`inpaint.rs`), faces and skin retouch (`faces.rs`), telling people apart (`identity.rs`), keywords (`keywords.rs`, CLIP + `data/keywords.{txt,f16}`), click-to-mask (`objects.rs`, MobileSAM), eyes/irises/lips/teeth (`features.rs`, Face Mesh V2), depth and lens blur (`depth.rs`, `lens_blur.rs`), wires against the sky (`wires.rs`, by shape: a black-hat in the sky mask, long thin pieces kept). | `src/lib.rs`, `src/assets.rs` |
 | `lf-account` | Blocking reqwest/rustls LensFlow client: sign-in + 2FA, token store, entitlement gate/offline grace, desktop grade, presets sync, download link. | `src/client.rs`, `src/entitlement.rs` |
@@ -189,6 +189,17 @@ cargo test --workspace                   # includes the 228-render parity suite
   HueSatMap → LookTable → tone curve → sRGB), `DevelopSettings::{dcp, dcp_name, set_dcp}` (`desktop.develop.dcp`),
   `profiles.rs` (`.lensflow/profiles/`), the RAW section's "Camera profile" and "Import .dcp…" (`Msg::DcpImported`);
   the frame cache key hashes the profile's bytes. None ship; `LF_DCP_DIR` runs real ones in `lf-raw/tests/develop.rs`.
+  Lightroom presets: imported, not copied exactly. `lf_settings::lightroom` (`read.rs`, `map.rs` -> `Mapped {preset, notes}`,
+  `curve.rs`, `budget.rs`: `fit_budget`/`desktop_fits`; `desktop.lightroom` makes a preset apply Lightroom's way, only what it
+  carries, in `looks.rs`), embedded colour tables (`lf_settings::lut::{encode_table, decode_table, embedded_name}`,
+  `lf_pipeline::lut::pin`, `luts::{ensure_embedded, write_embedded}`), `lf-app/src/lightroom/{gather, import, example_job}`,
+  `dialogs/lr_import.rs` and `dialogs/lr_example.rs`, `Action::{ImportLrPresets, MatchLrExample}` (ribbon Develop -> Presets).
+  "Match a Lightroom example": `lf_grade::example::fit` (colour table, vignette, grain from an original and Lightroom's export;
+  `Fit::{delta_e_mean, delta_e_p95, aligned, residual}`). Copy/paste carries the desktop groups (`groups.rs`
+  `COPY_DEFAULT_GROUPS`). The server takes at most 2,000 presets. Embedded `crs:RGBTable`/`LookTable` profiles are reported, not decoded.
+  `LF_LR_SAMPLES` (a folder of subfolders with `original.*`, `export.*`, optional `preset.xmp`/`.lrtemplate`) runs real pairs in
+  `lf-app/tests/lightroom_samples.rs` (mean dE < 5; unset: skipped). Still unverified against Lightroom, for those samples to
+  check: the horizontal perspective sign, the point-colour scale, the mask sub-type numbering.
   Preset Amount: `lf_settings::amount::blend` (0–200 %), `develop::extras::Applied` (the look or preset
   applied last; one history step per drag).
   Adaptive presets: `lf_settings::adaptive` (`desktop.adaptiveMasks` in the preset JSON), `extras::AdaptiveQueue`,
