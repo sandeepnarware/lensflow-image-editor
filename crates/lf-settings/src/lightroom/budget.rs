@@ -20,10 +20,15 @@ fn desktop_len(preset: &Value) -> usize {
         .map_or(0, |b| b.len())
 }
 
+/// Whether the preset's `desktop` is within the cap `normalise` enforces.
+pub fn desktop_fits(preset: &Value) -> bool {
+    desktop_len(preset) <= MAX_DESKTOP_JSON
+}
+
 /// Drops `desktop.lightroom.settings` when `desktop` is over the cap; returns the note when it
 /// did. Everything else in `desktop` is left as it is.
 pub fn fit_budget(preset: &mut Value) -> Option<&'static str> {
-    if desktop_len(preset) <= MAX_DESKTOP_JSON {
+    if desktop_fits(preset) {
         return None;
     }
     let lr = preset

@@ -411,3 +411,96 @@ fn the_budget_keeps_desktop_under_the_cap() {
     let mut small = json!({"v": 2, "desktop": {"lightroom": {"settings": {"A": 1}}}});
     assert_eq!(lf_settings::lightroom::budget::fit_budget(&mut small), None);
 }
+
+fn carried(settings: Value) -> (Vec<lf_settings::adaptive::AdaptiveMask>, Vec<String>) {
+    let m = map::map(&preset(settings));
+    (lf_settings::adaptive::from_preset(&m.preset), m.notes)
+}
+
+#[test]
+fn only_subject_and_sky_sub_types_are_carried() {
+    let (list, notes) = carried(json!({"MaskGroupBasedCorrections": [
+        correction(json!([ai_mask(3, false)]), json!({"LocalExposure2012": 0.5})),
+        correction(json!([ai_mask(4, false)]), json!({"LocalExposure2012": 0.5})),
+    ]}));
+    assert!(list.is_empty());
+    assert!(notes.iter().any(|n| n == map::MASK_KIND_NOTE));
+}
+
+#[test]
+fn a_range_mask_is_noted_not_carried() {
+    let mut c = correction(
+        json!([ai_mask(2, false)]),
+        json!({"LocalExposure2012": 0.5}),
+    );
+    c["CorrectionRangeMask"] = json!({"Type": 1, "LumRange": "0.1 0.2 0.8 0.9"});
+    let (list, notes) = carried(json!({"MaskGroupBasedCorrections": [c]}));
+    assert!(list.is_empty());
+    assert!(notes.iter().any(|n| n == map::MASK_KIND_NOTE));
+}
+
+#[test]
+fn the_correction_amount_sets_the_opacity() {
+    let mut c = correction(json!([ai_mask(2, false)]), json!({}));
+    c["CorrectionAmount"] = json!(0.5);
+    let mut d = correction(json!([ai_mask(1, false)]), json!({}));
+    d.as_object_mut().unwrap().remove("CorrectionAmount");
+    let mut e = correction(json!([ai_mask(1, true)]), json!({}));
+    e["CorrectionAmount"] = json!(3);
+    let (list, _) = carried(json!({"MaskGroupBasedCorrections": [c, d, e]}));
+    assert_eq!(
+        list.iter().map(|m| m.opacity).collect::<Vec<_>>(),
+        vec![50.0, 100.0, 100.0]
+    );
+}
+
+#[test]
+fn two_masks_in_one_correction_are_noted() {
+    let (list, notes) = carried(json!({"MaskGroupBasedCorrections": [
+        correction(json!([ai_mask(1, false), ai_mask(2, false)]), json!({}))]}));
+    assert!(list.is_empty());
+    assert!(notes.iter().any(|n| n == map::MASK_KIND_NOTE));
+}
+
+#[test]
+fn an_inactive_correction_is_noted() {
+    let mut c = correction(json!([ai_mask(2, false)]), json!({}));
+    c["CorrectionActive"] = json!(false);
+    let (list, notes) = carried(json!({"MaskGroupBasedCorrections": [c]}));
+    assert!(list.is_empty());
+    assert!(notes.iter().any(|n| n == map::MASK_INACTIVE_NOTE));
+}
+
+#[test]
+fn settings_a_mask_cannot_hold_are_noted() {
+    let (list, notes) = carried(json!({"MaskGroupBasedCorrections": [
+        correction(json!([ai_mask(2, false)]),
+            json!({"LocalExposure2012": -0.5, "LocalTexture": 0.3, "LocalDehaze": 0.2}))]}));
+    assert_eq!(list.len(), 1);
+    assert!(notes.iter().any(|n| n == map::MASK_LOCAL_NOTE));
+    let (_, notes) = carried(json!({"MaskGroupBasedCorrections": [
+        correction(json!([ai_mask(2, false)]), json!({"LocalLuminanceNoise": 0.4}))]}));
+    assert!(notes.iter().any(|n| n == map::MASK_LOCAL_NOTE));
+}
+
+#[test]
+fn too_many_masks_get_their_own_note() {
+    let many: Vec<Value> = (0..lf_settings::masks::MAX_MASKS + 1)
+        .map(|_| correction(json!([ai_mask(2, false)]), json!({})))
+        .collect();
+    let (list, notes) = carried(json!({"MaskGroupBasedCorrections": many}));
+    assert_eq!(list.len(), lf_settings::masks::MAX_MASKS);
+    assert!(notes.iter().any(|n| n == map::MASK_OVERFLOW_NOTE));
+    assert!(!notes.iter().any(|n| n == map::MASK_KIND_NOTE));
+}
+
+#[test]
+fn desktop_fits_tells_the_cap() {
+    let big = "x".repeat(70_000);
+    assert!(!lf_settings::lightroom::budget::desktop_fits(
+        &json!({"desktop": {"a": big}})
+    ));
+    assert!(lf_settings::lightroom::budget::desktop_fits(
+        &json!({"v": 2})
+    ));
+}

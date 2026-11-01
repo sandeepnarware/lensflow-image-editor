@@ -70,8 +70,11 @@ pub const CROP_NOTE: &str =
     "The crop and straighten angle are not carried: they belong to one photo.";
 pub const RETOUCH_NOTE: &str = "Spot removal is not carried: it belongs to one photo.";
 pub const MASKS_NOTE: &str = "Masks are not carried: they belong to one photo.";
-pub const MASK_KIND_NOTE: &str = "Only subject, sky and people masks are carried; masks drawn      as brushes, gradients, ranges or combined with others are not, because they belong to one photo.";
-pub const MASK_LOCAL_NOTE: &str = "A mask's texture and dehaze are not carried.";
+pub const MASK_KIND_NOTE: &str = "Only subject, sky and background masks without a range are      carried; masks drawn as brushes or gradients, other AI masks, ranges, or several masks      combined are not, because they belong to one photo.";
+pub const MASK_LOCAL_NOTE: &str = "Some of a mask's settings (texture, dehaze, hue, sharpness,      noise and the like) are not carried.";
+pub const MASK_INACTIVE_NOTE: &str = "A mask that was switched off in Lightroom is not carried.";
+pub const MASK_OVERFLOW_NOTE: &str =
+    "There are more masks than we can hold; the extra ones      are not carried.";
 /// What replaces the shapes Lightroom stored for masks and spot removal.
 const OMITTED: &str = "(omitted)";
 pub const CURVE_UNREADABLE_NOTE: &str = "A tone curve could not be read and was left straight.";
@@ -194,9 +197,37 @@ fn stored_settings(settings: &Map<String, Value>) -> Map<String, Value> {
     kept
 }
 
+/// The `Local` settings of a correction that [`Local`] has no field for, set to something.
+fn has_unheld_settings(c: &Value) -> bool {
+    const HELD: [&str; 10] = [
+        "LocalExposure2012",
+        "LocalContrast2012",
+        "LocalHighlights2012",
+        "LocalShadows2012",
+        "LocalWhites2012",
+        "LocalBlacks2012",
+        "LocalClarity2012",
+        "LocalTemperature",
+        "LocalTint",
+        "LocalSaturation",
+    ];
+    c.as_object().is_some_and(|o| {
+        o.iter()
+            .filter(|(k, _)| k.starts_with("Local") && !HELD.contains(&k.as_str()))
+            .any(|(_, v)| match v {
+                Value::Number(n) => n.as_f64().is_some_and(|x| x != 0.0),
+                Value::String(t) => !t.is_empty(),
+                Value::Bool(b) => *b,
+                Value::Null => false,
+                _ => true,
+            })
+    })
+}
+
 /// The AI mask a correction stands for, when every mask in it is one of a supported kind.
-/// Lightroom's `MaskSubType`: 1 subject, 2 sky, 3 people (the numbering of people is unverified
-/// against real files); a subject mask that is inverted is the background.
+/// Lightroom's `MaskSubType`: 1 subject, 2 sky; a subject mask that is inverted is the
+/// background. Other sub-types are left out: their numbering is unverified, and a wrong mask is
+/// worse than a note.
 fn ai_correction(c: &Value) -> Option<AdaptiveMask> {
     let masks = c.get("CorrectionMasks")?.as_array()?;
     let [mask] = masks.as_slice() else {
@@ -208,9 +239,18 @@ fn ai_correction(c: &Value) -> Option<AdaptiveMask> {
     let what = match mask.get("MaskSubType").and_then(Value::as_i64)? {
         1 => "subject",
         2 => "sky",
-        3 => "people",
         _ => return None,
     };
+    let ranged = match c.get("CorrectionRangeMask") {
+        None | Some(Value::Null) => false,
+        Some(Value::Object(o)) => !o.is_empty(),
+        Some(Value::Array(a)) => !a.is_empty(),
+        Some(Value::String(t)) => !t.is_empty(),
+        Some(_) => true,
+    };
+    if ranged {
+        return None;
+    }
     let invert = mask.get("MaskInverted").and_then(Value::as_bool) == Some(true);
     let f = |key: &str| c.get(key).and_then(Value::as_f64).filter(|v| v.is_finite());
     // Lightroom's local sliders run -1..1, ours -100..100; exposure is in stops in both.
@@ -230,7 +270,7 @@ fn ai_correction(c: &Value) -> Option<AdaptiveMask> {
     Some(AdaptiveMask {
         what: what.to_owned(),
         invert,
-        opacity: 100.0,
+        opacity: f("CorrectionAmount").unwrap_or(1.0).clamp(0.0, 1.0) * 100.0,
         local,
         range: Default::default(),
     })
@@ -870,20 +910,21 @@ impl Mapper<'_> {
         };
         for c in corrections {
             if c.get("CorrectionActive").and_then(Value::as_bool) == Some(false) {
+                self.note(MASK_INACTIVE_NOTE);
                 continue;
             }
-            match ai_correction(&c) {
-                Some(mask) if self.adaptive.len() < MAX_MASKS => {
-                    if ["LocalTexture", "LocalDehaze"]
-                        .iter()
-                        .any(|k| c.get(*k).and_then(Value::as_f64).is_some_and(|v| v != 0.0))
-                    {
-                        self.note(MASK_LOCAL_NOTE);
-                    }
-                    self.adaptive.push(mask);
-                }
-                _ => self.note(MASK_KIND_NOTE),
+            let Some(mask) = ai_correction(&c) else {
+                self.note(MASK_KIND_NOTE);
+                continue;
+            };
+            if self.adaptive.len() >= MAX_MASKS {
+                self.note(MASK_OVERFLOW_NOTE);
+                continue;
             }
+            if has_unheld_settings(&c) {
+                self.note(MASK_LOCAL_NOTE);
+            }
+            self.adaptive.push(mask);
         }
     }
 
