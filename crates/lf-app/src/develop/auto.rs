@@ -245,24 +245,43 @@ pub fn auto_tone(sample: &Sample, settings: &EditSettings) -> Option<Tone> {
     })
 }
 
+/// The Auto tone button found too little in the photo to go by.
+pub const NO_TONE: &str = "Auto tone could not be worked out for this photo.";
+
+/// Which of the autos a preset asked for could not be worked out.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Skipped {
+    pub wb: bool,
+    pub tone: bool,
+}
+
+impl Skipped {
+    /// The toasts that say so (white balance first).
+    pub fn messages(self) -> impl Iterator<Item = &'static str> {
+        [(self.wb, NO_NEUTRAL), (self.tone, NO_TONE)]
+            .into_iter()
+            .filter_map(|(skipped, text)| skipped.then_some(text))
+    }
+}
+
 /// Runs Auto white balance and/or Auto tone on `settings` from `sample`, in that order (tone
 /// reads the white balance just set), as an imported Lightroom preset asks. An auto the photo
-/// gives too little for is skipped; `false` says one was.
-pub fn apply_auto(settings: &mut EditSettings, sample: &Sample, wb: bool, tone: bool) -> bool {
-    let mut all = true;
+/// gives too little for is skipped, and said so in the result.
+pub fn apply_auto(settings: &mut EditSettings, sample: &Sample, wb: bool, tone: bool) -> Skipped {
+    let mut skipped = Skipped::default();
     if wb {
         match auto_wb(sample) {
             Some((t, tint)) => (settings.temperature, settings.tint) = (t, tint),
-            None => all = false,
+            None => skipped.wb = true,
         }
     }
     if tone {
         match auto_tone(sample, settings) {
             Some(found) => found.apply(settings),
-            None => all = false,
+            None => skipped.tone = true,
         }
     }
-    all
+    skipped
 }
 
 #[cfg(test)]
@@ -411,5 +430,27 @@ mod tests {
         apply_auto(&mut e, &s, true, false);
         assert!((e.temperature - 35.0).abs() <= 3.0, "{}", e.temperature);
         assert_eq!(e.exposure, 0.0);
+    }
+
+    #[test]
+    fn a_photo_too_small_for_auto_tone_says_so() {
+        let tiny = Sample {
+            width: 2,
+            height: 2,
+            rgb: vec![[0.2; 3]; 4],
+        };
+        let mut s = EditSettings::default_settings();
+        let skipped = apply_auto(&mut s, &tiny, false, true);
+        assert_eq!(
+            skipped,
+            Skipped {
+                wb: false,
+                tone: true
+            }
+        );
+        assert_eq!(skipped.messages().collect::<Vec<_>>(), [NO_TONE]);
+        assert_eq!(s, EditSettings::default_settings());
+        let both = apply_auto(&mut s, &tiny, true, true);
+        assert_eq!(both.messages().collect::<Vec<_>>(), [NO_NEUTRAL, NO_TONE]);
     }
 }
