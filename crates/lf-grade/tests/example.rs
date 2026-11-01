@@ -214,6 +214,11 @@ fn a_mismatched_pair_says_so() {
         "different image: aligned, mean {}",
         f.delta_e_mean
     );
+    assert!(
+        f.residual > 0.03,
+        "different image: residual {}",
+        f.residual
+    );
 
     // Lightroom's export cropped by 20 % (the middle 80 %), at another size.
     let looked = map(&ours, |_, _, c| look(c));
@@ -287,6 +292,11 @@ fn strong_looks_stay_aligned() {
         let theirs = map(&ours, |_, _, c| f(c));
         let fitted = fit(&ours, &theirs, &mut effects(&ours));
         assert!(fitted.aligned, "{name}: said not aligned");
+        assert!(
+            fitted.residual < 0.01,
+            "{name}: residual {}",
+            fitted.residual
+        );
         assert!(
             fitted.delta_e_mean < 1.0,
             "{name}: mean {}",
@@ -370,6 +380,68 @@ fn shrinking_averages_away_fine_detail() {
         .map(|v| (v - 1.0 / 3.0).abs())
         .fold(0f32, f32::max);
     assert!(worst < 1e-4, "fine lines shrunk 6x are not flat: {worst}");
+}
+
+#[test]
+fn shrinking_by_an_uneven_factor_covers_each_source_pixel_once() {
+    // 7 x 5 to 3 x 2: each output pixel covers 7/3 source columns and 5/2 source rows, so
+    // pixels on a footprint's edge count by the share covered.
+    let (w, h) = (7, 5);
+    let flat = Image {
+        w,
+        h,
+        data: [0.3f32, 0.6, 0.9].repeat(w * h),
+    };
+    let out = resize(&flat, 3, 2);
+    assert_eq!((out.w, out.h, out.data.len()), (3, 2, 18));
+    for p in out.data.chunks(3) {
+        assert!(
+            (p[0] - 0.3).abs() < 1e-6 && (p[1] - 0.6).abs() < 1e-6 && (p[2] - 0.9).abs() < 1e-6
+        );
+    }
+
+    // Red rises with the column (0..6), green with the row (0..4).
+    let ramp = Image {
+        w,
+        h,
+        data: (0..w * h)
+            .flat_map(|i| [(i % w) as f32, (i / w) as f32, 1.0])
+            .collect(),
+    };
+    let out = resize(&ramp, 3, 2);
+    // The mean of floor(t) over [from, to): each source pixel's value by the length covered.
+    let covered = |from: f64, to: f64| {
+        let mut sum = 0.0;
+        let mut s = from.floor();
+        while s < to {
+            sum += s * (to.min(s + 1.0) - from.max(s));
+            s += 1.0;
+        }
+        sum / (to - from)
+    };
+    let (sx, sy) = (7.0 / 3.0, 5.0 / 2.0);
+    for y in 0..2 {
+        for x in 0..3 {
+            let p = &out.data[(y * 3 + x) * 3..(y * 3 + x) * 3 + 3];
+            let want_r = covered(x as f64 * sx, (x + 1) as f64 * sx);
+            let want_g = covered(y as f64 * sy, (y + 1) as f64 * sy);
+            assert!(
+                (p[0] as f64 - want_r).abs() < 1e-5,
+                "red at {x}: {} not {want_r}",
+                p[0]
+            );
+            assert!(
+                (p[1] as f64 - want_g).abs() < 1e-5,
+                "green at {y}: {} not {want_g}",
+                p[1]
+            );
+            assert!((p[2] - 1.0).abs() < 1e-6);
+        }
+    }
+    // The edges by hand: the first column covers pixels 0, 1 and a third of 2; the last a
+    // third of 4, then 5 and 6.
+    assert!((out.data[0] - (0.0 + 1.0 + 2.0 / 3.0) / sx as f32).abs() < 1e-5);
+    assert!((out.data[6] - (4.0 / 3.0 + 5.0 + 6.0) / sx as f32).abs() < 1e-5);
 }
 
 #[test]

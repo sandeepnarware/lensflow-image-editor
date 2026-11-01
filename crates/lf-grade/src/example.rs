@@ -26,7 +26,7 @@ pub const TARGET_P95: f64 = 5.0;
 const ALIGN_LEVELS: u32 = 4;
 /// After the fit, a mean absolute luma difference between the fit's prediction and theirs
 /// above this means the pair does not show the same picture framed the same way.
-const MISALIGNED_RESIDUAL: f64 = 0.03;
+pub const MISALIGNED_RESIDUAL: f64 = 0.03;
 /// The share of each edge left out: shifting, resizing and lens differences make it unreliable.
 const BORDER: f64 = 0.05;
 /// Clipping limits. A pixel is left out when its luma is at or beyond these (blown to white or
@@ -98,6 +98,12 @@ pub struct Fit {
     /// differently, judged on what the fit left unexplained (a strong look alone never makes
     /// it false). The numbers are still filled in, but mean little.
     pub aligned: bool,
+    /// What decides `aligned`: the mean absolute difference, over the compared pixels,
+    /// between the luma the fitted table and vignette predict and theirs, both lightly
+    /// blurred (3×3) so grain and noise average out. A pair lines up when it is at most
+    /// [`MISALIGNED_RESIDUAL`]; kept so callers can log it and the threshold can be tuned on
+    /// real examples.
+    pub residual: f64,
 }
 
 /// Learns the table, vignette and grain that turn `ours` into `theirs`.
@@ -174,6 +180,7 @@ pub fn fit(ours: &Image, theirs: &Image, render_effects: &mut dyn FnMut(&Fit) ->
         delta_e_mean: 0.0,
         delta_e_p95: 0.0,
         aligned,
+        residual: 0.0,
     };
 
     // Grain: the extra fine detail theirs has over our result without grain, in flat places,
@@ -200,6 +207,7 @@ pub fn fit(ours: &Image, theirs: &Image, render_effects: &mut dyn FnMut(&Fit) ->
         .map(|i| (near_predicted[i] - near_theirs[i]).abs() as f64)
         .sum::<f64>()
         / mask.iter().filter(|&&m| m).count() as f64;
+    result.residual = residual;
     if residual > MISALIGNED_RESIDUAL {
         result.aligned = false;
     }
