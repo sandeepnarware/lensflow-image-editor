@@ -20,6 +20,7 @@ pub mod grid;
 pub mod import_ui;
 pub mod ingest_ui;
 pub mod keywords_ui;
+pub mod lr_example_ui;
 pub mod lr_import_ui;
 pub mod lut_ui;
 pub mod map;
@@ -141,6 +142,8 @@ pub struct Library {
     remove: Option<crate::dialogs::remove::RemoveDialog>,
     /// "Import Lightroom presets…", while open, importing or showing its summary.
     lr_import: Option<crate::dialogs::lr_import::LrImportDialog>,
+    /// "Match a Lightroom example…", while open, matching or showing its result.
+    lr_example: Option<crate::dialogs::lr_example::LrExampleDialog>,
     /// "Rename…", while open or renaming.
     rename: Option<crate::dialogs::rename::RenameDialog>,
     /// Auto-stack's dialog, while open or running.
@@ -284,6 +287,7 @@ impl Library {
             start_ai_now: false,
             remove: None,
             lr_import: None,
+            lr_example: None,
             auto_stack: None,
             auto_import: auto_import_ui::AutoImport::default(),
             auto_import_dialog: None,
@@ -548,6 +552,9 @@ impl Library {
             merge.stop.store(true, Ordering::SeqCst);
         }
         if let Some(lr) = &self.lr_import {
+            lr.stop.store(true, Ordering::SeqCst);
+        }
+        if let Some(lr) = &self.lr_example {
             lr.stop.store(true, Ordering::SeqCst);
         }
         self.stop_ai();
@@ -1057,6 +1064,10 @@ impl Library {
             },
             Msg::LrPicked { dialog, paths } => self.lr_picked(dialog, paths),
             Msg::LrImported { root, report } => self.lr_imported(root, report, env),
+            Msg::LrExamplePicked { dialog, pick, path } => {
+                self.lr_example_picked(dialog, pick, path)
+            }
+            Msg::LrExampleFitted { dialog, result } => self.lr_example_fitted(dialog, result),
             Msg::PresetsSynced(..) => {
                 // The catalogue's presets may have changed; the session handles the rest.
                 self.develop.presets_stale();
@@ -1077,6 +1088,7 @@ impl Library {
                     "open catalogue" => self.stage = Stage::Failed(plain),
                     "thumbnail pool" => self.reviving = false,
                     lr_import_ui::JOB => self.lr_import_failed(&plain, env),
+                    lr_example_ui::JOB => self.lr_example_failed(&plain),
                     "match" | "match apply" => {
                         if let Some(m) = &mut self.matching {
                             m.job_failed(&plain);
@@ -1532,6 +1544,11 @@ impl Library {
         if self.develop.take_lr_import() && self.can_import_lr() {
             self.open_lr_import();
         }
+        if let Some(preset) = self.develop.take_lr_example()
+            && self.can_match_lr()
+        {
+            self.open_lr_example(preset);
+        }
         self.auto_sync(env);
         self.follow_auto_import(ui.ctx(), env);
         match self.mode {
@@ -1585,6 +1602,7 @@ impl Library {
         self.ai_dialog(ui.ctx(), env);
         self.remove_dialog(ui.ctx(), env);
         self.lr_import_dialog(ui.ctx(), env);
+        self.lr_example_dialog(ui.ctx(), env);
         self.auto_stack_dialog(ui.ctx(), env);
         self.auto_import_dialog(ui.ctx(), env);
         self.geotag_dialog(ui.ctx(), env);
@@ -1618,6 +1636,7 @@ impl Library {
             || self.ai.is_some()
             || self.remove.is_some()
             || self.lr_import.is_some()
+            || self.lr_example.is_some()
     }
 
     /// Whether `action` (a menu item or a key) is possible now in the library or Develop.
@@ -1644,6 +1663,7 @@ impl Library {
             Action::CopySettings => self.copy_source().is_some(),
             Action::PasteSettings | Action::ApplyToSelected | Action::MatchReference => selected,
             Action::ImportLrPresets => self.can_import_lr(),
+            Action::MatchLrExample => self.can_match_lr(),
             Action::AutoSync => true,
             Action::Slideshow => !develop && self.slideshow.is_none() && !self.order.is_empty(),
             Action::RenamePhotos => !develop && selected && self.rename.is_none() && self.can_add(),
@@ -1798,6 +1818,7 @@ impl Library {
             }
             Action::MatchReference => self.open_match(),
             Action::ImportLrPresets => self.open_lr_import(),
+            Action::MatchLrExample => self.open_lr_example(None),
             Action::EditIn => self.edit_in(env),
             Action::Print => self.open_print(),
             Action::MergeHdr => self.open_merge(crate::merge_job::MergeKind::Hdr),

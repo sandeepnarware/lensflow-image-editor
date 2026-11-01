@@ -1,6 +1,8 @@
 //! "Studio presets": this studio's presets (kept in the catalogue and synced with LensFlow).
 //! A click applies one (its groups over the photo's settings); "Save preset…" keeps chosen
-//! parts of the current edit; delete asks first; "Import from Lightroom…" opens the import.
+//! parts of the current edit; delete asks first; "Import from Lightroom…" opens the import;
+//! a preset's context menu (and a link under the list, for a new preset) opens "Match a
+//! Lightroom example…".
 //! Names are drawn through [`shown_name`]: an imported one may hold characters the fonts lack.
 
 use crate::lightroom::import::shown_name;
@@ -11,6 +13,8 @@ use lf_catalog::presets::LocalPresetRow;
 pub const TITLE: &str = "Studio presets";
 pub const SAVE: &str = "Save preset…";
 pub const IMPORT_LR: &str = "Import from Lightroom…";
+pub const MATCH_EXAMPLE: &str = "Match a Lightroom example…";
+pub const NEW_FROM_EXAMPLE: &str = "New preset from a Lightroom example…";
 pub const EMPTY: &str = "Save an edit you like as a preset, and use it on any photo with one tap. \
                          Presets are shared with your team.";
 pub const NO_STUDIO: &str = "Sign in to a studio to use its presets.";
@@ -35,6 +39,8 @@ pub enum PresetAction {
     Save,
     /// Open "Import Lightroom presets…".
     ImportLr,
+    /// Open "Match a Lightroom example…" for the preset at this index, or for a new preset.
+    MatchExample(Option<usize>),
     /// Ask to delete the preset at this index.
     Delete(usize),
 }
@@ -74,6 +80,12 @@ pub fn show(
             if r.clicked() {
                 action = Some(PresetAction::Apply(i));
             }
+            r.context_menu(|ui| {
+                if ui.button(MATCH_EXAMPLE).clicked() {
+                    action = Some(PresetAction::MatchExample(Some(i)));
+                    ui.close();
+                }
+            });
             if small_named(ui, DELETE, &delete_label(&row.name)).clicked() {
                 action = Some(PresetAction::Delete(i));
             }
@@ -81,6 +93,9 @@ pub fn show(
     }
     if ui.link(IMPORT_LR).clicked() {
         action = Some(PresetAction::ImportLr);
+    }
+    if ui.link(NEW_FROM_EXAMPLE).clicked() {
+        action = Some(PresetAction::MatchExample(None));
     }
     action
 }
@@ -90,6 +105,42 @@ mod tests {
     use super::*;
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable as _;
+
+    #[test]
+    fn a_presets_menu_and_the_link_open_match_a_lightroom_example() {
+        let rows = vec![LocalPresetRow {
+            id: 1,
+            studio_id: 7,
+            name: "Moody".to_owned(),
+            settings: serde_json::json!({"v": 2}),
+            updated_at: "2026-11-01T00:00:00Z".to_owned(),
+            remote_id: None,
+            synced_at: None,
+            deleted_at: None,
+        }];
+        let mut h = Harness::builder().with_size([400.0, 300.0]).build_ui_state(
+            |ui, (rows, actions): &mut (Vec<LocalPresetRow>, Vec<PresetAction>)| {
+                if let Some(a) = show(ui, rows, &mut None) {
+                    actions.push(a);
+                }
+            },
+            (rows, Vec::new()),
+        );
+        h.step();
+        h.get_by_label("Moody").click_secondary();
+        h.run_steps(3);
+        h.get_by_label(MATCH_EXAMPLE).click();
+        h.run_steps(2);
+        h.get_by_label(NEW_FROM_EXAMPLE).click();
+        h.run_steps(2);
+        assert_eq!(
+            h.state().1,
+            [
+                PresetAction::MatchExample(Some(0)),
+                PresetAction::MatchExample(None)
+            ]
+        );
+    }
 
     #[test]
     fn a_name_the_fonts_lack_is_drawn_with_question_marks_but_read_out_whole() {

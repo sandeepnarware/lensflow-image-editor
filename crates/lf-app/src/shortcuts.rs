@@ -136,6 +136,8 @@ pub enum Action {
     MatchReference,
     /// Lightroom or Camera Raw presets made into studio presets.
     ImportLrPresets,
+    /// A preset learned from a photo and Lightroom's export of it.
+    MatchLrExample,
     /// Render the photo to a TIFF beside it and open it in the studio's external editor.
     EditIn,
     /// Blend an exposure bracket (the selected photos) into one photo.
@@ -254,6 +256,7 @@ impl Action {
             Action::RemoveFromAlbum => "Remove from album",
             Action::MatchReference => "Match a reference…",
             Action::ImportLrPresets => "Import Lightroom presets…",
+            Action::MatchLrExample => "Match a Lightroom example…",
             Action::EditIn => "Edit in external editor…",
             Action::MergeHdr => "Merge to HDR…",
             Action::MergePanorama => "Merge to panorama…",

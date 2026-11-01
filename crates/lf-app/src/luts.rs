@@ -119,6 +119,39 @@ pub fn ensure_embedded(root: &Path, preset: &serde_json::Value) -> Result<Option
     Ok(Some(name))
 }
 
+/// Writes the colour table `preset` carries to the catalogue's LUT folder when its file is
+/// missing, *whether or not it is registered*, and registers it. For a preset just made by
+/// "Match a Lightroom example…": the fit registered its table to render it before any file
+/// existed, and [`ensure_embedded`] trusts a registered table to have its file (it answers
+/// hovers from the registry alone). A preset without a table does nothing.
+pub fn write_embedded(root: &Path, preset: &serde_json::Value) -> Result<(), String> {
+    let Some(desktop_lut) = preset
+        .pointer("/desktop/lut")
+        .filter(|l| l.get("table").is_some())
+    else {
+        return Ok(());
+    };
+    let (Some(hash), Some(mut lut)) = (
+        lf_settings::lut::well_formed_hash(desktop_lut),
+        lf_settings::lut::decode_table(desktop_lut),
+    ) else {
+        return Err(CORRUPT_TABLE.to_owned());
+    };
+    let name = lf_settings::lut::embedded_name(hash);
+    if !folder(root).join(format!("{name}.cube")).exists() {
+        lut.title = Some(name.clone());
+        write_cube(root, &name, lut.to_cube().as_bytes())?;
+    }
+    failures().remove(&(root.to_path_buf(), name.clone()));
+    lf_pipeline::lut::register(&name, lut);
+    Ok(())
+}
+
+/// The registry is process-wide and [`load_all`] clears it, so tests that register or read
+/// tables take turns through this.
+#[cfg(test)]
+pub(crate) static REGISTRY_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 type Failures = std::collections::HashMap<(PathBuf, String), String>;
 
 /// Tables that could not be made available, so a hover does not retry every frame. Cleared
@@ -147,8 +180,7 @@ pub const CORRUPT_TABLE: &str =
 mod tests {
     use super::*;
 
-    /// The registry is process-wide and `load_all` clears it, so these tests take turns.
-    static REGISTRY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use super::REGISTRY_TURN as REGISTRY;
 
     fn cube(size: usize) -> String {
         let mut text = format!("LUT_3D_SIZE {size}\n");
@@ -240,5 +272,31 @@ mod tests {
         std::fs::remove_file(folder(blocked.path())).unwrap();
         assert_eq!(ensure_embedded(blocked.path(), &other).unwrap_err(), first);
         assert!(!folder(blocked.path()).exists());
+    }
+
+    #[test]
+    fn a_registered_table_without_its_file_gets_one() {
+        let _turn = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tempfile::tempdir().unwrap();
+        let mut lut = Lut::identity(3);
+        lut.data[4] = [0.5, 0.5, 0.25];
+        let encoded = lf_settings::lut::encode_table(&lut);
+        let name =
+            lf_settings::lut::embedded_name(lf_settings::lut::well_formed_hash(&encoded).unwrap());
+        // As the example fit leaves it: registered, no file.
+        lf_pipeline::lut::register(&name, lut);
+        let preset = serde_json::json!({"desktop": {"lut": encoded}});
+        let file = folder(root.path()).join(format!("{name}.cube"));
+        assert_eq!(
+            ensure_embedded(root.path(), &preset),
+            Ok(Some(name.clone()))
+        );
+        assert!(!file.exists(), "ensure_embedded trusts the registry");
+        write_embedded(root.path(), &preset).unwrap();
+        assert!(file.exists());
+        assert_eq!(
+            write_embedded(root.path(), &serde_json::json!({"v": 2})),
+            Ok(())
+        );
     }
 }

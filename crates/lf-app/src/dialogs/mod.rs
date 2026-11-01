@@ -15,6 +15,7 @@ pub mod geotag;
 pub mod group_picker;
 pub mod ingest;
 pub mod keys;
+pub mod lr_example;
 pub mod lr_import;
 pub mod match_reference;
 pub mod merge;

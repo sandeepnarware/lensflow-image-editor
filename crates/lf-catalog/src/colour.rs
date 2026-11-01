@@ -156,6 +156,31 @@ pub fn convert16(pixels: &mut [u16], space: &OutputSpace) -> Result<Vec<u8>, Col
     Ok(icc)
 }
 
+/// 16-bit RGB `pixels` in the colour space of the ICC profile `icc` (embedded in a file the
+/// app reads, such as Lightroom's export for "Match a Lightroom example…") converted to sRGB,
+/// where the develop pipeline's colours live. Relative colorimetric, so colours inside sRGB
+/// keep their values (a measurement wants them unchanged, not perceptually squeezed), and
+/// unoptimised: Little CMS's precalculated table is off by about 1 % in the darks and at the
+/// edges of the gamut, too much for a fit judged on small differences.
+pub fn to_srgb16(icc: &[u8], pixels: &mut [u16]) -> Result<(), ColourError> {
+    let source = Profile::new_icc(icc)
+        .map_err(|_| ColourError::Unreadable("embedded in the file".to_owned()))?;
+    if source.color_space() != lcms2::ColorSpaceSignature::RgbData {
+        return Err(ColourError::NotRgb("embedded in the file".to_owned()));
+    }
+    let t: Transform<[u16; 3], [u16; 3]> = Transform::new_flags(
+        &source,
+        PixelFormat::RGB_16,
+        &Profile::new_srgb(),
+        PixelFormat::RGB_16,
+        Intent::RelativeColorimetric,
+        Flags::NO_OPTIMIZE,
+    )
+    .map_err(|e| ColourError::Transform(e.to_string()))?;
+    t.transform_in_place(pixels.as_chunks_mut::<3>().0);
+    Ok(())
+}
+
 /// The grid size of a soft-proof LUT.
 pub const PROOF_SIZE: usize = 33;
 
@@ -234,6 +259,30 @@ mod tests {
         convert16(&mut wide, &OutputSpace::AdobeRgb).unwrap();
         // sRGB green sits inside Adobe RGB's wider green: some red and blue join it.
         assert!(wide[0] > 10_000 && wide[2] > 1_000, "{wide:?}");
+    }
+
+    #[test]
+    fn pixels_in_an_embedded_profile_come_back_to_srgb() {
+        // sRGB colours written in Adobe RGB, with its profile, and read back.
+        let original = vec![65535u16, 0, 0, 32768, 32768, 32768, 10000, 40000, 20000];
+        let mut adobe = original.clone();
+        let icc = convert16(&mut adobe, &OutputSpace::AdobeRgb).unwrap();
+        assert_ne!(adobe, original);
+        to_srgb16(&icc, &mut adobe).unwrap();
+        for (a, b) in adobe.iter().zip(&original) {
+            assert!(a.abs_diff(*b) < 200, "{adobe:?} vs {original:?}");
+        }
+        // An sRGB profile changes nothing that shows.
+        let mut same = original.clone();
+        to_srgb16(&Profile::new_srgb().icc().unwrap(), &mut same).unwrap();
+        for (a, b) in same.iter().zip(&original) {
+            assert!(a.abs_diff(*b) < 64, "{same:?}");
+        }
+        // Bytes that are no profile are refused.
+        assert!(matches!(
+            to_srgb16(b"not a profile", &mut same),
+            Err(ColourError::Unreadable(_))
+        ));
     }
 
     #[test]

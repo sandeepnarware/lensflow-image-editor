@@ -30,6 +30,9 @@ pub struct PresetsUi {
     changed: bool,
     /// "Import from Lightroom…" was clicked (the library takes the request).
     lr_import_asked: bool,
+    /// "Match a Lightroom example…" was asked for: the preset (its name and settings), or
+    /// none for a new preset (the library takes the request).
+    lr_example_asked: Option<Option<(String, serde_json::Value)>>,
 }
 
 /// The look or preset applied last, while its Amount can still change.
@@ -113,6 +116,27 @@ impl Develop {
     /// "Import from Lightroom…" was clicked since the last call.
     pub fn take_lr_import(&mut self) -> bool {
         std::mem::take(&mut self.extras.presets.lr_import_asked)
+    }
+
+    /// "Match a Lightroom example…" was asked for since the last call: for the preset given
+    /// (its name and settings), or for a new preset.
+    pub fn take_lr_example(&mut self) -> Option<Option<(String, serde_json::Value)>> {
+        self.extras.presets.lr_example_asked.take()
+    }
+
+    /// Saves `preset` as the studio's preset `name`, replacing one of that name (the matched
+    /// preset, after "Match a Lightroom example…"), and asks for a sync.
+    pub fn replace_preset(
+        &mut self,
+        studio: i64,
+        name: &str,
+        preset: &serde_json::Value,
+    ) -> Result<(), String> {
+        self.session
+            .patient(|c| local::save(c, studio, name, preset).map_err(|e| e.to_string()))?;
+        self.extras.presets.stale = true;
+        self.extras.presets.changed = true;
+        Ok(())
     }
 
     /// The studio's presets, read again when stale.
@@ -413,6 +437,12 @@ impl Develop {
                 self.extras.presets.deleting = rows.get(i).cloned();
             }
             Some(presets::PresetAction::ImportLr) => self.extras.presets.lr_import_asked = true,
+            Some(presets::PresetAction::MatchExample(i)) => {
+                let preset = i
+                    .and_then(|i| rows.get(i))
+                    .map(|r| (r.name.clone(), r.settings.clone()));
+                self.extras.presets.lr_example_asked = Some(preset);
+            }
             None => {}
         }
     }

@@ -200,6 +200,17 @@ pub enum Msg {
         root: PathBuf,
         report: crate::lightroom::import::ImportReport,
     },
+    /// "Match a Lightroom example…"'s picker for the dialog `dialog` answered (none: cancelled).
+    LrExamplePicked {
+        dialog: u64,
+        pick: crate::dialogs::lr_example::Pick,
+        path: Option<PathBuf>,
+    },
+    /// "Match a Lightroom example…" for the dialog `dialog` ended: the match, or why not.
+    LrExampleFitted {
+        dialog: u64,
+        result: Result<Box<crate::dialogs::lr_example::Matched>, String>,
+    },
     /// "Rename…" renamed photos (`root`: the catalogue): how many, or why none.
     Renamed {
         root: PathBuf,
@@ -879,6 +890,8 @@ pub(crate) mod owners {
             | Msg::DcpImported(..)
             | Msg::LrPicked { .. }
             | Msg::LrImported { .. }
+            | Msg::LrExamplePicked { .. }
+            | Msg::LrExampleFitted { .. }
             | Msg::Synced { .. }
             | Msg::PeopleSelected { .. }
             | Msg::WiresSelected { .. }
@@ -1026,6 +1039,15 @@ pub(crate) mod owners {
             Msg::LrImported {
                 root: dir.join("elsewhere"),
                 report: Default::default(),
+            },
+            Msg::LrExamplePicked {
+                dialog: 0,
+                pick: crate::dialogs::lr_example::Pick::Export,
+                path: None,
+            },
+            Msg::LrExampleFitted {
+                dialog: 0,
+                result: Err("no".into()),
             },
             Msg::Synced {
                 root: dir.to_path_buf(),

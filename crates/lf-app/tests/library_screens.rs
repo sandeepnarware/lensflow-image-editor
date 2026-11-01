@@ -3601,3 +3601,152 @@ fn an_import_answer_for_another_catalogue_does_not_leave_the_dialog_waiting() {
         Some(Stage::Done(_))
     ));
 }
+
+/// A colourful 8-bit picture (tiles across the colour cube in a grey frame), and Lightroom's
+/// "export" of it: the same with an S-curve, red lifted and blue lowered.
+fn example_pair(dir: &Path) -> (PathBuf, PathBuf) {
+    let (w, h) = (256u32, 192u32);
+    let level = |i: u32, n: u32| (3.0 + 249.0 * i as f32 / (n - 1) as f32) as u8;
+    let original = image::RgbImage::from_fn(w, h, |x, y| {
+        if !(16..w - 16).contains(&x) || !(16..h - 16).contains(&y) {
+            return image::Rgb([128; 3]);
+        }
+        let (lx, ly) = (x - 16, y - 16);
+        let (tw, th) = ((w - 32) / 4, (h - 32) / 4);
+        let tile = (ly / th) * 4 + lx / tw;
+        image::Rgb([level(lx % tw, tw), level(ly % th, th), level(tile, 16)])
+    });
+    let s = |v: u8| {
+        let x = f32::from(v) / 255.0;
+        x - 0.08 * (2.0 * std::f32::consts::PI * x).sin()
+    };
+    let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let mut export = original.clone();
+    for p in export.pixels_mut() {
+        let [r, g, b] = p.0;
+        p.0 = [to8(0.02 + 0.96 * s(r)), to8(s(g)), to8(0.92 * s(b))];
+    }
+    let (a, b) = (dir.join("example.png"), dir.join("Moody export.png"));
+    original.save(&a).unwrap();
+    export.save(&b).unwrap();
+    (a, b)
+}
+
+#[test]
+fn a_lightroom_example_is_matched_with_the_pipeline_and_saved_as_presets() {
+    use lf_app::develop::panels::presets;
+    use lf_app::dialogs::lr_example::{self, Pick, Stage};
+    use lf_app::lightroom::example_job::Verdict;
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    // No studio: nowhere to save, as "Save preset…".
+    assert!(!run_action(&mut h, Action::MatchLrExample));
+    h.state_mut().lib.set_studio(Some(7));
+    assert!(run_action(&mut h, Action::MatchLrExample));
+    h.step();
+    h.step();
+    assert!(h.query_by_label(lr_example::TITLE).is_some());
+    let (original, export) = example_pair(dir.path());
+    let id = h.state().lib.lr_example().unwrap().id;
+    // An earlier dialog's answer is dropped; a cancelled picker changes nothing.
+    h.state_mut().handle(Msg::LrExamplePicked {
+        dialog: id + 1000,
+        pick: Pick::Export,
+        path: Some(dir.path().join("elsewhere.jpg")),
+    });
+    h.state_mut().handle(Msg::LrExamplePicked {
+        dialog: id,
+        pick: Pick::Original,
+        path: None,
+    });
+    assert_eq!(h.state().lib.lr_example().unwrap().export, None);
+    for (pick, path) in [(Pick::Original, &original), (Pick::Export, &export)] {
+        h.state_mut().handle(Msg::LrExamplePicked {
+            dialog: id,
+            pick,
+            path: Some(path.clone()),
+        });
+    }
+    h.step();
+    h.get_by_role_and_label(Role::Button, lr_example::MATCH)
+        .click();
+    // The real job: our pipeline renders the photo with each candidate table.
+    step_until(&mut h, "the match", |s| {
+        matches!(s.lib.lr_example().map(|d| &d.stage), Some(Stage::Done(_)))
+    });
+    let Some(Stage::Done(matched)) = h.state().lib.lr_example().map(|d| d.stage.clone()) else {
+        unreachable!()
+    };
+    assert!(matched.fit.aligned, "{:?}", matched.fit);
+    assert!(matched.fit.delta_e_mean < 5.0, "{:?}", matched.fit);
+    assert_ne!(Verdict::of(&matched.fit), Verdict::NotAGoodMatch);
+    assert!(h.query_by_label(Verdict::of(&matched.fit).text()).is_some());
+    assert!(
+        h.query_by_role_and_label(Role::Button, lr_example::SAVE)
+            .is_none(),
+        "a new preset has nothing to replace"
+    );
+    h.get_by_role_and_label(Role::Button, lr_example::SAVE_AS_NEW)
+        .click();
+    h.step();
+    assert!(h.state().lib.lr_example().is_none(), "saved and closed");
+    let root = dir.path().join("catalogue");
+    let catalog = lf_catalog::Catalog::open(&root).unwrap();
+    let row = lf_catalog::presets::find(&catalog, 7, "Moody export (matched)")
+        .unwrap()
+        .expect("the new preset");
+    let hash = lf_settings::lut::well_formed_hash(&row.settings["desktop"]["lut"])
+        .unwrap()
+        .to_owned();
+    assert!(lf_settings::lightroom::is_lightroom(&row.settings));
+    assert!(
+        root.join(".lensflow/luts")
+            .join(format!("{}.cube", lf_settings::lut::embedded_name(&hash)))
+            .exists(),
+        "the table's file is written on save"
+    );
+    assert!(
+        h.state_mut().lib.take_presets_changed(),
+        "a sync is asked for"
+    );
+
+    // From the preset's own menu in Develop: matched again, then saved over it.
+    develop_one(&mut h, dir.path());
+    h.get_by_label(presets::TITLE).click();
+    h.run_steps(20);
+    h.get_by_label("Moody export (matched)").click_secondary();
+    h.run_steps(3);
+    h.get_by_label(presets::MATCH_EXAMPLE).click();
+    h.step();
+    h.step();
+    let dialog = h.state().lib.lr_example().expect("the dialog");
+    assert_eq!(
+        dialog.preset.as_ref().map(|(n, _)| n.as_str()),
+        Some("Moody export (matched)")
+    );
+    assert!(dialog.original.is_some(), "the open photo is the original");
+    let id = dialog.id;
+    h.state_mut().handle(Msg::LrExamplePicked {
+        dialog: id,
+        pick: Pick::Export,
+        path: Some(export.clone()),
+    });
+    h.step();
+    h.get_by_role_and_label(Role::Button, lr_example::MATCH)
+        .click();
+    step_until(&mut h, "the second match", |s| {
+        matches!(s.lib.lr_example().map(|d| &d.stage), Some(Stage::Done(_)))
+    });
+    h.get_by_role_and_label(Role::Button, lr_example::SAVE)
+        .click();
+    h.step();
+    assert!(h.state().lib.lr_example().is_none());
+    let names: Vec<String> = lf_catalog::presets::list(&catalog, 7)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    assert_eq!(names, ["Moody export (matched)"], "replaced, not added");
+}
