@@ -19,6 +19,7 @@ pub mod grade_cli;
 pub mod jobs;
 pub mod lens_profiles;
 pub mod library;
+pub mod lightroom;
 pub mod logging;
 pub mod luts;
 pub mod menu;

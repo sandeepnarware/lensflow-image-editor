@@ -40,6 +40,8 @@ serde_json.workspace = true
 image = { workspace = true, features = ["jpeg", "tiff"] }
 # Sidecar timestamps (`updated_at`), so a grade written beside a photo wins over an older one.
 chrono.workspace = true
+# Preset packs (.zip) are read in memory, never extracted.
+zip.workspace = true
 
 [dev-dependencies]
 egui_kittest = "0.37"
