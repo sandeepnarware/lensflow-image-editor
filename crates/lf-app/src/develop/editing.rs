@@ -159,6 +159,11 @@ impl EditSession {
         }
     }
 
+    /// The catalogue root the session edits in, once one is set.
+    pub fn root(&self) -> Option<&Path> {
+        self.catalog_root.as_deref()
+    }
+
     /// A photo opened with `settings`: a fresh edit state, with what undo and redo can do.
     pub fn start(&mut self, photo_id: i64, settings: lf_settings::EditSettings) {
         let mut edit = EditState::new(photo_id, settings);

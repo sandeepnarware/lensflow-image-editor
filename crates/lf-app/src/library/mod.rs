@@ -2581,6 +2581,12 @@ impl Library {
                     return;
                 };
                 dialog.started();
+                // A table a preset carries is put in the catalogue once, before the photos.
+                if let clipboard::Recipe::Look(look) = &recipe
+                    && let Err(text) = crate::luts::ensure_embedded(&root, look)
+                {
+                    env.toasts.push(crate::toast::Level::Warning, text);
+                }
                 batch::spawn(
                     env.jobs,
                     root,

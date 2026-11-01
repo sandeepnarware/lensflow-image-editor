@@ -9,6 +9,7 @@
 
 pub mod adaptive;
 pub mod amount;
+mod b64;
 pub mod calibration;
 pub mod curve;
 pub mod defringe;

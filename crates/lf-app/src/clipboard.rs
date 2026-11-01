@@ -45,7 +45,12 @@ impl Recipe {
     pub fn apply(&self, onto: &EditSettings) -> EditSettings {
         match self {
             Recipe::Paste(partial) => apply(onto, partial),
-            Recipe::Look(look) => apply_look(onto, &clipboard_settings(look)),
+            // A table the preset carries becomes its name here, so the photo never stores it
+            // (`luts::ensure_embedded` has put the file in the catalogue before this runs).
+            Recipe::Look(look) => apply_look(
+                onto,
+                &clipboard_settings(&lf_settings::lut::name_embedded(look)),
+            ),
             Recipe::Sync(patch) => crate::sync::apply(onto, patch),
             Recipe::Nudge(key, delta) => crate::library::quick_develop::nudge(onto, key, *delta),
             Recipe::Turn(dir) => {
@@ -337,5 +342,21 @@ mod tests {
                 assert_eq!(sc.settings.exposure, 0.8);
             }
         }
+    }
+
+    #[test]
+    fn applying_a_preset_with_a_table_stores_only_its_name() {
+        let lut = lf_settings::lut::encode_table(&lf_settings::lut::Lut::identity(5));
+        let hash = lut["hash"].as_str().unwrap().to_owned();
+        let mut preset = json!({"v": 2, "desktop": {"lut": lut}});
+        preset["desktop"]["lut"]["amount"] = json!(70);
+        let onto = EditSettings::default_settings();
+        let next = Recipe::Look(preset).apply(&onto);
+        let stored = next.desktop.as_ref().unwrap().get("lut").unwrap();
+        assert_eq!(*stored, json!({"name": format!("lr-{hash}"), "amount": 70}));
+        let choice = lf_settings::lut::LutChoice::from_settings(&next).unwrap();
+        assert_eq!(choice.name, format!("lr-{hash}"));
+        assert_eq!(choice.amount, 70.0);
+        assert!(serde_json::to_string(&next.to_value()).unwrap().len() < 5_000);
     }
 }

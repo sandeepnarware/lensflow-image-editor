@@ -58,24 +58,68 @@ pub fn import(root: &Path, file: &Path) -> Result<String, String> {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "LUT".to_owned());
     let name = lf_catalog::export::safe_stem(stem.trim());
+    write_cube(root, &name, text.as_bytes())?;
+    lf_pipeline::lut::register(&name, lut);
+    Ok(name)
+}
+
+/// Writes `<root>/.lensflow/luts/<name>.cube` atomically (a temporary file, then a rename).
+fn write_cube(root: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
     let dir = folder(root);
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("The LUT folder could not be made ({e})."))?;
     let to = dir.join(format!("{name}.cube"));
     let tmp = dir.join(format!(".{name}.cube.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, text.as_bytes())
+    std::fs::write(&tmp, bytes)
         .and_then(|()| std::fs::rename(&tmp, &to))
         .map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
             format!("The LUT could not be saved ({e}).")
-        })?;
-    lf_pipeline::lut::register(&name, lut);
-    Ok(name)
+        })
 }
+
+/// Makes the colour table a preset carries (`desktop.lut.table`) available in this catalogue:
+/// writes `lr-<hash>.cube` if it is not there yet, registers it, and returns its name (none
+/// for a preset with no table). Called before a preset is applied, so the photo's stored
+/// name ([`lf_settings::lut::name_embedded`]) renders. An error is ready to show; the preset
+/// can still be applied (the photo renders without the table until it is fixed).
+pub fn ensure_embedded(root: &Path, preset: &serde_json::Value) -> Result<Option<String>, String> {
+    let Some(desktop_lut) = preset.get("desktop").and_then(|d| d.get("lut")) else {
+        return Ok(None);
+    };
+    if desktop_lut.get("table").is_none() {
+        return Ok(None);
+    }
+    let Some(mut lut) = lf_settings::lut::decode_table(desktop_lut) else {
+        return Err(CORRUPT_TABLE.to_owned());
+    };
+    let name = lf_settings::lut::embedded_name(
+        desktop_lut
+            .get("hash")
+            .and_then(|h| h.as_str())
+            .unwrap_or_default(),
+    );
+    let path = folder(root).join(format!("{name}.cube"));
+    if !path.exists() {
+        lut.title = Some(name.clone());
+        write_cube(root, &name, lut.to_cube().as_bytes())?;
+    }
+    if lf_pipeline::lut::get(&name).is_none() {
+        lf_pipeline::lut::register(&name, lut);
+    }
+    Ok(Some(name))
+}
+
+/// The toast when a preset's colour table cannot be read.
+pub const CORRUPT_TABLE: &str =
+    "This preset's colour table is damaged, so it is applied without it.";
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The registry is process-wide and `load_all` clears it, so these tests take turns.
+    static REGISTRY: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn cube(size: usize) -> String {
         let mut text = format!("LUT_3D_SIZE {size}\n");
@@ -87,6 +131,7 @@ mod tests {
 
     #[test]
     fn an_imported_lut_is_kept_and_loaded_again_with_the_catalogue() {
+        let _turn = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
         let root = tempfile::tempdir().unwrap();
         let src = tempfile::tempdir().unwrap();
         let file = src.path().join("Film Warm.cube");
@@ -104,5 +149,42 @@ mod tests {
         std::fs::write(folder(root.path()).join("broken.cube"), "nonsense").unwrap();
         assert_eq!(load_all(root.path()), 1);
         assert!(lf_pipeline::lut::get("Film Warm").is_some());
+    }
+
+    #[test]
+    fn ensure_embedded_writes_once_and_registers() {
+        let _turn = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tempfile::tempdir().unwrap();
+        let mut lut = Lut::identity(5);
+        lut.data[7] = [0.5, 0.25, 0.125];
+        let preset = serde_json::json!({"desktop": {"lut": lf_settings::lut::encode_table(&lut)}});
+        let name = ensure_embedded(root.path(), &preset).unwrap().unwrap();
+        assert!(name.starts_with("lr-"));
+        let file = folder(root.path()).join(format!("{name}.cube"));
+        assert!(file.exists());
+        assert!(lf_pipeline::lut::get(&name).is_some());
+        let back = Lut::parse_cube(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(back.size, 5);
+
+        // A second call leaves the file alone.
+        std::fs::write(&file, "marker").unwrap();
+        assert_eq!(
+            ensure_embedded(root.path(), &preset).unwrap().unwrap(),
+            name
+        );
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "marker");
+
+        assert_eq!(
+            ensure_embedded(root.path(), &serde_json::json!({"v": 2})),
+            Ok(None)
+        );
+        let plain = serde_json::json!({"desktop": {"lut": {"name": "Film"}}});
+        assert_eq!(ensure_embedded(root.path(), &plain), Ok(None));
+        let mut bad = preset.clone();
+        bad["desktop"]["lut"]["table"] = "AAAA".into();
+        assert_eq!(
+            ensure_embedded(root.path(), &bad),
+            Err(CORRUPT_TABLE.to_owned())
+        );
     }
 }

@@ -73,12 +73,12 @@ pub fn encode_coverage(values: &[u8]) -> String {
         runs.push(v);
         i += n;
     }
-    base64_encode(&runs)
+    crate::b64::base64_encode(&runs)
 }
 
 /// The coverage an AI mask's `data` holds, if it reads as exactly `len` values.
 pub fn decode_coverage(data: &str, len: usize) -> Option<Vec<u8>> {
-    let runs = base64_decode(data)?;
+    let runs = crate::b64::base64_decode(data)?;
     if runs.len() % 2 != 0 {
         return None;
     }
@@ -90,45 +90,6 @@ pub fn decode_coverage(data: &str, len: usize) -> Option<Vec<u8>> {
         out.extend(std::iter::repeat_n(pair[1], pair[0] as usize));
     }
     (out.len() == len).then_some(out)
-}
-
-const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-fn base64_encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        for k in 0..4 {
-            if k <= chunk.len() {
-                out.push(B64[((n >> (18 - 6 * k)) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
-
-fn base64_decode(text: &str) -> Option<Vec<u8>> {
-    let text = text.trim_end_matches('=');
-    let mut out = Vec::with_capacity(text.len() * 3 / 4);
-    let mut acc = 0u32;
-    let mut bits = 0;
-    for c in text.bytes() {
-        let v = B64.iter().position(|&b| b == c)? as u32;
-        acc = (acc << 6) | v;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-        }
-    }
-    Some(out)
 }
 
 /// An AI mask's coverage at photo fraction `(u, v)`, bilinear, 0..1.

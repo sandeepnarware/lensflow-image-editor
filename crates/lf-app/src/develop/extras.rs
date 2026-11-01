@@ -359,12 +359,23 @@ impl Develop {
             && let (Some(row), Some(edit)) =
                 (hovered.and_then(|i| rows.get(i)), self.session.edit())
         {
+            // The preview renders with the preset's table too; a failure shows when applied.
+            if let Some(root) = self.session.root() {
+                let _ = crate::luts::ensure_embedded(root, &row.settings);
+            }
             self.hover_settings =
                 Some(crate::clipboard::Recipe::Look(row.settings.clone()).apply(&edit.settings));
         }
         match action {
             Some(presets::PresetAction::Apply(i)) => {
                 if let (Some(row), Some(edit)) = (rows.get(i), self.session.edit()) {
+                    // A table the preset carries goes into this catalogue first; if it cannot
+                    // be written the preset still applies, without the table.
+                    if let Some(root) = self.session.root()
+                        && let Err(text) = crate::luts::ensure_embedded(root, &row.settings)
+                    {
+                        toasts.push(Level::Warning, text);
+                    }
                     // As the web: a preset is applied as a look (its geometry and spots never).
                     let mut next =
                         crate::clipboard::Recipe::Look(row.settings.clone()).apply(&edit.settings);

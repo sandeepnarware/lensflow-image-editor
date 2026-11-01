@@ -3,6 +3,8 @@
 //! ([`LutChoice`], read and written as [`crate::lens`] is), never the table itself, which
 //! lives in the catalogue's LUT folder and is loaded by name. A photo whose LUT is not
 //! loaded (another machine, a deleted file) renders as if it had none.
+//! A *preset* may carry its table inside itself ([`encode_table`]); applying it stores only the
+//! table's name ([`name_embedded`]), and the app writes the file ([`embedded_name`]).
 //!
 //! The develop pass applies the LUT to the finished colour (display-referred sRGB, 0..1,
 //! what LUT packs expect), before the effects (vignette, grain), mixed by the amount.
@@ -166,6 +168,30 @@ impl Lut {
         Ok(Lut { size, data, title })
     }
 
+    /// The table as `.cube` text (red fastest, as [`Lut::parse_cube`] reads it).
+    pub fn to_cube(&self) -> String {
+        let mut text = String::with_capacity(self.data.len() * 24 + 64);
+        if let Some(t) = &self.title {
+            text.push_str(&format!(
+                "TITLE \"{t}\"
+"
+            ));
+        }
+        text.push_str(&format!(
+            "LUT_3D_SIZE {}
+",
+            self.size
+        ));
+        for p in &self.data {
+            text.push_str(&format!(
+                "{:.6} {:.6} {:.6}
+",
+                p[0], p[1], p[2]
+            ));
+        }
+        text
+    }
+
     /// The identity table of `size` (each grid point maps to itself).
     pub fn identity(size: usize) -> Lut {
         let step = |i: usize| i as f32 / (size - 1) as f32;
@@ -210,6 +236,104 @@ impl Lut {
         }
         out
     }
+}
+
+/// The name a photo stores for an embedded table: its content hash, so the same table is the
+/// same file in every catalogue.
+pub fn embedded_name(hash: &str) -> String {
+    format!("lr-{hash}")
+}
+
+/// Fixed-point scale of an embedded table's 16-bit values.
+const Q: f32 = 65535.0;
+
+fn quantise(lut: &Lut) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(lut.data.len() * 6);
+    for p in &lut.data {
+        for c in p {
+            let q = (c.clamp(0.0, 1.0) * Q).round() as u16;
+            bytes.extend_from_slice(&q.to_le_bytes());
+        }
+    }
+    bytes
+}
+
+fn hash_of(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// A table as it travels inside a preset (`desktop.lut`): `{size, table, hash}`, the table
+/// as base64 of 16-bit little-endian RGB values (a 17 size table is about 39 KB), the hash
+/// the first 16 hex characters of the SHA-256 of those bytes.
+pub fn encode_table(lut: &Lut) -> serde_json::Value {
+    let bytes = quantise(lut);
+    serde_json::json!({
+        "size": lut.size,
+        "hash": hash_of(&bytes),
+        "table": crate::b64::base64_encode(&bytes),
+    })
+}
+
+/// Reads [`encode_table`]'s value; none when anything is missing, the size is out of range,
+/// the length is wrong or the hash does not match the bytes.
+pub fn decode_table(v: &serde_json::Value) -> Option<Lut> {
+    let size = usize::try_from(v.get("size")?.as_u64()?).ok()?;
+    if !(2..=MAX_SIZE).contains(&size) {
+        return None;
+    }
+    let bytes = crate::b64::base64_decode(v.get("table")?.as_str()?)?;
+    if bytes.len() != size * size * size * 6 || hash_of(&bytes) != v.get("hash")?.as_str()? {
+        return None;
+    }
+    let value = |i: usize| f32::from(u16::from_le_bytes([bytes[i * 2], bytes[i * 2 + 1]])) / Q;
+    let data = (0..size * size * size)
+        .map(|n| [value(n * 3), value(n * 3 + 1), value(n * 3 + 2)])
+        .collect();
+    Some(Lut {
+        size,
+        data,
+        title: None,
+    })
+}
+
+/// The table a preset carries in `desktop.lut`, if it carries a readable one.
+pub fn embedded_in(preset: &serde_json::Value) -> Option<Lut> {
+    decode_table(preset.get("desktop")?.get("lut")?)
+}
+
+/// `preset` with an embedded table in `desktop.lut` replaced by the usual
+/// `{name, amount}` choice naming it ([`embedded_name`]), so a photo never stores the table.
+/// A preset without a table, or with a corrupt one (its `lut` is dropped: there is nothing to
+/// name), is returned as it is. Pure: [`crate::lut`]'s file is written by the app.
+pub fn name_embedded(preset: &serde_json::Value) -> serde_json::Value {
+    let mut out = preset.clone();
+    let Some(lut) = out.pointer_mut("/desktop/lut") else {
+        return out;
+    };
+    if lut.get("table").is_none() {
+        return out;
+    }
+    match lut
+        .get("hash")
+        .and_then(|h| h.as_str())
+        .filter(|_| decode_table(lut).is_some())
+    {
+        Some(hash) => {
+            let amount = lut.get("amount").cloned().unwrap_or(100.0.into());
+            *lut = serde_json::json!({"name": embedded_name(hash), "amount": amount});
+        }
+        None => {
+            if let Some(d) = out.get_mut("desktop").and_then(|d| d.as_object_mut()) {
+                d.remove("lut");
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -273,5 +397,87 @@ mod tests {
         assert_eq!(LutChoice::from_settings(&s).unwrap().amount, 100.0);
         LutChoice::write_into(None, &mut s);
         assert!(s.desktop.is_none());
+    }
+
+    fn learned(size: usize) -> Lut {
+        let mut lut = Lut::identity(size);
+        for (i, p) in lut.data.iter_mut().enumerate() {
+            p[0] = (p[0] * 0.9 + 0.03).clamp(0.0, 1.0);
+            p[1] = (p[1] + (i % 7) as f32 * 0.002).clamp(0.0, 1.0);
+        }
+        lut
+    }
+
+    #[test]
+    fn an_embedded_table_round_trips() {
+        let lut = learned(17);
+        let v = encode_table(&lut);
+        assert!(serde_json::to_vec(&v).unwrap().len() < 40_000);
+        assert_eq!(v["size"], 17);
+        let hash = v["hash"].as_str().unwrap();
+        assert_eq!(hash.len(), 16);
+        assert_eq!(embedded_name(hash), format!("lr-{hash}"));
+        let back = decode_table(&v).unwrap();
+        assert_eq!(back.size, 17);
+        for (a, b) in back.data.iter().zip(&lut.data) {
+            for c in 0..3 {
+                assert!((a[c] - b[c]).abs() <= 1.0 / 65535.0 + 1e-6);
+            }
+        }
+        assert_eq!(encode_table(&back)["hash"], v["hash"]);
+    }
+
+    #[test]
+    fn a_corrupt_table_is_none() {
+        let good = encode_table(&learned(5));
+        let mut short = good.clone();
+        short["table"] = "AAAA".into();
+        assert!(decode_table(&short).is_none());
+        let mut huge = good.clone();
+        huge["size"] = 100000.into();
+        assert!(decode_table(&huge).is_none());
+        let mut junk = good.clone();
+        junk["table"] = "!!!".into();
+        assert!(decode_table(&junk).is_none());
+        let mut forged = good.clone();
+        forged["hash"] = "0000000000000000".into();
+        assert!(decode_table(&forged).is_none());
+        assert!(decode_table(&serde_json::json!({"name": "x"})).is_none());
+    }
+
+    #[test]
+    fn a_cube_written_reads_back() {
+        let lut = learned(5);
+        let back = Lut::parse_cube(&lut.to_cube()).unwrap();
+        assert_eq!(back.size, 5);
+        for (a, b) in back.data.iter().zip(&lut.data) {
+            for c in 0..3 {
+                assert!((a[c] - b[c]).abs() < 1e-5);
+            }
+        }
+    }
+
+    #[test]
+    fn naming_a_preset_table_keeps_only_name_and_amount() {
+        let mut preset =
+            serde_json::json!({"v": 2, "desktop": {"lut": encode_table(&learned(5)), "other": 1}});
+        preset["desktop"]["lut"]["amount"] = 60.into();
+        let hash = preset["desktop"]["lut"]["hash"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let named = name_embedded(&preset);
+        assert_eq!(
+            named["desktop"]["lut"],
+            serde_json::json!({"name": format!("lr-{hash}"), "amount": 60})
+        );
+        assert_eq!(named["desktop"]["other"], 1);
+        assert!(embedded_in(&preset).is_some());
+        assert!(embedded_in(&named).is_none());
+        let plain = serde_json::json!({"desktop": {"lut": {"name": "Film", "amount": 50}}});
+        assert_eq!(name_embedded(&plain), plain);
+        let mut bad = preset.clone();
+        bad["desktop"]["lut"]["table"] = "AAAA".into();
+        assert!(name_embedded(&bad)["desktop"].get("lut").is_none());
     }
 }
