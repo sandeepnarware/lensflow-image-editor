@@ -7,6 +7,7 @@ use lf_settings::lens::Lens;
 use lf_settings::lightroom::map::{self, CROP_NOTE, KELVIN_NOTE, UNMAPPED_NOTE};
 use lf_settings::lightroom::{LrKind, LrPreset, is_lightroom};
 use lf_settings::point_colour::Points;
+use lf_settings::shader_values::kelvin_wb;
 use lf_settings::{HslBand, normalise};
 use serde_json::{Map, Value, json};
 
@@ -75,10 +76,9 @@ fn absent_groups_are_not_carried() {
     let m = map::map(&preset(json!({"Exposure2012": 1.25})));
     assert_eq!(groups_in(&m.preset), vec![GroupKey::Light]);
     assert_eq!(m.preset["exposure"], json!(1.25));
-    assert_eq!(
-        m.preset["contrast"],
-        json!(0),
-        "a carried group's unset keys"
+    assert!(
+        m.preset.get("contrast").is_none(),
+        "only the keys Lightroom set are written"
     );
     assert!(m.preset.get("temperature").is_none());
     assert!(m.preset.get("crop").is_none());
@@ -90,6 +90,7 @@ fn as_shot_wb_is_left_out_and_auto_is_flagged() {
     assert!(shot.preset.get("temperature").is_none());
     assert!(shot.preset.get("tint").is_none());
     assert_eq!(shot.preset["vibrance"], json!(10));
+    assert!(shot.preset.get("saturation").is_none());
     assert_eq!(
         shot.preset["desktop"]["lightroom"]["auto"]["wb"],
         json!(false)
@@ -106,9 +107,26 @@ fn as_shot_wb_is_left_out_and_auto_is_flagged() {
         "WhiteBalance": "Custom", "Temperature": 3000, "Tint": 30
     })));
     let s = normalise(&kelvin.preset);
-    assert!(close(s.temperature, -50.0), "{}", s.temperature);
-    assert!(close(s.tint, 20.0), "{}", s.tint);
+    let (t, n) = kelvin_wb(5500.0, 3000.0).unwrap();
+    assert!(close(s.temperature, t), "{} vs {t}", s.temperature);
+    assert!(
+        close(s.tint, (n + 20.0).clamp(-100.0, 100.0)),
+        "{} vs {n} + 20",
+        s.tint
+    );
+    assert!(s.temperature < 0.0, "tungsten light cools the photo");
     assert!(kelvin.notes.iter().any(|n| n == KELVIN_NOTE));
+}
+
+#[test]
+fn a_kelvin_white_balance_matches_our_presets() {
+    let cloudy = map::map(&preset(json!({
+        "WhiteBalance": "Cloudy", "Temperature": 6500, "Tint": 0
+    })));
+    let (t, n) = kelvin_wb(5500.0, 6500.0).unwrap();
+    let s = normalise(&cloudy.preset);
+    assert!(close(s.temperature, t) && close(s.tint, n), "{s:?}");
+    assert!(s.temperature > 0.0, "cloudy warms");
 }
 
 #[test]
@@ -122,6 +140,28 @@ fn tone_curve_points_scale_to_0_1() {
     assert_eq!(s.curve.r, vec![[0.0, 10.0 / 255.0], [1.0, 245.0 / 255.0]]);
     assert_eq!(s.curve.g, vec![[0.0, 0.0], [1.0, 1.0]]);
     assert_eq!(groups_in(&m.preset), vec![GroupKey::Curve]);
+}
+
+#[test]
+fn a_zero_parametric_curve_keeps_the_point_curve() {
+    let points: Vec<String> = (0..12)
+        .map(|i| format!("{}, {}", i * 23, (i * 23 + 5).min(255)))
+        .collect();
+    let m = map::map(&preset(json!({
+        "ToneCurvePV2012": points,
+        "ParametricShadows": 0, "ParametricDarks": 0, "ParametricLights": 0,
+        "ParametricHighlights": 0, "ParametricShadowSplit": 25,
+        "ParametricMidtoneSplit": 50, "ParametricHighlightSplit": 75
+    })));
+    let s = normalise(&m.preset);
+    assert_eq!(s.curve.rgb.len(), 12);
+    assert_eq!(s.curve.rgb[3], [69.0 / 255.0, 74.0 / 255.0]);
+}
+
+#[test]
+fn a_parametric_curve_is_sampled_finely() {
+    let m = map::map(&preset(json!({"ParametricLights": 40})));
+    assert_eq!(normalise(&m.preset).curve.rgb.len(), 16);
 }
 
 #[test]
@@ -151,7 +191,8 @@ fn split_toning_becomes_grading() {
         (s.grading.highlights.hue, s.grading.highlights.sat),
         (40.0, 30.0)
     );
-    assert_eq!(s.grading.balance, -25.0);
+    // Lightroom's negative balance favours the shadows; ours does that above 0.
+    assert_eq!(s.grading.balance, 25.0);
     assert_eq!(s.grading.midtones.sat, 0.0);
 
     // Lightroom 10+ keeps shadows and highlights in the split toning keys and adds midtones.
@@ -182,6 +223,7 @@ fn calibration_and_lens_land_in_desktop() {
         "RedHue": 10, "RedSaturation": -20, "BlueSaturation": 30, "ShadowTint": 5,
         "LensManualDistortionAmount": 12, "VignetteAmount": 40,
         "PerspectiveVertical": -15, "PerspectiveHorizontal": 7,
+        "ChromaticAberrationR": 10, "ChromaticAberrationB": -5,
         "DefringePurpleAmount": 6, "DefringePurpleHueLo": 30, "DefringePurpleHueHi": 70,
         "DefringeGreenAmount": 0, "DefringeGreenHueLo": 40, "DefringeGreenHueHi": 60,
         "LensProfileEnable": 1,
@@ -205,9 +247,10 @@ fn calibration_and_lens_land_in_desktop() {
         Lens {
             distortion: 12.0,
             vignetting: 40.0,
-            vertical: -15.0,
+            vertical: 15.0,
+            ca_red: 10.0,
+            ca_blue: -5.0,
             horizontal: 7.0,
-            ..Lens::default()
         }
     );
     let d = Defringe::from_settings(&s);
@@ -280,4 +323,21 @@ fn a_crop_is_never_carried() {
     assert!(!groups_in(&m.preset).contains(&GroupKey::Geometry));
     assert!(m.notes.iter().any(|n| n == CROP_NOTE));
     assert!(!m.notes.iter().any(|n| n.starts_with(UNMAPPED_NOTE)));
+}
+
+#[test]
+fn point_colour_ranges_at_lightroom_defaults_are_not_noted() {
+    let default = "1.0, 0.5, 0.5, 0.1, 0.0, 0.0, 0.5,                    0.0, 0.166667, 0.583333, 1.0,                    0.0, 0.166667, 0.583333, 1.0,                    0.0, 0.166667, 0.583333, 1.0";
+    let m = map::map(&preset(json!({"PointColors": [default]})));
+    assert!(m.notes.is_empty(), "{:?}", m.notes);
+    let custom = default.replacen("0.583333", "0.9", 1);
+    let m = map::map(&preset(json!({"PointColors": [custom]})));
+    assert!(m.notes.iter().any(|n| n == map::POINT_COLOUR_RANGE_NOTE));
+}
+
+#[test]
+fn transform_only_still_leaves_distortion_neutral() {
+    let m = map::map(&preset(json!({"PerspectiveVertical": 20})));
+    let lens = Lens::from_settings(&normalise(&m.preset));
+    assert_eq!((lens.vertical, lens.distortion), (-20.0, 0.0));
 }

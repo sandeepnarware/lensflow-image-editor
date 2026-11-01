@@ -8,6 +8,7 @@
 
 use serde_json::Value;
 
+mod curve;
 pub mod map;
 pub mod read;
 

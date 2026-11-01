@@ -3,10 +3,16 @@
 //!
 //! A preset carries only the groups Lightroom set: a key Lightroom left out means "not part of
 //! this preset", so the matching group is left out too and applying the preset leaves it on the
-//! photo as it is (`desktop.lightroom` makes `apply_look` apply it that way). Within a carried
-//! group the keys Lightroom didn't write take the defaults, as Lightroom saves a group's keys
-//! together. White balance is the exception: Lightroom keeps it apart from vibrance and
-//! saturation, so temperature and tint are carried only when the preset sets a white balance.
+//! photo as it is (`desktop.lightroom` makes `apply_look` apply it that way). Within a group,
+//! too, only the keys Lightroom wrote are written: Lightroom ticks each slider into a preset on
+//! its own (exposure without contrast, sharpening without noise reduction), and
+//! `apply_groups` lays on only the keys present. Settings we hold as one value (the HSL
+//! table, a curve, the grading wheels, the desktop edits) are written whole, with Lightroom's
+//! defaults where it left a part out.
+//!
+//! Lightroom's Lens Corrections and Transform panels share our `desktop.lens` (one value, one
+//! group), so a preset with only Transform settings also writes neutral distortion, vignetting
+//! and fringe values, turning those off on the photo it is applied to.
 //!
 //! Values are copied where both editors use the same range and idea; the few that differ are
 //! scaled here, and calibration against Lightroom's renders can refine the responses later
@@ -21,12 +27,12 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value, json};
 
-use super::{LIGHTROOM_KEY, LrPreset};
+use super::{LIGHTROOM_KEY, LrPreset, curve};
 use crate::calibration::Calibration;
-use crate::curve::curve_table;
 use crate::defringe::{self, Defringe};
 use crate::lens::Lens;
 use crate::point_colour::{MAX_POINTS, Point, Points};
+use crate::shader_values::kelvin_wb;
 use crate::{CurvePoint, EditSettings, SETTINGS_VERSION};
 
 /// A Lightroom preset in our terms.
@@ -110,15 +116,8 @@ const HSL_KEYS: [(&str, &str); 8] = [
     ("Magenta", "magenta"),
 ];
 
-/// Most points a curve keeps (`normalise` drops the rest).
-const MAX_CURVE_POINTS: usize = 16;
-/// Points the parametric curve is sampled at.
-const PARAMETRIC_SAMPLES: usize = 9;
-/// How far a parametric region at ±100 raises or lowers the curve.
-const PARAMETRIC_REACH: f64 = 0.25;
-/// The daylight white balance a Kelvin target is measured from, and kelvin per slider step.
+/// The as-shot white balance a Kelvin target is measured from (daylight).
 const DAYLIGHT_KELVIN: f64 = 5500.0;
-const KELVIN_PER_STEP: f64 = 50.0;
 /// Lightroom's tint runs -150..150; ours -100..100.
 const LR_TINT_RANGE: f64 = 150.0;
 
@@ -240,50 +239,32 @@ impl Mapper<'_> {
         }
     }
 
-    /// Carries `keys` (top-level settings keys): Lightroom's values where given (`from`,
-    /// already in our scale), our defaults for the rest.
-    fn carry(&mut self, keys: &[&str], from: &[(&str, f64)]) {
-        for key in keys {
-            let v = from
-                .iter()
-                .find(|(k, _)| k == key)
-                .map(|(_, v)| number(*v))
-                .or_else(|| self.defaults.get(*key).cloned())
-                .unwrap_or(Value::Null);
-            self.out.insert((*key).to_string(), v);
+    /// Writes `values` (our keys, already in our scale).
+    fn put(&mut self, values: &[(&str, f64)]) {
+        for (key, v) in values {
+            self.out.insert((*key).to_string(), number(*v));
         }
     }
 
-    /// Maps `pairs` of (Lightroom key, our key) value for value; carries `group` when any is set.
-    fn group(&mut self, group: &[&str], pairs: &[(&str, &str)]) {
-        let given: Vec<(&str, f64)> = pairs
-            .iter()
-            .filter_map(|(lr, ours)| self.num(lr).map(|v| (*ours, v)))
-            .collect();
-        if !given.is_empty() {
-            self.carry(group, &given);
+    /// Maps `pairs` of (Lightroom key, our key) value for value: only the keys Lightroom set,
+    /// as Lightroom ticks each slider into a preset on its own.
+    fn copy(&mut self, pairs: &[(&str, &str)]) {
+        for (lr, ours) in pairs {
+            if let Some(v) = self.num(lr) {
+                self.out.insert((*ours).to_string(), number(v));
+            }
         }
     }
 
     fn light(&mut self) {
-        self.group(
-            &[
-                "exposure",
-                "contrast",
-                "highlights",
-                "shadows",
-                "whites",
-                "blacks",
-            ],
-            &[
-                ("Exposure2012", "exposure"),
-                ("Contrast2012", "contrast"),
-                ("Highlights2012", "highlights"),
-                ("Shadows2012", "shadows"),
-                ("Whites2012", "whites"),
-                ("Blacks2012", "blacks"),
-            ],
-        );
+        self.copy(&[
+            ("Exposure2012", "exposure"),
+            ("Contrast2012", "contrast"),
+            ("Highlights2012", "highlights"),
+            ("Shadows2012", "shadows"),
+            ("Whites2012", "whites"),
+            ("Blacks2012", "blacks"),
+        ]);
     }
 
     /// White balance, vibrance and saturation. Returns whether Lightroom asks for Auto WB.
@@ -300,25 +281,32 @@ impl Mapper<'_> {
         let as_shot = wb.as_deref() == Some("As Shot");
         if !auto && !as_shot {
             let clamp = |v: f64| v.clamp(-100.0, 100.0);
+            // A preset has one or the other; should both appear, the relative `Incremental*`
+            // win, as they need no guess about the photo's own balance.
             if inc_temp.is_some() || inc_tint.is_some() {
                 // Non-RAW presets: already relative, the same scale.
-                let t = clamp(inc_temp.unwrap_or(0.0));
-                let n = clamp(inc_tint.unwrap_or(0.0));
-                self.carry(&["temperature", "tint"], &[("temperature", t), ("tint", n)]);
+                if let Some(t) = inc_temp {
+                    self.put(&[("temperature", clamp(t))]);
+                }
+                if let Some(n) = inc_tint {
+                    self.put(&[("tint", clamp(n))]);
+                }
             } else if kelvin.is_some() || lr_tint.is_some() {
-                // Ours is relative to the photo's own balance: a shift from daylight stands in
-                // for the Kelvin target, which `desktop.lightroom` keeps for a later per-photo
-                // conversion.
-                let t = clamp(kelvin.map_or(0.0, |k| (k - DAYLIGHT_KELVIN) / KELVIN_PER_STEP));
-                let n = clamp(lr_tint.unwrap_or(0.0) * 100.0 / LR_TINT_RANGE);
-                self.carry(&["temperature", "tint"], &[("temperature", t), ("tint", n)]);
+                // Ours is relative to the photo's own balance: the Kelvin target is balanced
+                // as our white balance presets are, on a photo taken to be shot in daylight.
+                // `desktop.lightroom` keeps the target for a later per-photo conversion.
+                let (t, wb_tint) = kelvin
+                    .and_then(|k| kelvin_wb(DAYLIGHT_KELVIN, k))
+                    .unwrap_or((0.0, 0.0));
+                let n = clamp(wb_tint + lr_tint.unwrap_or(0.0) * 100.0 / LR_TINT_RANGE);
+                if kelvin.is_some() {
+                    self.put(&[("temperature", clamp(t))]);
+                }
+                self.put(&[("tint", n)]);
                 self.note(KELVIN_NOTE);
             }
         }
-        self.group(
-            &["vibrance", "saturation"],
-            &[("Vibrance", "vibrance"), ("Saturation", "saturation")],
-        );
+        self.copy(&[("Vibrance", "vibrance"), ("Saturation", "saturation")]);
         auto
     }
 
@@ -338,14 +326,11 @@ impl Mapper<'_> {
     }
 
     fn detail(&mut self) {
-        self.group(
-            &["clarity", "texture", "dehaze"],
-            &[
-                ("Clarity2012", "clarity"),
-                ("Texture", "texture"),
-                ("Dehaze", "dehaze"),
-            ],
-        );
+        self.copy(&[
+            ("Clarity2012", "clarity"),
+            ("Texture", "texture"),
+            ("Dehaze", "dehaze"),
+        ]);
     }
 
     fn hsl(&mut self) {
@@ -417,8 +402,7 @@ impl Mapper<'_> {
             }
             channels.push((ours, read));
         }
-        let parametric = params.iter().any(Option::is_some);
-        if !parametric && channels.iter().all(|(_, c)| c.is_none()) {
+        if params.iter().all(Option::is_none) && channels.iter().all(|(_, c)| c.is_none()) {
             return;
         }
         let mut curve = self.defaults["curve"].clone();
@@ -427,15 +411,8 @@ impl Mapper<'_> {
                 Some(Ok(p)) => p,
                 _ => crate::identity_curve(),
             };
-            let points = if ours == "rgb" && parametric {
-                let regions = Parametric::new(&params);
-                sample(&points, PARAMETRIC_SAMPLES, |x| regions.apply(x))
-            } else if points.len() > MAX_CURVE_POINTS {
-                sample(&points, MAX_CURVE_POINTS, |x| x)
-            } else {
-                points
-            };
-            curve[ours] = json!(points);
+            let shape: &[Option<f64>] = if ours == "rgb" { &params } else { &[] };
+            curve[ours] = json!(curve::shaped(points, shape));
         }
         self.out.insert("curve".into(), curve);
     }
@@ -493,22 +470,21 @@ impl Mapper<'_> {
                 grading[wheel]["sat"] = number(s);
             }
         }
+        // Lightroom's balance above 0 favours the highlights; ours favours the shadows
+        // (the develop pass moves its pivot up by balance).
         if let Some(b) = balance {
-            grading["balance"] = number(b);
+            grading["balance"] = number(-b);
         }
         self.out.insert("grading".into(), grading);
     }
 
     fn sharpen(&mut self) {
-        self.group(
-            &["sharpen", "sharpenRadius", "noise", "colorNoise"],
-            &[
-                ("Sharpness", "sharpen"),
-                ("SharpenRadius", "sharpenRadius"),
-                ("LuminanceSmoothing", "noise"),
-                ("ColorNoiseReduction", "colorNoise"),
-            ],
-        );
+        self.copy(&[
+            ("Sharpness", "sharpen"),
+            ("SharpenRadius", "sharpenRadius"),
+            ("LuminanceSmoothing", "noise"),
+            ("ColorNoiseReduction", "colorNoise"),
+        ]);
         let extras = [
             ("SharpenDetail", 25.0),
             ("SharpenEdgeMasking", 0.0),
@@ -523,15 +499,12 @@ impl Mapper<'_> {
     }
 
     fn effects(&mut self) {
-        self.group(
-            &["vignette", "vignetteMidpoint", "grain", "grainSize"],
-            &[
-                ("PostCropVignetteAmount", "vignette"),
-                ("PostCropVignetteMidpoint", "vignetteMidpoint"),
-                ("GrainAmount", "grain"),
-                ("GrainSize", "grainSize"),
-            ],
-        );
+        self.copy(&[
+            ("PostCropVignetteAmount", "vignette"),
+            ("PostCropVignetteMidpoint", "vignetteMidpoint"),
+            ("GrainAmount", "grain"),
+            ("GrainSize", "grainSize"),
+        ]);
         let extras = [
             ("PostCropVignetteFeather", 50.0),
             ("PostCropVignetteRoundness", 0.0),
@@ -564,8 +537,17 @@ impl Mapper<'_> {
             "VignetteAmount",
             "PerspectiveVertical",
             "PerspectiveHorizontal",
+            "ChromaticAberrationR",
+            "ChromaticAberrationB",
         ];
-        let [distortion, vignetting, vertical, horizontal] = lens_keys.map(|k| self.num(k));
+        let [
+            distortion,
+            vignetting,
+            vertical,
+            horizontal,
+            ca_red,
+            ca_blue,
+        ] = lens_keys.map(|k| self.num(k));
         // Lightroom's fringe hues are 0..100 sliders, each a low and a high end; ours is one
         // hue per colour, in degrees within its own span. The middle of Lightroom's pair,
         // placed along our span.
@@ -614,9 +596,11 @@ impl Mapper<'_> {
             self.note(UPRIGHT_NOTE);
         }
 
-        let carried = [distortion, vignetting, vertical, horizontal, purple, green]
-            .iter()
-            .any(Option::is_some)
+        let carried = [
+            distortion, vignetting, vertical, horizontal, ca_red, ca_blue, purple, green,
+        ]
+        .iter()
+        .any(Option::is_some)
             || purple_hue.is_some()
             || green_hue.is_some();
         if !carried {
@@ -625,9 +609,15 @@ impl Mapper<'_> {
         let lens = Lens {
             distortion: distortion.unwrap_or(0.0),
             vignetting: vignetting.unwrap_or(0.0),
-            vertical: vertical.unwrap_or(0.0),
+            // Lightroom straightens a building shot from below with a negative Vertical; ours
+            // with a positive one.
+            vertical: -vertical.unwrap_or(0.0),
+            // Same sign as Lightroom's; unverified until the LF_LR_SAMPLES check compares a
+            // real Lightroom export.
             horizontal: horizontal.unwrap_or(0.0),
-            ..Lens::default()
+            // The legacy manual chromatic aberration sliders, -100..100 like ours.
+            ca_red: ca_red.unwrap_or(0.0),
+            ca_blue: ca_blue.unwrap_or(0.0),
         };
         let fringe = Defringe {
             purple_amount: purple.unwrap_or(0.0),
@@ -722,7 +712,7 @@ impl Mapper<'_> {
             });
             match numbers {
                 Some(n) if n.len() >= 7 && n[0] >= 0.0 => {
-                    if n.len() > 7 {
+                    if !default_ranges(&n[7..]) {
                         self.note(POINT_COLOUR_RANGE_NOTE);
                     }
                     points.push(Point {
@@ -822,75 +812,18 @@ impl Mapper<'_> {
     }
 }
 
-/// Lightroom's parametric curve: four regions (shadows, darks, lights, highlights) split at
-/// three points. Each region raises or lowers the curve by up to [`PARAMETRIC_REACH`] at
-/// ±100, most at its own middle and fading (smoothstep) to nothing at the middle of the
-/// regions either side of it (the end regions fade to 0 and 1), so neighbours overlap and the
-/// ends of the curve stay put.
-struct Parametric {
-    amounts: [f64; 4],
-    /// 0, the three splits, 1.
-    bounds: [f64; 5],
-}
+/// The hue, saturation and luminance range curves Lightroom writes for a point whose ranges
+/// were left alone, four numbers each, as recalled from Lightroom's own files; unverified
+/// until the LF_LR_SAMPLES check reads real ones.
+const LR_DEFAULT_RANGE: [f64; 4] = [0.0, 0.166667, 0.583333, 1.0];
 
-impl Parametric {
-    /// From the seven parametric keys, in the order shadows, darks, lights, highlights,
-    /// shadow split, midtone split, highlight split (Lightroom's defaults 25, 50, 75).
-    fn new(params: &[Option<f64>]) -> Parametric {
-        let p = |i: usize, d: f64| params.get(i).copied().flatten().unwrap_or(d);
-        let mut splits = [p(4, 25.0), p(5, 50.0), p(6, 75.0)].map(|v| (v / 100.0).clamp(0.0, 1.0));
-        splits.sort_by(f64::total_cmp);
-        Parametric {
-            amounts: std::array::from_fn(|i| p(i, 0.0).clamp(-100.0, 100.0) / 100.0),
-            bounds: [0.0, splits[0], splits[1], splits[2], 1.0],
-        }
-    }
-
-    fn apply(&self, x: f64) -> f64 {
-        let mid = |i: usize| (self.bounds[i] + self.bounds[i + 1]) / 2.0;
-        let mut y = x;
-        for (i, amount) in self.amounts.iter().enumerate() {
-            if *amount == 0.0 {
-                continue;
-            }
-            let c = mid(i);
-            let lo = if i == 0 { 0.0 } else { mid(i - 1) };
-            let hi = if i == 3 { 1.0 } else { mid(i + 1) };
-            let w = if x <= c {
-                smoothstep(lo, c, x)
-            } else {
-                1.0 - smoothstep(c, hi, x)
-            };
-            y += amount * PARAMETRIC_REACH * w;
-        }
-        y.clamp(0.0, 1.0)
-    }
-}
-
-fn smoothstep(e0: f64, e1: f64, x: f64) -> f64 {
-    if e1 <= e0 {
-        return if x < e0 { 0.0 } else { 1.0 };
-    }
-    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
-/// The point curve through `points` after `before`, at `n` evenly spaced inputs.
-fn sample(points: &[CurvePoint], n: usize, before: impl Fn(f64) -> f64) -> Vec<CurvePoint> {
-    const SIZE: usize = 1024;
-    let table = curve_table(points, SIZE);
-    let at = |x: f64| {
-        let f = x.clamp(0.0, 1.0) * (SIZE - 1) as f64;
-        let i = (f.floor() as usize).min(SIZE - 2);
-        let t = f - i as f64;
-        f64::from(table[i]) * (1.0 - t) + f64::from(table[i + 1]) * t
-    };
-    (0..n)
-        .map(|i| {
-            let x = i as f64 / (n - 1) as f64;
-            [x, at(before(x))]
-        })
-        .collect()
+/// Whether a point colour's range curves (after its first seven numbers) are Lightroom's
+/// defaults (or absent), which our one range already stands for.
+fn default_ranges(ranges: &[f64]) -> bool {
+    ranges
+        .iter()
+        .enumerate()
+        .all(|(i, v)| (v - LR_DEFAULT_RANGE[i % 4]).abs() < 1e-3)
 }
 
 /// A number as the web writes it: whole numbers as integers (`10`, not `10.0`), so values
