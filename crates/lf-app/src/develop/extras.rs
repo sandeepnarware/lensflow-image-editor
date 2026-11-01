@@ -7,6 +7,7 @@
 use super::panels::{looks, presets, versions};
 use super::{Develop, State};
 use crate::dialogs::{self, save_preset};
+use crate::lightroom::import::shown_name;
 use crate::toast::{Level, Toasts};
 use eframe::egui;
 use lf_catalog::edits;
@@ -27,6 +28,8 @@ pub struct PresetsUi {
     deleting: Option<LocalPresetRow>,
     /// Saved or deleted here since the last sync was asked for.
     changed: bool,
+    /// "Import from Lightroom…" was clicked (the library takes the request).
+    lr_import_asked: bool,
 }
 
 /// The look or preset applied last, while its Amount can still change.
@@ -98,6 +101,18 @@ impl Develop {
     /// The presets changed in the catalogue (a sync): read them again.
     pub fn presets_stale(&mut self) {
         self.extras.presets.stale = true;
+    }
+
+    /// Presets were added to the catalogue here (an import): read them again and ask for a
+    /// sync, as a saved preset does.
+    pub fn presets_imported(&mut self) {
+        self.extras.presets.stale = true;
+        self.extras.presets.changed = true;
+    }
+
+    /// "Import from Lightroom…" was clicked since the last call.
+    pub fn take_lr_import(&mut self) -> bool {
+        std::mem::take(&mut self.extras.presets.lr_import_asked)
     }
 
     /// The studio's presets, read again when stale.
@@ -301,16 +316,17 @@ impl Develop {
             return;
         }
         let mut pct = applied.amount * 100.0;
+        let name = shown_name(ui.ctx(), &applied.name);
         let response = ui
             .horizontal(|ui| {
-                let label = ui.label(AMOUNT).on_hover_text(&applied.name);
+                let label = ui.label(AMOUNT).on_hover_text(&name);
                 ui.add(
                     egui::Slider::new(&mut pct, 0.0..=lf_settings::amount::MAX_AMOUNT * 100.0)
                         .suffix(" %")
                         .step_by(1.0),
                 )
                 .labelled_by(label.id)
-                .on_hover_text(format!("How much of {} to apply", applied.name))
+                .on_hover_text(format!("How much of {name} to apply"))
             })
             .inner;
         let mut commit = response.drag_stopped();
@@ -368,6 +384,7 @@ impl Develop {
             Some(presets::PresetAction::Delete(i)) => {
                 self.extras.presets.deleting = rows.get(i).cloned();
             }
+            Some(presets::PresetAction::ImportLr) => self.extras.presets.lr_import_asked = true,
             None => {}
         }
     }
@@ -378,7 +395,7 @@ impl Develop {
             let answer = dialogs::confirm(
                 ctx,
                 "delete-preset",
-                &presets::delete_title(&row.name),
+                &presets::delete_title(&shown_name(ctx, &row.name)),
                 presets::DELETE_TEXT,
                 presets::DELETE_CONFIRM,
                 true,

@@ -20,6 +20,7 @@ pub mod grid;
 pub mod import_ui;
 pub mod ingest_ui;
 pub mod keywords_ui;
+pub mod lr_import_ui;
 pub mod lut_ui;
 pub mod map;
 pub mod merge_ui;
@@ -138,6 +139,8 @@ pub struct Library {
     start_ai_now: bool,
     /// Remove objects' painting dialog, while open.
     remove: Option<crate::dialogs::remove::RemoveDialog>,
+    /// "Import Lightroom presets…", while open, importing or showing its summary.
+    lr_import: Option<crate::dialogs::lr_import::LrImportDialog>,
     /// "Rename…", while open or renaming.
     rename: Option<crate::dialogs::rename::RenameDialog>,
     /// Auto-stack's dialog, while open or running.
@@ -280,6 +283,7 @@ impl Library {
             ai: None,
             start_ai_now: false,
             remove: None,
+            lr_import: None,
             auto_stack: None,
             auto_import: auto_import_ui::AutoImport::default(),
             auto_import_dialog: None,
@@ -542,6 +546,9 @@ impl Library {
         }
         if let Some(merge) = &self.merge {
             merge.stop.store(true, Ordering::SeqCst);
+        }
+        if let Some(lr) = &self.lr_import {
+            lr.stop.store(true, Ordering::SeqCst);
         }
         self.stop_ai();
         self.stop_auto_stack();
@@ -1048,6 +1055,8 @@ impl Library {
                     .toasts
                     .push(Level::Error, format!("The LUT could not be added. {e}")),
             },
+            Msg::LrPicked { dialog, paths } => self.lr_picked(dialog, paths),
+            Msg::LrImported { root, report } => self.lr_imported(root, report, env),
             Msg::PresetsSynced(..) => {
                 // The catalogue's presets may have changed; the session handles the rest.
                 self.develop.presets_stale();
@@ -1067,6 +1076,7 @@ impl Library {
                     "import" => self.importing = None,
                     "open catalogue" => self.stage = Stage::Failed(plain),
                     "thumbnail pool" => self.reviving = false,
+                    lr_import_ui::JOB => self.lr_import_failed(&plain, env),
                     "match" | "match apply" => {
                         if let Some(m) = &mut self.matching {
                             m.job_failed(&plain);
@@ -1519,6 +1529,9 @@ impl Library {
         if self.develop.take_dcp_import() {
             self.pick_dcp(env);
         }
+        if self.develop.take_lr_import() && self.can_import_lr() {
+            self.open_lr_import();
+        }
         self.auto_sync(env);
         self.follow_auto_import(ui.ctx(), env);
         match self.mode {
@@ -1571,6 +1584,7 @@ impl Library {
         self.people_dialogs(ui.ctx(), env);
         self.ai_dialog(ui.ctx(), env);
         self.remove_dialog(ui.ctx(), env);
+        self.lr_import_dialog(ui.ctx(), env);
         self.auto_stack_dialog(ui.ctx(), env);
         self.auto_import_dialog(ui.ctx(), env);
         self.geotag_dialog(ui.ctx(), env);
@@ -1603,6 +1617,7 @@ impl Library {
             || self.slideshow.is_some()
             || self.ai.is_some()
             || self.remove.is_some()
+            || self.lr_import.is_some()
     }
 
     /// Whether `action` (a menu item or a key) is possible now in the library or Develop.
@@ -1628,6 +1643,7 @@ impl Library {
             Action::Redo => develop && self.develop.can_redo(),
             Action::CopySettings => self.copy_source().is_some(),
             Action::PasteSettings | Action::ApplyToSelected | Action::MatchReference => selected,
+            Action::ImportLrPresets => self.can_import_lr(),
             Action::AutoSync => true,
             Action::Slideshow => !develop && self.slideshow.is_none() && !self.order.is_empty(),
             Action::RenamePhotos => !develop && selected && self.rename.is_none() && self.can_add(),
@@ -1781,6 +1797,7 @@ impl Library {
                 }
             }
             Action::MatchReference => self.open_match(),
+            Action::ImportLrPresets => self.open_lr_import(),
             Action::EditIn => self.edit_in(env),
             Action::Print => self.open_print(),
             Action::MergeHdr => self.open_merge(crate::merge_job::MergeKind::Hdr),

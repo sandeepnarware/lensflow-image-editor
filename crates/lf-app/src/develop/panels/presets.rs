@@ -1,13 +1,16 @@
 //! "Studio presets": this studio's presets (kept in the catalogue and synced with LensFlow).
 //! A click applies one (its groups over the photo's settings); "Save preset…" keeps chosen
-//! parts of the current edit; delete asks first.
+//! parts of the current edit; delete asks first; "Import from Lightroom…" opens the import.
+//! Names are drawn through [`shown_name`]: an imported one may hold characters the fonts lack.
 
+use crate::lightroom::import::shown_name;
 use crate::theme;
 use eframe::egui::{self, RichText};
 use lf_catalog::presets::LocalPresetRow;
 
 pub const TITLE: &str = "Studio presets";
 pub const SAVE: &str = "Save preset…";
+pub const IMPORT_LR: &str = "Import from Lightroom…";
 pub const EMPTY: &str = "Save an edit you like as a preset, and use it on any photo with one tap. \
                          Presets are shared with your team.";
 pub const NO_STUDIO: &str = "Sign in to a studio to use its presets.";
@@ -30,6 +33,8 @@ pub enum PresetAction {
     /// Apply the preset at this index.
     Apply(usize),
     Save,
+    /// Open "Import Lightroom presets…".
+    ImportLr,
     /// Ask to delete the preset at this index.
     Delete(usize),
 }
@@ -54,12 +59,12 @@ pub fn show(
     }
     if rows.is_empty() {
         ui.label(RichText::new(EMPTY).color(theme::MUTED).small());
-        return action;
     }
     for (i, row) in rows.iter().enumerate() {
         ui.horizontal(|ui| {
             let width = (ui.available_width() - 64.0).max(40.0);
-            let apply = egui::Button::new(&row.name).truncate();
+            let name = shown_name(ui.ctx(), &row.name);
+            let apply = egui::Button::new(&name).truncate();
             let r = ui.add_sized([width, 24.0], apply);
             if r.hovered() {
                 *hovered = Some(i);
@@ -67,10 +72,13 @@ pub fn show(
             if r.clicked() {
                 action = Some(PresetAction::Apply(i));
             }
-            if small_named(ui, DELETE, &delete_label(&row.name)).clicked() {
+            if small_named(ui, DELETE, &delete_label(&name)).clicked() {
                 action = Some(PresetAction::Delete(i));
             }
         });
+    }
+    if ui.link(IMPORT_LR).clicked() {
+        action = Some(PresetAction::ImportLr);
     }
     action
 }

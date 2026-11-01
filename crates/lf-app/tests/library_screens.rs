@@ -3474,3 +3474,94 @@ fn a_found_depth_goes_to_the_lens_blur_not_the_masks() {
         lf_settings::lens_blur::LensBlur::default().amount
     );
 }
+
+#[test]
+fn lightroom_presets_are_imported_from_the_action_and_the_presets_panel() {
+    use lf_app::develop::panels::presets;
+    use lf_app::dialogs::lr_import::{self, Stage};
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut h) = opened(dir.path()) else {
+        return;
+    };
+    // No studio: nothing to import into, as "Save preset…".
+    assert!(!run_action(&mut h, Action::ImportLrPresets));
+    h.state_mut().lib.set_studio(Some(7));
+    assert!(run_action(&mut h, Action::ImportLrPresets));
+    // A new dialog is laid out unseen on its first frame.
+    h.step();
+    h.step();
+    assert!(
+        h.query_by_label(lr_import::TITLE).is_some(),
+        "the dialog opened"
+    );
+    let find = h.get_by_role_and_label(Role::Button, lr_import::FIND_ADOBE);
+    assert_eq!(
+        find.accesskit_node().is_disabled(),
+        lf_app::lightroom::gather::adobe_folders().is_empty(),
+        "Find is offered only where Adobe's folders are"
+    );
+
+    // A folder of presets, as the folder picker answers.
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lf-settings/tests/lightroom");
+    let pack = dir.path().join("Pack");
+    std::fs::create_dir(&pack).unwrap();
+    for name in [
+        "attrs.xmp",
+        "legacy.lrtemplate",
+        "profile.xmp",
+        "broken.xmp",
+    ] {
+        std::fs::copy(fixtures.join(name), pack.join(name)).unwrap();
+    }
+    let id = h.state().lib.lr_import().unwrap().id;
+    // An earlier dialog's answer is dropped.
+    h.state_mut().handle(Msg::LrPicked {
+        dialog: id + 1000,
+        paths: vec![dir.path().join("elsewhere")],
+    });
+    h.state_mut().handle(Msg::LrPicked {
+        dialog: id,
+        paths: vec![pack.clone()],
+    });
+    assert_eq!(
+        h.state().lib.lr_import().unwrap().chosen,
+        std::slice::from_ref(&pack)
+    );
+    h.step();
+    h.get_by_role_and_label(Role::Button, lr_import::IMPORT)
+        .click();
+    step_until(&mut h, "the import", |s| {
+        matches!(s.lib.lr_import().map(|d| &d.stage), Some(Stage::Done(_)))
+    });
+    h.step();
+    assert!(h.query_by_label(&lr_import::imported_text(2)).is_some());
+    assert!(
+        h.query_by_label_contains(lr_import::FAILED_TITLE).is_some(),
+        "the profile and the broken file are listed"
+    );
+    let catalog = lf_catalog::Catalog::open(&dir.path().join("catalogue")).unwrap();
+    let names: Vec<String> = lf_catalog::presets::list(&catalog, 7)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    assert_eq!(names, ["Pack - Moody", "Studio - Warm Fade"]);
+    assert!(
+        h.state_mut().lib.take_presets_changed(),
+        "a sync is asked for"
+    );
+    h.get_by_label(lr_import::CLOSE).click();
+    h.step();
+    assert!(h.state().lib.lr_import().is_none());
+
+    // The presets panel's link opens it too, and lists what was imported.
+    develop_one(&mut h, dir.path());
+    h.get_by_label(presets::TITLE).click();
+    // The section opens over a few frames.
+    h.run_steps(20);
+    assert!(h.query_by_label("Studio - Warm Fade").is_some());
+    h.get_by_label(presets::IMPORT_LR).click();
+    h.step();
+    h.step();
+    assert!(h.query_by_label(lr_import::TITLE).is_some());
+}

@@ -193,6 +193,13 @@ pub enum Msg {
     LutImported(Result<String, String>),
     /// A `.dcp` camera profile was copied into the catalogue and loaded (its name), or why not.
     DcpImported(Result<String, String>),
+    /// "Import Lightroom presets…"'s picker for the dialog `dialog` answered (empty: cancelled).
+    LrPicked { dialog: u64, paths: Vec<PathBuf> },
+    /// Lightroom presets were imported into the catalogue at `root`: what was done.
+    LrImported {
+        root: PathBuf,
+        report: crate::lightroom::import::ImportReport,
+    },
     /// "Rename…" renamed photos (`root`: the catalogue): how many, or why none.
     Renamed {
         root: PathBuf,
@@ -870,6 +877,8 @@ pub(crate) mod owners {
             | Msg::IngestDone(..)
             | Msg::LutImported(..)
             | Msg::DcpImported(..)
+            | Msg::LrPicked { .. }
+            | Msg::LrImported { .. }
             | Msg::Synced { .. }
             | Msg::PeopleSelected { .. }
             | Msg::WiresSelected { .. }
@@ -1010,6 +1019,14 @@ pub(crate) mod owners {
             Msg::IngestDone(Err("no".into())),
             Msg::LutImported(Err("no".into())),
             Msg::DcpImported(Err("no".into())),
+            Msg::LrPicked {
+                dialog: 0,
+                paths: Vec::new(),
+            },
+            Msg::LrImported {
+                root: dir.join("elsewhere"),
+                report: Default::default(),
+            },
             Msg::Synced {
                 root: dir.to_path_buf(),
                 ids: Vec::new(),
