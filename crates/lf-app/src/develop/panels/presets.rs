@@ -1,6 +1,6 @@
 //! "Studio presets": this studio's presets (kept in the catalogue and synced with LensFlow).
 //! A click applies one (its groups over the photo's settings); "Save preset…" keeps chosen
-//! parts of the current edit; delete asks first; "Import from Lightroom…" opens the import;
+//! parts of the current edit; delete asks first; "Import Lightroom presets…" opens the import;
 //! a preset's context menu (and a link under the list, for a new preset) opens "Match a
 //! Lightroom example…".
 //! Names are drawn through [`shown_name`]: an imported one may hold characters the fonts lack.
@@ -12,7 +12,7 @@ use lf_catalog::presets::LocalPresetRow;
 
 pub const TITLE: &str = "Studio presets";
 pub const SAVE: &str = "Save preset…";
-pub const IMPORT_LR: &str = "Import from Lightroom…";
+pub const IMPORT_LR: &str = "Import Lightroom presets…";
 pub const MATCH_EXAMPLE: &str = "Match a Lightroom example…";
 pub const NEW_FROM_EXAMPLE: &str = "New preset from a Lightroom example…";
 pub const EMPTY: &str = "Save an edit you like as a preset, and use it on any photo with one tap. \

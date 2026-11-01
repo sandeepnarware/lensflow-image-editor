@@ -76,13 +76,15 @@ fn the_summary_lists_the_notes_of_each_preset() {
     let mut h = harness(dialog);
     h.run_steps(2);
     assert!(h.query_by_label(&lr_import::imported_text(3)).is_some());
-    // Only the presets with notes are listed under them, each opening to its own.
-    assert!(h.query_by_label("Plain").is_none());
+    // Only the presets with notes are listed under them, each opening to its own (every
+    // imported preset is also listed once, with its Match button).
+    assert_eq!(h.query_all_by_label("Plain").count(), 1);
+    assert_eq!(h.query_all_by_label("Studio - Moody").count(), 2);
     assert!(
         h.query_by_label("Grain roughness is not carried.")
             .is_none()
     );
-    h.get_by_label("Studio - Moody").click();
+    h.get_all_by_label("Studio - Moody").last().unwrap().click();
     h.run_steps(10);
     assert!(
         h.query_by_label("Grain roughness is not carried.")
@@ -118,7 +120,7 @@ fn a_name_the_fonts_cannot_draw_is_shown_with_question_marks() {
     let mut h = harness(dialog);
     // Drawing it must not panic.
     h.run_steps(2);
-    assert!(h.query_by_label("???").is_some());
+    assert!(h.query_all_by_label("???").count() >= 1);
 }
 
 #[test]

@@ -28,7 +28,7 @@ pub struct PresetsUi {
     deleting: Option<LocalPresetRow>,
     /// Saved or deleted here since the last sync was asked for.
     changed: bool,
-    /// "Import from Lightroom…" was clicked (the library takes the request).
+    /// "Import Lightroom presets…" was clicked (the library takes the request).
     lr_import_asked: bool,
     /// "Match a Lightroom example…" was asked for: the preset (its name and settings), or
     /// none for a new preset (the library takes the request).
@@ -113,7 +113,7 @@ impl Develop {
         self.extras.presets.changed = true;
     }
 
-    /// "Import from Lightroom…" was clicked since the last call.
+    /// "Import Lightroom presets…" was clicked since the last call.
     pub fn take_lr_import(&mut self) -> bool {
         std::mem::take(&mut self.extras.presets.lr_import_asked)
     }

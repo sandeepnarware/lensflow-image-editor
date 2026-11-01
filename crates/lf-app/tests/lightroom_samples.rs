@@ -58,7 +58,7 @@ fn real_lightroom_samples_match_closely() {
             }
         }
         let stop = AtomicBool::new(false);
-        let (_, fit, _) = example_job::run(
+        let (preset, fit, _) = example_job::run(
             &gpu,
             &original,
             &export,
@@ -75,6 +75,16 @@ fn real_lightroom_samples_match_closely() {
             fit.delta_e_mean < 5.0,
             "{label}: mean dE {:.2} is not under 5",
             fit.delta_e_mean
+        );
+        assert_ne!(
+            example_job::Verdict::of(&fit),
+            example_job::Verdict::NotAGoodMatch,
+            "{label}: {}",
+            example_job::NOT_A_GOOD_MATCH
+        );
+        assert!(
+            lf_settings::lightroom::budget::desktop_fits(&preset),
+            "{label}: the matched preset is over the size cap"
         );
         seen += 1;
     }

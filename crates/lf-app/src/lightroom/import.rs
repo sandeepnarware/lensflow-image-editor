@@ -395,7 +395,10 @@ mod tests {
             .into_bytes();
         let report = import(&catalog, 7, vec![found("look.xmp", None, bytes)], &stop);
         assert!(report.imported.is_empty());
-        assert!(report.failed.is_empty(), "a profile is skipped, not a failure");
+        assert!(
+            report.failed.is_empty(),
+            "a profile is skipped, not a failure"
+        );
         assert_eq!(report.skipped_profiles, 1);
     }
 

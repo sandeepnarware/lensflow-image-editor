@@ -235,8 +235,9 @@ logger's track by the time each was taken; choose the camera clock's time zone, 
 photos that already have a place keep it.
 
 Lightroom presets: Develop → Presets → "Import Lightroom presets…" reads `.xmp` and `.lrtemplate` files (or
-folders of them) into presets that apply Lightroom's way, only the sliders they carry; what could not be carried over is
-listed in notes. "Match a Lightroom example…" takes an original and Lightroom's export of it with a look applied and learns
+folders or `.zip` packs of them; "Find Lightroom's presets" adds the folders Lightroom and Camera Raw keep them in) into presets that apply Lightroom's way, only the sliders they carry; what could not be carried over is
+listed in notes (Lightroom profiles are skipped, and a studio preset matched to an example stays web-style).
+Each imported preset in the summary offers "Match a Lightroom example…". "Match a Lightroom example…" takes an original and Lightroom's export of it with a look applied and learns
 a colour table, vignette and grain that bring our render close to it (a matched look, not an identical one); it says when
 the pair does not line up. The horizontal perspective sign, the point-colour scale and the mask sub-type numbering are not yet
 checked against real Lightroom files (`LF_LR_SAMPLES` runs them).

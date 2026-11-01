@@ -134,8 +134,10 @@ fn effects_settings(base: &EditSettings, lut_name: &str, fit: &Fit) -> EditSetti
 
 /// The new preset: the matched one's settings (when one is matched) with the fit's table
 /// (`desktop.lut`, at amount 100), vignette and grain, and the difference reached
-/// (`desktop.lightroom.example`). `desktop.lightroom` is made (named `name`) when missing, so
-/// the preset applies Lightroom's way: only what it carries. Kept under the size cap
+/// (`desktop.lightroom.example`). With no preset matched, `desktop.lightroom` is made (named
+/// `name`) so the new preset applies Lightroom's way: only what it carries. A matched preset
+/// keeps its own way: one that already had `desktop.lightroom` gets the difference reached
+/// there, a plain studio preset stays web-style (it applies whole, as before). Kept under the size cap
 /// ([`fit_budget`]); the caller checks [`lf_settings::lightroom::budget::desktop_fits`]
 /// before saving.
 pub fn matched_preset(preset: Option<&Value>, name: &str, fit: &Fit) -> Value {
@@ -156,19 +158,22 @@ pub fn matched_preset(preset: Option<&Value>, name: &str, fit: &Fit) -> Value {
         o.insert("desktop".into(), json!({}));
     }
     let desktop = o["desktop"].as_object_mut().expect("an object");
+    let had_lightroom = desktop.contains_key(LIGHTROOM_KEY);
     let mut lut = encode_table(&fit.table);
     lut["amount"] = json!(100);
     desktop.insert("lut".into(), lut);
-    let lightroom = desktop
-        .entry(LIGHTROOM_KEY)
-        .or_insert_with(|| json!({ "name": name }));
-    if !lightroom.is_object() {
-        *lightroom = json!({ "name": name });
+    if had_lightroom || preset.is_none() {
+        let lightroom = desktop
+            .entry(LIGHTROOM_KEY)
+            .or_insert_with(|| json!({ "name": name }));
+        if !lightroom.is_object() {
+            *lightroom = json!({ "name": name });
+        }
+        lightroom["example"] = json!({
+            "deltaEMean": round2(fit.delta_e_mean),
+            "deltaEP95": round2(fit.delta_e_p95),
+        });
     }
-    lightroom["example"] = json!({
-        "deltaEMean": round2(fit.delta_e_mean),
-        "deltaEP95": round2(fit.delta_e_p95),
-    });
     if let Some(note) = fit_budget(&mut out) {
         log::info!("matched preset {name}: {note}");
     }
@@ -177,7 +182,7 @@ pub fn matched_preset(preset: Option<&Value>, name: &str, fit: &Fit) -> Value {
 
 /// The match, with our pipeline injected: `render` renders the original with the settings
 /// given (always at the same size). `theirs` is Lightroom's export (any size). `name` names
-/// `desktop.lightroom` when the preset had none.
+/// `desktop.lightroom` when no preset is matched.
 pub fn match_with(
     render: &mut dyn FnMut(&EditSettings) -> Result<Image, String>,
     theirs: &Image,
@@ -611,10 +616,36 @@ mod tests {
         )
         .unwrap();
         assert!(
-            lf_pipeline::lut::names().iter().all(|n| !n.starts_with("lr-")),
+            lf_pipeline::lut::names()
+                .iter()
+                .all(|n| !n.starts_with("lr-")),
             "{:?}",
             lf_pipeline::lut::names()
         );
+    }
+
+    #[test]
+    fn a_plain_studio_preset_stays_web_style() {
+        let _turn = turn();
+        let photo = colourful();
+        let theirs = lightroom_export(&photo);
+        let preset = json!({"v": 2, "exposure": 0.5});
+        let mut seen = Vec::new();
+        let (out, _, _) = match_with(
+            &mut pipeline(&photo, &mut seen),
+            &theirs,
+            Some(&preset),
+            "Plain",
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(!lf_settings::lightroom::is_lightroom(&out));
+        assert!(out["desktop"].get(LIGHTROOM_KEY).is_none());
+        assert!(
+            out.pointer("/desktop/lut/table").is_some(),
+            "the table is still carried"
+        );
+        assert_eq!(out["exposure"], json!(0.5));
     }
 
     #[test]
